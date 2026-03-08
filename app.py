@@ -423,7 +423,11 @@ class PipelineManager:
                 log.error(f"Resolution {resolution} not supported on {display_name}")
                 return False
 
-        self.stop_stream(display_name)
+        # Kill existing stream and splash without starting a new splash
+        with self.lock:
+            p = self.pipelines.pop(display_name, None)
+        self._kill_pipeline_proc(p)
+        self.stop_splash(display_name)
 
         cmd = self._build_pipeline(source, display, cfg_disp, chroma, scaling, resolution, framerate, osd)
         log.info(f"Starting pipeline: {cmd}")
@@ -452,17 +456,23 @@ class PipelineManager:
             log.error(f"Failed to start stream: {e}")
             return False
 
-    def stop_stream(self, display_name):
+    def _kill_pipeline_proc(self, p):
+        """Kill a pipeline process dict {proc, ...}."""
+        if not p:
+            return
+        try:
+            os.killpg(os.getpgid(p["proc"].pid), signal.SIGTERM)
+            p["proc"].wait(timeout=5)
+        except Exception:
+            try: p["proc"].kill()
+            except Exception: pass
+
+    def stop_stream(self, display_name, show_splash_after=True):
         with self.lock:
             p = self.pipelines.pop(display_name, None)
-        if p:
-            try:
-                os.killpg(os.getpgid(p["proc"].pid), signal.SIGTERM)
-                p["proc"].wait(timeout=5)
-            except Exception:
-                try: p["proc"].kill()
-                except Exception: pass
-        self.show_splash(display_name)
+        self._kill_pipeline_proc(p)
+        if show_splash_after:
+            self.show_splash(display_name)
 
     def show_splash(self, display_name):
         self.stop_splash(display_name)
