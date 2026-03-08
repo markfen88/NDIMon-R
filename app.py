@@ -395,8 +395,10 @@ class PipelineManager:
             scale_pipe = (f"videoscale add-borders=true ! "
                           f"video/x-raw,width={scale_w},height={scale_h}")
 
-        # HW conversion
-        if self.mpp_avail:
+        # HW conversion — RK3588 primary plane (Cluster) only supports RGB, not NV12
+        if self.board == "rk3588":
+            conv = "videoconvert ! video/x-raw,format=BGRx"
+        elif self.mpp_avail:
             conv = "videoconvert ! video/x-raw,format=NV12"
         else:
             conv = f"videoconvert ! video/x-raw,format={fmt}"
@@ -444,10 +446,12 @@ class PipelineManager:
         else:
             src = f'videotestsrc pattern=black'
 
+        fmt_part = "video/x-raw,format=BGRx,width=1920,height=1080" if self.board == "rk3588" \
+                   else "video/x-raw,width=1920,height=1080"
         pipeline = (
             f"gst-launch-1.0 -e "
             f"{src} ! videoconvert ! videoscale ! "
-            f"video/x-raw,width=1920,height=1080 ! "
+            f"{fmt_part} ! "
             f'textoverlay text="{overlay}" valignment=bottom halignment=center '
             f'font-desc="Sans Bold 32" shaded-background=true ! '
             f"kmssink {bus_id_part}connector-id={connector} sync=false"
