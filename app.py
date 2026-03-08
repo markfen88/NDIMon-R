@@ -591,6 +591,10 @@ class PipelineManager:
 pipeline_mgr = PipelineManager()
 
 # ── Auto-Recovery Thread ──────────────────────────────────────────────────────
+_pipeline_failures = {}  # disp_name -> (fail_count, last_start_time)
+MAX_FAST_FAILURES   = 3  # pause after this many crashes within FAST_FAIL_WINDOW seconds
+FAST_FAIL_WINDOW    = 30 # seconds
+
 def auto_recovery_thread():
     """Every 8s: check active streams, restart dead ones, auto-connect when source appears."""
     while True:
@@ -608,10 +612,30 @@ def auto_recovery_thread():
                 with pipeline_mgr.lock:
                     pipe_info = pipeline_mgr.pipelines.get(disp_name)
                 if pipe_info:
-                    proc = pipe_info["proc"]
+                    proc      = pipe_info["proc"]
+                    start_time = pipe_info.get("start_time", time.time())
                     if proc.poll() is not None:
-                        log.warning(f"Pipeline died on {disp_name} (exit={proc.poll()}), restarting...")
-                        pipeline_mgr.start_stream(disp_name, source)
+                        uptime = time.time() - start_time
+                        # Track fast failures
+                        fc, last_t = _pipeline_failures.get(disp_name, (0, 0))
+                        if time.time() - last_t < FAST_FAIL_WINDOW:
+                            fc += 1
+                        else:
+                            fc = 1
+                        _pipeline_failures[disp_name] = (fc, time.time())
+
+                        if fc >= MAX_FAST_FAILURES:
+                            log.error(f"Pipeline on {disp_name} crashed {fc}x in {FAST_FAIL_WINDOW}s "
+                                      f"(last uptime {uptime:.1f}s) — pausing auto-recovery. "
+                                      f"Check logs for pipeline errors.")
+                            cfg2 = load_config()
+                            cfg2["displays"].setdefault(disp_name, {})["paused"] = True
+                            save_config(cfg2)
+                            _pipeline_failures.pop(disp_name, None)
+                        else:
+                            log.warning(f"Pipeline died on {disp_name} (exit={proc.poll()}, "
+                                        f"uptime={uptime:.1f}s, fail #{fc}), restarting...")
+                            pipeline_mgr.start_stream(disp_name, source)
                 else:
                     # No active stream — try to connect if source is visible
                     if source and source in available:
