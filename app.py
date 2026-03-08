@@ -365,8 +365,8 @@ class PipelineManager:
             except Exception:
                 pass
 
-        # NDI source element
-        ndi_src = f'ndisrc ndi-name="{source}" '
+        # NDI source element — connect-timeout raised to 30s for NDI SDK v6 handshake
+        ndi_src = f'ndisrc ndi-name="{source}" connect-timeout=30000 '
         cfg = load_config()
         groups = ",".join(cfg["ndi"]["groups"])
         if groups and self.ndisrc_has_app_name:
