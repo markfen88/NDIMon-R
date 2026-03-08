@@ -255,40 +255,40 @@ class PipelineManager:
         return "avdec_h264", False
 
     def _probe_kmssink_bus_id(self):
-        """Probe whether kmssink accepts bus-id=card0 on this system.
-        Some platforms (e.g. RK3399 Armbian) reject it; others (RK3588) require it."""
-        self.kmssink_bus_id = None  # default: no bus-id
-        # Find first connected connector to test against
-        test_connector = next((d["id"] for d in self.displays if d.get("connected")), None)
-        if test_connector is None:
-            log.info("kmssink probe: no connected display found, bus-id omitted")
-            return
-        cmd = (f"gst-launch-1.0 videotestsrc num-buffers=1 ! videoconvert ! "
-               f"video/x-raw,format=NV12 ! kmssink bus-id=card0 connector-id={test_connector} sync=false")
-        try:
-            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=8)
-            combined = r.stdout + r.stderr
-            # If it opened the device successfully (pipeline ran, possibly errored on mode), bus-id works
-            if "No such file or directory" in combined or "not found" in combined.lower():
-                log.info("kmssink probe: bus-id=card0 not supported, omitting")
-            elif r.returncode == 0 or "Freeing pipeline" in combined:
-                # Pipeline ran to completion or failed gracefully with the device open
-                self.kmssink_bus_id = "card0"
-                log.info("kmssink probe: bus-id=card0 supported")
-            else:
-                log.info(f"kmssink probe: unclear result (rc={r.returncode}), omitting bus-id")
-        except Exception as e:
-            log.warning(f"kmssink probe failed: {e}, omitting bus-id")
+        """Determine whether kmssink needs bus-id=card0.
+        RK3588 requires it; RK3399/Armbian rejects it. Use board type to decide, no subprocess."""
+        # Known board mappings (avoids hanging gst-launch probe at startup)
+        if self.board == "rk3588":
+            self.kmssink_bus_id = "card0"
+            log.info("kmssink: bus-id=card0 (rk3588 known requirement)")
+        else:
+            self.kmssink_bus_id = None
+            log.info(f"kmssink: no bus-id ({self.board})")
 
     def _probe_ndisrc_props(self):
-        """Probe which optional properties ndisrc supports on this gst-plugin-ndi version."""
+        """Probe which optional properties ndisrc supports by inspecting the plugin .so directly."""
         self.ndisrc_has_app_name = False
-        try:
-            r = subprocess.run(["gst-inspect-1.0", "ndisrc"], capture_output=True, text=True, timeout=10)
-            self.ndisrc_has_app_name = "ndi-app-name" in r.stdout
-            log.info(f"ndisrc probe: ndi-app-name={'yes' if self.ndisrc_has_app_name else 'no'}")
-        except Exception as e:
-            log.warning(f"ndisrc probe failed: {e}")
+        import glob as _glob
+        plugin_dirs = [
+            "/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
+            "/lib/aarch64-linux-gnu/gstreamer-1.0",
+            "/usr/lib/gstreamer-1.0",
+        ]
+        so_path = None
+        for d in plugin_dirs:
+            hits = _glob.glob(f"{d}/libgstndi*.so")
+            if hits:
+                so_path = hits[0]
+                break
+        if so_path:
+            try:
+                data = open(so_path, "rb").read()
+                self.ndisrc_has_app_name = b"ndi-app-name" in data
+                log.info(f"ndisrc probe (so scan): ndi-app-name={'yes' if self.ndisrc_has_app_name else 'no'}")
+            except Exception as e:
+                log.warning(f"ndisrc so scan failed: {e}")
+        else:
+            log.warning("ndisrc probe: libgstndi*.so not found, ndi-app-name assumed no")
 
     def _detect_displays(self):
         """Detect all DRM connectors from sysfs. Each entry includes connected status.
