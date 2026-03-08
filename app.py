@@ -27,7 +27,15 @@ log = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder=str(BASE_DIR / "templates"),
             static_folder=str(STATIC_DIR))
-app.secret_key = os.urandom(32).hex()
+
+# Persist secret key so sessions survive service restarts
+_secret_key_file = BASE_DIR / ".secret_key"
+if _secret_key_file.exists():
+    app.secret_key = _secret_key_file.read_text().strip()
+else:
+    app.secret_key = os.urandom(32).hex()
+    _secret_key_file.write_text(app.secret_key)
+    _secret_key_file.chmod(0o600)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def load_config():
@@ -198,6 +206,8 @@ class PipelineManager:
         self.lock        = threading.Lock()
         self._detect_board()
         self._detect_displays()
+        self._probe_kmssink_bus_id()
+        self._probe_ndisrc_props()
 
     def _detect_board(self):
         compatible = ""
@@ -237,6 +247,42 @@ class PipelineManager:
             if _glob.glob(f"{d}/libgstrkmppdec.so") or _glob.glob(f"{d}/libgstmpp.so"):
                 return "rkmppdec", True
         return "avdec_h264", False
+
+    def _probe_kmssink_bus_id(self):
+        """Probe whether kmssink accepts bus-id=card0 on this system.
+        Some platforms (e.g. RK3399 Armbian) reject it; others (RK3588) require it."""
+        self.kmssink_bus_id = None  # default: no bus-id
+        # Find first connected connector to test against
+        test_connector = next((d["id"] for d in self.displays if d.get("connected")), None)
+        if test_connector is None:
+            log.info("kmssink probe: no connected display found, bus-id omitted")
+            return
+        cmd = (f"gst-launch-1.0 videotestsrc num-buffers=1 ! videoconvert ! "
+               f"video/x-raw,format=NV12 ! kmssink bus-id=card0 connector-id={test_connector} sync=false")
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=8)
+            combined = r.stdout + r.stderr
+            # If it opened the device successfully (pipeline ran, possibly errored on mode), bus-id works
+            if "No such file or directory" in combined or "not found" in combined.lower():
+                log.info("kmssink probe: bus-id=card0 not supported, omitting")
+            elif r.returncode == 0 or "Freeing pipeline" in combined:
+                # Pipeline ran to completion or failed gracefully with the device open
+                self.kmssink_bus_id = "card0"
+                log.info("kmssink probe: bus-id=card0 supported")
+            else:
+                log.info(f"kmssink probe: unclear result (rc={r.returncode}), omitting bus-id")
+        except Exception as e:
+            log.warning(f"kmssink probe failed: {e}, omitting bus-id")
+
+    def _probe_ndisrc_props(self):
+        """Probe which optional properties ndisrc supports on this gst-plugin-ndi version."""
+        self.ndisrc_has_app_name = False
+        try:
+            r = subprocess.run(["gst-inspect-1.0", "ndisrc"], capture_output=True, text=True, timeout=10)
+            self.ndisrc_has_app_name = "ndi-app-name" in r.stdout
+            log.info(f"ndisrc probe: ndi-app-name={'yes' if self.ndisrc_has_app_name else 'no'}")
+        except Exception as e:
+            log.warning(f"ndisrc probe failed: {e}")
 
     def _detect_displays(self):
         """Detect all DRM connectors from sysfs. Each entry includes connected status.
@@ -323,7 +369,7 @@ class PipelineManager:
         ndi_src = f'ndisrc ndi-name="{source}" '
         cfg = load_config()
         groups = ",".join(cfg["ndi"]["groups"])
-        if groups:
+        if groups and self.ndisrc_has_app_name:
             ndi_src += f'ndi-app-name="{groups}" '
 
         # Chroma format
@@ -354,8 +400,9 @@ class PipelineManager:
             osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=center '
                         f'font-desc="Sans Bold 24" ! ')
 
-        # kmssink — specify bus-id so the correct DRM card is always used
-        sink = (f"kmssink bus-id={self.drm_card} connector-id={connector} "
+        # kmssink — bus-id only if probed to work on this platform
+        bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
+        sink = (f"kmssink {bus_id_part}connector-id={connector} "
                 f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
 
         # Audio
@@ -377,6 +424,7 @@ class PipelineManager:
     def _build_splash(self, display, image_path=None):
         """Build splash screen pipeline."""
         connector  = display["id"]
+        bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
         cfg        = load_config()
         alias      = cfg["ndi"]["alias"]
         ip         = get_ip()
@@ -393,7 +441,7 @@ class PipelineManager:
             f"video/x-raw,width=1920,height=1080 ! "
             f'textoverlay text="{overlay}" valignment=bottom halignment=center '
             f'font-desc="Sans Bold 32" shaded-background=true ! '
-            f"kmssink bus-id={self.drm_card} connector-id={connector} sync=false"
+            f"kmssink {bus_id_part}connector-id={connector} sync=false"
         )
         return pipeline
 
