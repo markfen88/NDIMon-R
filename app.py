@@ -19,7 +19,7 @@ LOG_DIR     = BASE_DIR / "logs"
 STATIC_DIR  = BASE_DIR / "static"
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.FileHandler(LOG_DIR / "app.log"), logging.StreamHandler()]
 )
@@ -494,8 +494,9 @@ class PipelineManager:
                     # Would need proper overlay toggle — log for now
                     log.info(f"OSD dismissed after {osd_timeout}s on {display_name}")
                 threading.Thread(target=dismiss_osd, daemon=True).start()
-            # Save last source
+            # Save last source, clear paused flag
             cfg["displays"][display_name]["source"] = source
+            cfg["displays"][display_name]["paused"] = False
             save_config(cfg)
             ok_msg = f"Stream started: {source} → {display_name}"
             log.info(ok_msg)
@@ -600,6 +601,8 @@ def auto_recovery_thread():
             for disp_name, d_cfg in cfg["displays"].items():
                 if not d_cfg.get("enabled", True):
                     continue
+                if d_cfg.get("paused", False):
+                    continue  # User manually stopped this stream
                 source        = d_cfg.get("source", "")
                 backup_source = d_cfg.get("backup_source", "")
                 with pipeline_mgr.lock:
@@ -607,7 +610,7 @@ def auto_recovery_thread():
                 if pipe_info:
                     proc = pipe_info["proc"]
                     if proc.poll() is not None:
-                        log.warning(f"Pipeline died on {disp_name}, restarting...")
+                        log.warning(f"Pipeline died on {disp_name} (exit={proc.poll()}), restarting...")
                         pipeline_mgr.start_stream(disp_name, source)
                 else:
                     # No active stream — try to connect if source is visible
@@ -747,6 +750,10 @@ def api_stream_stop():
     data    = request.get_json()
     display = data.get("display", "HDMI-A-1")
     pipeline_mgr.stop_stream(display)
+    # Mark as manually paused so auto-recovery doesn't restart it
+    cfg = load_config()
+    cfg["displays"].setdefault(display, {})["paused"] = True
+    save_config(cfg)
     return jsonify({"ok": True})
 
 @app.route("/api/stream/record", methods=["POST"])
