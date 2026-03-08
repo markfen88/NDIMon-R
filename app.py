@@ -208,12 +208,10 @@ class PipelineManager:
             pass
         if "rk3588" in compatible:
             self.board    = "rk3588"
-            self.hw_dec   = "rkmppdec"
-            self.mpp_avail = True
+            self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
         elif "rk3399" in compatible:
             self.board    = "rk3399"
-            self.hw_dec   = "rkmppdec"
-            self.mpp_avail = True
+            self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
         elif "bcm2712" in compatible or "Raspberry Pi 5" in open("/proc/cpuinfo").read():
             self.board    = "rpi5"
             self.hw_dec   = "v4l2h264dec"
@@ -224,14 +222,31 @@ class PipelineManager:
             self.mpp_avail = False
         log.info(f"Board: {self.board}, HW decoder: {self.hw_dec}")
 
+    def _probe_mpp_decoder(self):
+        """Return (element_name, available) for whichever Rockchip MPP decoder plugin is installed."""
+        import glob as _glob
+        plugin_dirs = [
+            "/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
+            "/usr/lib/gstreamer-1.0",
+        ]
+        for d in plugin_dirs:
+            # gstreamer1.0-rockchip1 ships libgstrockchipmpp.so (mppvideodec)
+            if _glob.glob(f"{d}/libgstrockchipmpp.so"):
+                return "mppvideodec", True
+            # Older Radxa packages ship libgstrkmppdec.so (rkmppdec)
+            if _glob.glob(f"{d}/libgstrkmppdec.so") or _glob.glob(f"{d}/libgstmpp.so"):
+                return "rkmppdec", True
+        return "avdec_h264", False
+
     def _detect_displays(self):
         self.displays = []
         try:
             result = subprocess.run(["/usr/bin/modetest", "-c"],
                                     capture_output=True, text=True, timeout=5)
             # modetest -c line format: "id\tencoder_id\tstatus\tname\t..."
-            # e.g.: "215\t0\tdisconnected\tHDMI-A-1       \t0x0\t0\t214"
-            conn_re = re.compile(r'^(\d+)\t\d+\t\w+\t(HDMI-[A-Z]-\d+|DP-\d+|eDP-\d+)\s')
+            # e.g.: "231\t230\tconnected\tHDMI-A-2       \t530x300\t24\t230"
+            # Only include physically connected connectors (status == "connected")
+            conn_re = re.compile(r'^(\d+)\t\d+\tconnected\t(HDMI-[A-Z]-\d+|DP-\d+|eDP-\d+)\s')
             for line in result.stdout.splitlines():
                 m = conn_re.match(line)
                 if m:
@@ -242,7 +257,7 @@ class PipelineManager:
         except Exception as e:
             log.warning(f"Display detection failed: {e}")
         if not self.displays:
-            self.displays = [{"id": 215, "name": "HDMI-A-1"}, {"id": 231, "name": "HDMI-A-2"}]
+            log.warning("No connected displays found — check cable connections")
         log.info(f"Detected displays: {[d['name'] for d in self.displays]}")
 
     def get_supported_modes(self, display_name):
