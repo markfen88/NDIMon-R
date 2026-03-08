@@ -86,7 +86,8 @@ def require_auth(f):
     return decorated
 
 # ── NDI Source Discovery ──────────────────────────────────────────────────────
-_ndi_sources_cache = []
+_ndi_sources_cache = []   # list of source names
+_ndi_url_cache     = {}   # name -> url
 _ndi_sources_lock  = threading.Lock()
 
 import ctypes as _ctypes
@@ -138,8 +139,9 @@ def _groups_from_config():
         return None
 
 def discover_ndi_sources():
-    """Discover NDI sources using SDK directly (supports discovery server via p_extra_ips)."""
+    """Discover NDI sources using SDK directly. Returns (names_list, url_map)."""
     sources = []
+    urls    = {}
     lib = _get_ndi_lib()
     if lib:
         try:
@@ -163,10 +165,13 @@ def discover_ndi_sources():
                 ptr = get(find, _ctypes.byref(count))
                 for i in range(count.value):
                     name = ptr[i].p_ndi_name
+                    url  = ptr[i].p_url_address
                     if name:
                         name = name.decode("utf-8", errors="replace")
                         if name not in sources:
                             sources.append(name)
+                        if url:
+                            urls[name] = url.decode("utf-8", errors="replace")
                 lib.NDIlib_find_destroy.argtypes = [_ctypes.c_void_p]
                 lib.NDIlib_find_destroy(find)
         except Exception as e:
@@ -185,15 +190,16 @@ def discover_ndi_sources():
                     sources.append(name)
     except Exception:
         pass
-    return sorted(set(sources))
+    return sorted(set(sources)), urls
 
 def background_ndi_discovery():
-    global _ndi_sources_cache
+    global _ndi_sources_cache, _ndi_url_cache
     while True:
         try:
-            found = discover_ndi_sources()
+            found, urls = discover_ndi_sources()
             with _ndi_sources_lock:
                 _ndi_sources_cache = found
+                _ndi_url_cache.update(urls)
         except Exception as e:
             log.error(f"Discovery thread error: {e}")
         time.sleep(5)
@@ -365,8 +371,11 @@ class PipelineManager:
             except Exception:
                 pass
 
-        # NDI source element — connect-timeout raised to 30s for NDI SDK v6 handshake
-        ndi_src = f'ndisrc ndi-name="{source}" connect-timeout=30000 '
+        # NDI source element — include url-address for direct connection (bypasses discovery delay)
+        with _ndi_sources_lock:
+            url = _ndi_url_cache.get(source, "")
+        url_part = f'url-address="{url}" ' if url else ""
+        ndi_src = f'ndisrc ndi-name="{source}" {url_part}connect-timeout=30000 '
         cfg = load_config()
         groups = ",".join(cfg["ndi"]["groups"])
         if groups and self.ndisrc_has_app_name:
