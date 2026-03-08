@@ -14,16 +14,19 @@
   },
   "displays": {
     "HDMI-A-1": {
-      "source": "RAWRZILLA (VLC)",
-      "scaling": "letterbox",
       "chroma": "NV12",
-      "resolution": "auto"
+      "resolution": "auto",
+      "scaling": "letterbox",
+      "source": "RAWRZILLA (VLC)"
     },
     "HDMI-A-2": {
-      "source": "RAWRZILLA (VLC)",
+      "chroma": "RGB",
+      "resolution": "auto",
       "scaling": "letterbox",
-      "chroma": "NV12",
-      "resolution": "auto"
+      "source": "RAWRZILLA (VLC)",
+      "framerate": "auto",
+      "backup_source": "",
+      "enabled": true
     }
   },
   "multiview": {

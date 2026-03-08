@@ -239,25 +239,55 @@ class PipelineManager:
         return "avdec_h264", False
 
     def _detect_displays(self):
+        """Detect all DRM connectors from sysfs. Each entry includes connected status.
+        Connector IDs come from modetest; connection state from /sys/class/drm."""
+        import glob as _glob
         self.displays = []
+        self.drm_card = "card0"  # determined below
+
+        # Build name→status map from sysfs (reliable, no driver detection needed)
+        sysfs_status = {}
+        for path in sorted(_glob.glob("/sys/class/drm/card*-*")):
+            base = os.path.basename(path)
+            parts = base.split("-", 1)
+            if len(parts) < 2:
+                continue
+            card, conn_name = parts[0], parts[1]
+            if not re.match(r"HDMI|DP|eDP", conn_name):
+                continue
+            try:
+                status = open(f"{path}/status").read().strip()
+            except Exception:
+                status = "unknown"
+            sysfs_status[conn_name] = {"status": status, "card": card}
+            if status == "connected":
+                self.drm_card = card
+
+        # Get connector IDs from modetest (runs fine as root/service)
         try:
-            result = subprocess.run(["/usr/bin/modetest", "-c"],
+            result = subprocess.run(["modetest", "-c"],
                                     capture_output=True, text=True, timeout=5)
-            # modetest -c line format: "id\tencoder_id\tstatus\tname\t..."
-            # e.g.: "231\t230\tconnected\tHDMI-A-2       \t530x300\t24\t230"
-            # Only include physically connected connectors (status == "connected")
-            conn_re = re.compile(r'^(\d+)\t\d+\tconnected\t(HDMI-[A-Z]-\d+|DP-\d+|eDP-\d+)\s')
+            conn_re = re.compile(r'^(\d+)\t\d+\t\w+\t(HDMI-[A-Z]-\d+|DP-\d+|eDP-\d+)\s')
             for line in result.stdout.splitlines():
                 m = conn_re.match(line)
                 if m:
-                    conn_id = int(m.group(1))
-                    name    = m.group(2)
+                    conn_id   = int(m.group(1))
+                    name      = m.group(2)
+                    connected = sysfs_status.get(name, {}).get("status") == "connected"
                     if name not in [d["name"] for d in self.displays]:
-                        self.displays.append({"id": conn_id, "name": name})
+                        self.displays.append({
+                            "id":        conn_id,
+                            "name":      name,
+                            "connected": connected,
+                        })
         except Exception as e:
             log.warning(f"Display detection failed: {e}")
-        if not self.displays:
+
+        connected = [d["name"] for d in self.displays if d.get("connected")]
+        all_names  = [d["name"] for d in self.displays]
+        if not connected:
             log.warning("No connected displays found — check cable connections")
+        log.info(f"Detected displays: {all_names} (connected: {connected})")
         log.info(f"Detected displays: {[d['name'] for d in self.displays]}")
 
     def get_supported_modes(self, display_name):
@@ -324,8 +354,8 @@ class PipelineManager:
             osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=center '
                         f'font-desc="Sans Bold 24" ! ')
 
-        # kmssink
-        sink = (f"kmssink connector-id={connector} "
+        # kmssink — specify bus-id so the correct DRM card is always used
+        sink = (f"kmssink bus-id={self.drm_card} connector-id={connector} "
                 f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
 
         # Audio
@@ -363,7 +393,7 @@ class PipelineManager:
             f"video/x-raw,width=1920,height=1080 ! "
             f'textoverlay text="{overlay}" valignment=bottom halignment=center '
             f'font-desc="Sans Bold 32" shaded-background=true ! '
-            f"kmssink connector-id={connector} sync=false"
+            f"kmssink bus-id={self.drm_card} connector-id={connector} sync=false"
         )
         return pipeline
 
@@ -380,6 +410,9 @@ class PipelineManager:
         display = next((d for d in self.displays if d["name"] == display_name), None)
         if not display:
             log.error(f"Display not found: {display_name}")
+            return False
+        if not display.get("connected", True):
+            log.warning(f"Skipping stream to disconnected display {display_name}")
             return False
 
         # Validate resolution
@@ -769,10 +802,24 @@ def get_system_uptime():
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 def startup():
-    # Show splash on all displays
+    """Run pipeline management only in the first gunicorn worker (lock file guard)."""
+    import fcntl
+    lock_path = BASE_DIR / "worker.lock"
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log.info(f"Worker {os.getpid()}: standby (pipeline manager already running)")
+        # Still run NDI discovery so all workers can serve the /api/sources endpoint
+        threading.Thread(target=background_ndi_discovery, daemon=True).start()
+        return
+
+    log.info(f"Worker {os.getpid()}: pipeline manager active")
+    # Show splash on connected displays only
     for d in pipeline_mgr.displays:
-        pipeline_mgr.show_splash(d["name"])
-    # Background threads
+        if d.get("connected"):
+            pipeline_mgr.show_splash(d["name"])
+    # Background threads (only in the lock-holding worker)
     threading.Thread(target=background_ndi_discovery, daemon=True).start()
     threading.Thread(target=auto_recovery_thread,     daemon=True).start()
     cfg = load_config()
