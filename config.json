@@ -1,0 +1,74 @@
+{
+  "audio": {
+    "enabled": true,
+    "sink": "auto",
+    "volume": 100
+  },
+  "auth": {
+    "enabled": false,
+    "password": ""
+  },
+  "cec": {
+    "device_name": "NDI Monitor",
+    "enabled": true
+  },
+  "displays": {
+    "HDMI-A-1": {
+      "source": "RAWRZILLA (VLC)",
+      "scaling": "letterbox",
+      "chroma": "NV12",
+      "resolution": "auto"
+    },
+    "HDMI-A-2": {
+      "source": "RAWRZILLA (VLC)",
+      "scaling": "letterbox",
+      "chroma": "NV12",
+      "resolution": "auto"
+    }
+  },
+  "multiview": {
+    "enabled": false,
+    "layout": "2x2",
+    "sources": [
+      "",
+      "",
+      "",
+      ""
+    ]
+  },
+  "ndi": {
+    "alias": "NDI Monitor",
+    "bandwidth": "highest",
+    "discovery_servers": [
+      "10.25.0.49"
+    ],
+    "groups": [
+      "Public"
+    ]
+  },
+  "network": {
+    "address": "",
+    "dns": [
+      "8.8.8.8",
+      "8.8.4.4"
+    ],
+    "gateway": "",
+    "interface": "eth0",
+    "mode": "dhcp",
+    "netmask": ""
+  },
+  "splash": {
+    "custom_image": "",
+    "show_overlay": true
+  },
+  "version": "1.0.0",
+  "video": {
+    "default_framerate": "59.94",
+    "default_resolution": "1920x1080",
+    "enable_osd": false,
+    "enable_tally": false,
+    "osd_timeout": 8,
+    "tally_gpio_green": 27,
+    "tally_gpio_red": 17
+  }
+}
