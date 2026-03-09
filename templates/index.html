@@ -80,7 +80,13 @@
         <div class="stat-val" id="s-board" style="font-size:.85rem;padding-top:.3rem">{{ board | upper }}</div>
       </div>
     </div>
-    <div class="col-12 col-lg-4">
+    <div class="col-6 col-sm-3 col-lg-2">
+      <div class="stat-card">
+        <div class="stat-label">CEC</div>
+        <div class="stat-val" id="s-cec" style="font-size:.85rem;padding-top:.3rem">—</div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-2">
       <div class="stat-card h-100 d-flex align-items-center flex-wrap gap-2" id="temp-strip">
         <span class="text-secondary small"><i class="bi bi-thermometer-half me-1"></i>Temps loading…</span>
       </div>
@@ -111,6 +117,9 @@
         </div>
         <div class="uptime-val" id="up-{{ d.name|replace('-','_') }}">
           {% if ds.get('active') %}Uptime: {{ ds.get('uptime','') }}{% endif %}
+        </div>
+        <div class="d-flex gap-3 mt-2" style="font-size:.72rem;color:#555">
+          <span>Out: <span id="ores-{{ d.name|replace('-','_') }}" style="color:#888">{{ dcfg.get('resolution','auto') }}</span></span>
         </div>
       </div>
     </div>
@@ -150,6 +159,12 @@ async function updateStatus() {
     document.getElementById('s-cpu').textContent = d.system.cpu.toFixed(1);
     document.getElementById('s-mem').textContent = d.system.mem_pct.toFixed(1);
     document.getElementById('s-up').textContent  = d.system.uptime;
+    const cecEl = document.getElementById('s-cec');
+    const cec = d.system.cec || 'disabled';
+    if (cec === 'ok') { cecEl.textContent = 'OK'; cecEl.style.color = '#00e676'; }
+    else if (cec === 'disabled') { cecEl.textContent = 'Off'; cecEl.style.color = '#555'; }
+    else if (cec === 'unavailable') { cecEl.textContent = 'N/A'; cecEl.style.color = '#888'; }
+    else { cecEl.textContent = 'Err'; cecEl.style.color = '#f44'; cecEl.title = cec; }
     // Temps
     const strip = document.getElementById('temp-strip');
     const entries = Object.entries(d.system.temps||{});
@@ -173,6 +188,8 @@ async function updateStatus() {
             ? `<span class="text-secondary">Connecting: ${info.source}</span>`
             : '<span class="text-secondary fst-italic">No source</span>');
       if (up) up.textContent = info.active ? 'Uptime: '+info.uptime : '';
+      const ores = document.getElementById('ores-'+key);
+      if (ores) ores.textContent = info.output_res || 'auto';
     }
   } catch(e) {}
 }

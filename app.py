@@ -419,13 +419,17 @@ class PipelineManager:
         # Audio
         audio_pipe = ""
         if cfg["audio"]["enabled"]:
-            audio_pipe = " ! queue ! audioconvert ! audioresample ! autoaudiosink"
+            audio_pipe = " ! queue max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! audioconvert ! audioresample ! autoaudiosink"
+
+        # Video queue: leaky=downstream drops frames instead of stalling the pipeline
+        # (critical for 4K where videoconvert may lag behind the source rate)
+        vqueue = "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream"
 
         pipeline = (
             f"gst-launch-1.0 -e "
-            f"{ndi_src}! queue ! "
+            f"{ndi_src}! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
             f"ndisrcdemux name=demux "
-            f"demux.video ! queue ! videoconvert ! {scale_pipe} ! {conv} ! "
+            f"demux.video ! {vqueue} ! {scale_pipe} ! {conv} ! "
             f"{osd_pipe}"
             f"{sink} "
             f"demux.audio ! queue{audio_pipe}"
@@ -714,43 +718,58 @@ def auto_recovery_thread():
         time.sleep(8)
 
 # ── CEC Listener Thread ───────────────────────────────────────────────────────
+_cec_status = "disabled"  # "ok", "unavailable", "disabled", or "error: ..."
+
 def cec_listener_thread():
-    """Listen for CEC Channel Up/Down → cycle NDI sources."""
-    try:
-        import cec
-        cec.init()
-        log.info("CEC initialized")
-    except Exception as e:
-        log.warning(f"CEC not available: {e}")
+    """Listen for CEC keypresses via cec-client subprocess → cycle NDI sources."""
+    global _cec_status
+    import shutil
+    if not shutil.which("cec-client"):
+        _cec_status = "unavailable"
+        log.warning("CEC: cec-client not found")
+        return
+    if not os.path.exists("/dev/cec0"):
+        _cec_status = "unavailable"
+        log.warning("CEC: /dev/cec0 not found")
         return
 
-    def on_keypress(key, duration):
-        if duration > 0:
-            return
+    cmd = ["cec-client", "Linux", "-t", "r", "-o", "NDIMonitor", "-d", "8"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                text=True, bufsize=1)
+    except Exception as e:
+        _cec_status = f"error: {e}"
+        log.warning(f"CEC: failed to start cec-client: {e}")
+        return
+
+    _cec_status = "ok"
+    log.info("CEC: cec-client started on /dev/cec0")
+
+    for line in proc.stdout:
+        line = line.strip()
+        if "key pressed:" not in line:
+            continue
+        if "channel up" in line.lower():
+            direction = 1
+        elif "channel down" in line.lower():
+            direction = -1
+        else:
+            continue
         cfg = load_config()
         with _ndi_sources_lock:
             sources = list(_ndi_sources_cache)
         if not sources:
-            return
+            continue
         for disp_name, d_cfg in cfg["displays"].items():
             if not d_cfg.get("enabled"):
                 continue
             current = d_cfg.get("source", "")
             idx = sources.index(current) if current in sources else -1
-            if key == cec.CEC_USER_CONTROL_CODE_CHANNEL_UP:
-                next_src = sources[(idx + 1) % len(sources)]
-            elif key == cec.CEC_USER_CONTROL_CODE_CHANNEL_DOWN:
-                next_src = sources[(idx - 1) % len(sources)]
-            else:
-                return
+            next_src = sources[(idx + direction) % len(sources)]
             pipeline_mgr.start_stream(disp_name, next_src)
 
-    try:
-        cec.add_callback(on_keypress, cec.EVENT_KEYPRESS)
-        while True:
-            time.sleep(1)
-    except Exception as e:
-        log.error(f"CEC listener error: {e}")
+    _cec_status = "error: cec-client exited"
+    log.warning("CEC: cec-client process exited")
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -802,13 +821,19 @@ def api_status():
                 temps[f"{name}/{e.label}"] = e.current
     except Exception:
         pass
+    cfg = load_config()
+    # Enrich stream status with configured output resolution
+    for disp_name, info in status.items():
+        dcfg = cfg["displays"].get(disp_name, {})
+        info["output_res"] = dcfg.get("resolution", "auto")
     return jsonify({
         "streams": status,
         "system": {
             "cpu": cpu, "mem_used": mem.used, "mem_total": mem.total,
             "mem_pct": mem.percent, "temps": temps,
             "uptime": get_system_uptime(), "ip": get_ip(),
-            "board": pipeline_mgr.board
+            "board": pipeline_mgr.board,
+            "cec": _cec_status
         }
     })
 
