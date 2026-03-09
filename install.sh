@@ -182,9 +182,16 @@ if [[ "$BOARD" == "rk3588" || "$BOARD" == "rk3399" ]]; then
         curl -fsSL "$KEYRING_URL" | gpg --dearmor -o /usr/share/keyrings/radxa-archive-keyring.gpg \
             || warn "Could not fetch Radxa keyring — skipping MPP install"
         if [[ -f /usr/share/keyrings/radxa-archive-keyring.gpg ]]; then
-            echo "deb [signed-by=/usr/share/keyrings/radxa-archive-keyring.gpg] https://apt.radxa.com/bookworm-stable/ bookworm main" \
+            # Try bookworm-stable; fall back to trixie-stable for Debian 13 hosts
+            OS_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-bookworm}")
+            RADXA_SUITE="bookworm-stable"
+            # Check if the bookworm-stable suite has a Release file; if not, try trixie-stable
+            if ! curl -sfI "https://apt.radxa.com/bookworm-stable/dists/bookworm/Release" &>/dev/null; then
+                RADXA_SUITE="trixie-stable"
+            fi
+            echo "deb [signed-by=/usr/share/keyrings/radxa-archive-keyring.gpg] https://apt.radxa.com/${RADXA_SUITE}/ ${OS_CODENAME} main" \
                 > /etc/apt/sources.list.d/radxa.list
-            apt-get update -qq
+            apt-get update -qq || warn "Radxa repo update failed — hardware decode may be unavailable"
         fi
     fi
 
