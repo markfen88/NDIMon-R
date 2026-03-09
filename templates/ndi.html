@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NDI — NDI Monitor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+  :root{--accent:#00b4d8;--bg-card:#1a1d23;--bg-page:#12141a}
+  body{background:var(--bg-page);font-family:'Segoe UI',system-ui,sans-serif}
+  .navbar{background:#0d0f14!important;border-bottom:1px solid #2a2d35}
+  .navbar-brand{color:var(--accent)!important;font-weight:700;letter-spacing:.05em}
+  .nav-link-page{color:#aaa;text-decoration:none;font-size:.9rem;padding:.25rem .5rem;border-radius:4px;transition:color .15s}
+  .nav-link-page:hover{color:#fff}
+  .nav-link-page.active{color:var(--accent);font-weight:600}
+  .card{background:var(--bg-card);border:1px solid #2a2d35}
+  .card-header{background:#14171f;border-bottom:1px solid #2a2d35;font-weight:600}
+  .form-control,.form-select{background:#0d0f14;border:1px solid #2a2d35;color:#fff}
+  .form-control:focus,.form-select:focus{border-color:var(--accent);box-shadow:0 0 0 .2rem rgba(0,180,216,.2)}
+  .form-label{color:#aaa;font-size:.85rem}
+  .section-title{color:var(--accent);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;
+                 margin-bottom:.75rem;margin-top:1.25rem;border-bottom:1px solid #2a2d35;padding-bottom:.3rem}
+  .section-title:first-child{margin-top:0}
+  .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .status-dot.live{background:#00e676;box-shadow:0 0 6px #00e676}
+  .status-dot.idle{background:#333}
+  .source-badge{cursor:pointer;font-size:.72rem;padding:.2em .5em}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .live-pulse{animation:pulse 2s infinite}
+  .toast-container{position:fixed;bottom:1rem;right:1rem;z-index:9999}
+  .display-section{border:1px solid #2a2d35;border-radius:8px;padding:1.25rem;background:#0d0f14;margin-bottom:1rem}
+  .display-section-header{display:flex;align-items:center;gap:.6rem;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #1e2128}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand-lg navbar-dark px-3">
+  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDI Monitor</a>
+  <div class="d-flex align-items-center gap-3 ms-3">
+    <a href="/" class="nav-link-page">Dashboard</a>
+    <a href="/ndi" class="nav-link-page active">NDI</a>
+    <a href="/settings" class="nav-link-page">Settings</a>
+  </div>
+  <div class="ms-auto d-flex align-items-center gap-3">
+    <span class="text-secondary small"><i class="bi bi-hdd-network me-1"></i>{{ ip }}</span>
+    <a href="/logout" class="btn btn-sm btn-outline-danger"><i class="bi bi-box-arrow-right"></i></a>
+  </div>
+</nav>
+
+<div class="container-fluid py-3 px-4">
+  <div class="row g-3">
+
+    <!-- Left column: per-display source + video -->
+    <div class="col-12 col-xl-8">
+
+      <!-- Discovered Sources strip -->
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span><i class="bi bi-broadcast me-2"></i>Discovered NDI Sources</span>
+          <button class="btn btn-sm btn-outline-secondary" onclick="refreshSources()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+        <div class="card-body py-2">
+          <div class="d-flex flex-wrap gap-2" id="source-list">
+            {% for s in sources %}
+            <span class="badge bg-secondary source-badge" onclick="fillAllSelects('{{ s }}')">
+              <i class="bi bi-broadcast-pin me-1"></i>{{ s }}
+            </span>
+            {% else %}
+            <span class="text-secondary small">Scanning for NDI sources…</span>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Per-display sections -->
+      {% for d in displays %}
+      {% set ds = status.get(d.name, {}) %}
+      {% set dc = cfg.displays.get(d.name, {}) %}
+      <div class="display-section">
+        <div class="display-section-header">
+          <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name|replace('-','_') }}"></span>
+          <strong><i class="bi bi-display me-1"></i>{{ d.name }}</strong>
+          {% if ds.get('active') %}<span class="badge bg-success live-pulse" style="font-size:.65rem">LIVE</span>{% endif %}
+          <span class="ms-auto text-secondary small" id="info-{{ d.name|replace('-','_') }}">
+            {% if ds.get('active') %}{{ ds.get('source','') }} — {{ ds.get('uptime','') }}{% endif %}
+          </span>
+        </div>
+
+        <!-- Source selector -->
+        <div class="mb-3">
+          <label class="form-label">NDI Source</label>
+          <div class="d-flex gap-2 flex-wrap">
+            <select class="form-select" id="src-{{ d.name|replace('-','_') }}"
+                    onchange="selectSource('{{ d.name }}')" style="max-width:380px">
+              <option value="">— No Source —</option>
+              {% for s in sources %}
+              <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <input type="text" class="form-control" id="manual-{{ d.name|replace('-','_') }}"
+                   placeholder="Manual source name…" style="max-width:220px"
+                   value="{{ dc.get('source','') if dc.get('source','') not in sources else '' }}">
+            <button class="btn btn-outline-info btn-sm" onclick="applySource('{{ d.name }}')">
+              <i class="bi bi-play-fill me-1"></i>Apply
+            </button>
+          </div>
+          <div class="form-text text-secondary">Selecting a source auto-connects and keeps reconnecting. Choose "No Source" to stop.</div>
+        </div>
+
+        <!-- Video output settings -->
+        <div class="row g-2">
+          <div class="col-6 col-md-3">
+            <label class="form-label">Resolution</label>
+            <select class="form-select form-select-sm" id="v-res-{{ d.name|replace('-','_') }}">
+              <option value="auto"      {{ 'selected' if dc.get('resolution')=='auto' }}>Auto</option>
+              <option value="3840x2160" {{ 'selected' if dc.get('resolution')=='3840x2160' }}>4K 2160p</option>
+              <option value="1920x1080" {{ 'selected' if dc.get('resolution')=='1920x1080' }}>1080p</option>
+              <option value="1280x720"  {{ 'selected' if dc.get('resolution')=='1280x720' }}>720p</option>
+              {% for m in modes.get(d.name, []) %}
+              <option value="{{ m.split('@')[0] }}">{{ m }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Framerate</label>
+            <select class="form-select form-select-sm" id="v-fps-{{ d.name|replace('-','_') }}">
+              <option value="auto"  {{ 'selected' if dc.get('framerate','auto')=='auto' }}>Auto</option>
+              <option value="60"    {{ 'selected' if dc.get('framerate')=='60' }}>60 fps</option>
+              <option value="59.94" {{ 'selected' if dc.get('framerate')=='59.94' }}>59.94 fps</option>
+              <option value="50"    {{ 'selected' if dc.get('framerate')=='50' }}>50 fps</option>
+              <option value="30"    {{ 'selected' if dc.get('framerate')=='30' }}>30 fps</option>
+              <option value="29.97" {{ 'selected' if dc.get('framerate')=='29.97' }}>29.97 fps</option>
+              <option value="25"    {{ 'selected' if dc.get('framerate')=='25' }}>25 fps</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Chroma</label>
+            <select class="form-select form-select-sm" id="v-chroma-{{ d.name|replace('-','_') }}">
+              <option value="NV12" {{ 'selected' if dc.get('chroma','NV12')=='NV12' }}>NV12 4:2:0</option>
+              <option value="YUY2" {{ 'selected' if dc.get('chroma')=='YUY2' }}>YUY2 4:2:2</option>
+              <option value="RGB"  {{ 'selected' if dc.get('chroma')=='RGB' }}>RGB 4:4:4</option>
+              <option value="BGR"  {{ 'selected' if dc.get('chroma')=='BGR' }}>BGR</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Scaling</label>
+            <select class="form-select form-select-sm" id="v-scale-{{ d.name|replace('-','_') }}">
+              <option value="letterbox" {{ 'selected' if dc.get('scaling','letterbox')=='letterbox' }}>Letterbox</option>
+              <option value="stretch"   {{ 'selected' if dc.get('scaling')=='stretch' }}>Stretch</option>
+              <option value="crop"      {{ 'selected' if dc.get('scaling')=='crop' }}>Crop</option>
+              <option value="fit"       {{ 'selected' if dc.get('scaling')=='fit' }}>Fit</option>
+            </select>
+          </div>
+          <div class="col-12 col-md-6">
+            <label class="form-label">Backup / Failover Source</label>
+            <input type="text" class="form-control form-control-sm" id="v-backup-{{ d.name|replace('-','_') }}"
+                   value="{{ dc.get('backup_source','') }}" placeholder="NDI source name for failover">
+          </div>
+          <div class="col-12 col-md-6 d-flex align-items-end pb-1">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="v-enabled-{{ d.name|replace('-','_') }}"
+                     {{ 'checked' if dc.get('enabled', true) }}>
+              <label class="form-check-label text-secondary small">Display Enabled</label>
+            </div>
+          </div>
+        </div>
+        <div class="mt-2">
+          <button class="btn btn-sm btn-outline-info" onclick="saveDisplayVideo('{{ d.name }}')">
+            <i class="bi bi-save me-1"></i>Save Video Settings
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Right column: NDI global settings -->
+    <div class="col-12 col-xl-4">
+      <div class="card">
+        <div class="card-header"><i class="bi bi-broadcast me-2"></i>NDI Settings</div>
+        <div class="card-body">
+          <div class="section-title">Identity</div>
+          <div class="mb-3">
+            <label class="form-label">NDI Alias (Display Name)</label>
+            <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Bandwidth</label>
+            <select class="form-select" id="ndi-bandwidth">
+              <option value="highest"    {{ 'selected' if cfg.ndi.bandwidth=='highest' }}>Highest</option>
+              <option value="lowest"     {{ 'selected' if cfg.ndi.bandwidth=='lowest' }}>Lowest (Proxy)</option>
+              <option value="audio_only" {{ 'selected' if cfg.ndi.bandwidth=='audio_only' }}>Audio Only</option>
+            </select>
+          </div>
+          <div class="section-title">Discovery</div>
+          <div class="mb-3">
+            <label class="form-label">Discovery Servers (comma-separated)</label>
+            <input type="text" class="form-control" id="ndi-discovery"
+                   value="{{ cfg.ndi.discovery_servers | join(', ') }}" placeholder="192.168.1.100">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">NDI Groups (one per line)</label>
+            <textarea class="form-control" id="ndi-groups" rows="3">{{ cfg.ndi.groups | join('\n') }}</textarea>
+          </div>
+          <button class="btn btn-sm btn-outline-info" onclick="saveNDI()"><i class="bi bi-save me-1"></i>Save NDI Settings</button>
+
+          <div class="section-title">Audio</div>
+          <div class="form-check form-switch mb-2">
+            <input class="form-check-input" type="checkbox" id="audio-enabled" {{ 'checked' if cfg.audio.enabled }}>
+            <label class="form-check-label form-label">Enable Audio Output</label>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Audio Sink</label>
+            <select class="form-select form-select-sm" id="audio-sink">
+              <option value="auto"   {{ 'selected' if cfg.audio.sink=='auto' }}>Auto (HDMI preferred)</option>
+              <option value="hdmi0"  {{ 'selected' if cfg.audio.sink=='hdmi0' }}>HDMI 1</option>
+              <option value="hdmi1"  {{ 'selected' if cfg.audio.sink=='hdmi1' }}>HDMI 2</option>
+              <option value="analog" {{ 'selected' if cfg.audio.sink=='analog' }}>Analog / 3.5mm</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Volume: <span id="vol-val">{{ cfg.audio.volume }}</span>%</label>
+            <input type="range" class="form-range" id="audio-volume" min="0" max="100"
+                   value="{{ cfg.audio.volume }}" oninput="document.getElementById('vol-val').textContent=this.value">
+          </div>
+          <button class="btn btn-sm btn-outline-info" onclick="saveAudio()"><i class="bi bi-save me-1"></i>Save Audio</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+function showToast(msg, type='info') {
+  const id = 'toast-' + Date.now();
+  const c  = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark'};
+  const html = `<div id="${id}" class="toast align-items-center ${c[type]||'bg-info'} border-0" role="alert">
+    <div class="d-flex"><div class="toast-body fw-bold">${msg}</div>
+    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`;
+  document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(id);
+  new bootstrap.Toast(el, {delay:4000}).show();
+  el.addEventListener('hidden.bs.toast', () => el.remove());
+}
+async function post(url, data) {
+  const r = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  return r.json();
+}
+
+// Called when dropdown changes — immediately select/deselect source
+async function selectSource(display) {
+  const key    = display.replace(/-/g,'_');
+  const source = document.getElementById('src-'+key).value;
+  await applySourceValue(display, source);
+}
+
+// Apply from either dropdown or manual input
+async function applySource(display) {
+  const key    = display.replace(/-/g,'_');
+  const manual = document.getElementById('manual-'+key).value.trim();
+  const select = document.getElementById('src-'+key).value;
+  const source = manual || select;
+  await applySourceValue(display, source);
+}
+
+async function applySourceValue(display, source) {
+  // Also save current video settings alongside the source change
+  const key = display.replace(/-/g,'_');
+  const cfg = await (await fetch('/api/config')).json();
+  if (!cfg.displays[display]) cfg.displays[display] = {};
+  cfg.displays[display].resolution   = document.getElementById('v-res-'+key)?.value || 'auto';
+  cfg.displays[display].framerate    = document.getElementById('v-fps-'+key)?.value || 'auto';
+  cfg.displays[display].chroma       = document.getElementById('v-chroma-'+key)?.value || 'NV12';
+  cfg.displays[display].scaling      = document.getElementById('v-scale-'+key)?.value || 'letterbox';
+  cfg.displays[display].backup_source= document.getElementById('v-backup-'+key)?.value || '';
+  cfg.displays[display].enabled      = document.getElementById('v-enabled-'+key)?.checked ?? true;
+  await post('/api/config', cfg);
+
+  const d = await post('/api/stream/select', {display, source});
+  if (source) {
+    showToast(d.ok ? `Connecting: ${source} → ${display}` : 'Failed to start stream',
+              d.ok ? 'success' : 'danger');
+  } else {
+    showToast(`${display} — No Source`, 'warning');
+  }
+  setTimeout(updateStatus, 1500);
+}
+
+async function saveDisplayVideo(display) {
+  const key = display.replace(/-/g,'_');
+  const cfg = await (await fetch('/api/config')).json();
+  if (!cfg.displays[display]) cfg.displays[display] = {};
+  cfg.displays[display].resolution    = document.getElementById('v-res-'+key)?.value || 'auto';
+  cfg.displays[display].framerate     = document.getElementById('v-fps-'+key)?.value || 'auto';
+  cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
+  cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
+  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
+  cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'Video settings saved — will apply on next stream start' : 'Save failed',
+            d.ok ? 'success' : 'danger');
+}
+
+async function saveNDI() {
+  const cfg  = await (await fetch('/api/config')).json();
+  const groups     = document.getElementById('ndi-groups').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const discovery  = document.getElementById('ndi-discovery').value.split(',').map(s=>s.trim()).filter(Boolean);
+  cfg.ndi.alias    = document.getElementById('ndi-alias').value;
+  cfg.ndi.groups   = groups;
+  cfg.ndi.discovery_servers = discovery;
+  cfg.ndi.bandwidth = document.getElementById('ndi-bandwidth').value;
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'NDI settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
+}
+
+async function saveAudio() {
+  const cfg = await (await fetch('/api/config')).json();
+  cfg.audio.enabled = document.getElementById('audio-enabled').checked;
+  cfg.audio.sink    = document.getElementById('audio-sink').value;
+  cfg.audio.volume  = parseInt(document.getElementById('audio-volume').value);
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'Audio settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
+}
+
+async function refreshSources() {
+  const r = await fetch('/api/sources');
+  const d = await r.json();
+  const el = document.getElementById('source-list');
+  if (!d.sources.length) {
+    el.innerHTML = '<span class="text-secondary small">No NDI sources found</span>';
+    return;
+  }
+  el.innerHTML = d.sources.map(s =>
+    `<span class="badge bg-secondary source-badge" onclick="fillAllSelects('${s}')">
+      <i class="bi bi-broadcast-pin me-1"></i>${s}</span>`
+  ).join('');
+  // Refresh all source dropdowns
+  document.querySelectorAll('[id^="src-"]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— No Source —</option>' +
+      d.sources.map(s => `<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
+  });
+}
+
+function fillAllSelects(name) {
+  document.querySelectorAll('[id^="src-"]').forEach(sel => {
+    for (const o of sel.options) if (o.value === name) { sel.value = name; break; }
+  });
+  document.querySelectorAll('[id^="manual-"]').forEach(el => el.value = '');
+}
+
+async function updateStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    for (const [name, info] of Object.entries(d.streams)) {
+      const key  = name.replace(/-/g,'_');
+      const dot  = document.getElementById('dot-'+key);
+      const info_el = document.getElementById('info-'+key);
+      if (dot) dot.className = 'status-dot ' + (info.active?'live':'idle');
+      if (info_el) info_el.textContent = info.active ? `${info.source} — ${info.uptime}` : '';
+    }
+  } catch(e) {}
+}
+
+setInterval(updateStatus, 5000);
+setInterval(refreshSources, 10000);
+updateStatus();
+</script>
+</body>
+</html>

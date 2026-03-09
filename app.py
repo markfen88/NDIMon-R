@@ -118,16 +118,24 @@ def _get_ndi_lib():
             log.warning(f"NDI lib load failed: {e}")
     return _ndi_lib
 
-def _ndi_env():
+def _ndi_env(wait_secs=15):
     """Build environment dict for gst-launch pipelines.
-    Auto-injects Wayland vars if a weston socket is present (RK3399 headless)."""
+    Auto-injects Wayland vars if a weston socket is present (RK3399 headless).
+    Waits up to wait_secs for the socket to appear (handles weston restart after kiosk-shell exit)."""
     env = os.environ.copy()
     xdg_rt = "/run/user/0"
-    for n in range(5):
-        if os.path.exists(f"{xdg_rt}/wayland-{n}"):
-            env["XDG_RUNTIME_DIR"] = xdg_rt
-            env["WAYLAND_DISPLAY"] = f"wayland-{n}"
+    env["XDG_RUNTIME_DIR"] = xdg_rt
+    deadline = time.time() + wait_secs
+    while True:
+        for n in range(5):
+            if os.path.exists(f"{xdg_rt}/wayland-{n}"):
+                env["WAYLAND_DISPLAY"] = f"wayland-{n}"
+                return env
+        if time.time() >= deadline:
             break
+        time.sleep(0.5)
+    # No socket found within timeout — return env without WAYLAND_DISPLAY
+    log.warning("_ndi_env: no Wayland socket found after waiting")
     return env
 
 def _extra_ips_from_config():
@@ -215,9 +223,10 @@ def background_ndi_discovery():
 # ── GStreamer Pipeline Manager ────────────────────────────────────────────────
 class PipelineManager:
     def __init__(self):
-        self.pipelines   = {}   # display_id -> {proc, source, start_time}
-        self.splash_procs = {}  # display_id -> proc
-        self.lock        = threading.Lock()
+        self.pipelines    = {}   # display_id -> {proc, source, start_time}
+        self.splash_procs = {}   # display_id -> proc
+        self.lock         = threading.Lock()
+        self._start_locks = {}   # display_id -> threading.Lock (per-display start guard)
         self._detect_board()
         self._detect_displays()
         self._probe_kmssink_bus_id()
@@ -505,11 +514,27 @@ class PipelineManager:
                 log.error(f"Resolution {resolution} not supported on {display_name}")
                 return False
 
-        # Kill existing stream and splash without starting a new splash
+        # Per-display lock prevents race between auto_recovery_thread and HTTP handlers.
+        disp_lock = self._start_locks.setdefault(display_name, threading.Lock())
+        if not disp_lock.acquire(blocking=False):
+            log.warning(f"start_stream for {display_name} already in progress — skipping duplicate")
+            return False
+        try:
+            return self._start_stream_locked(display_name, source, display, cfg_disp, chroma,
+                                             scaling, resolution, framerate, osd, cfg)
+        finally:
+            disp_lock.release()
+
+    def _start_stream_locked(self, display_name, source, display, cfg_disp, chroma,
+                              scaling, resolution, framerate, osd, cfg):
+        """Inner start_stream — called only while the per-display start lock is held."""
+        # Kill existing stream, splash, and any orphaned NDI gst-launch processes.
         with self.lock:
             p = self.pipelines.pop(display_name, None)
         self._kill_pipeline_proc(p)
         self.stop_splash(display_name)
+        subprocess.run(["pkill", "-TERM", "-f", "gst-launch-1.0.*ndisrc"], check=False)
+        time.sleep(0.3)  # let killed processes actually exit
 
         cmd = self._build_pipeline(source, display, cfg_disp, chroma, scaling, resolution, framerate, osd)
         log.info(f"Starting pipeline: {cmd}")
@@ -528,9 +553,9 @@ class PipelineManager:
                     # Would need proper overlay toggle — log for now
                     log.info(f"OSD dismissed after {osd_timeout}s on {display_name}")
                 threading.Thread(target=dismiss_osd, daemon=True).start()
-            # Save last source, clear paused flag
+            # Save last source
             cfg["displays"][display_name]["source"] = source
-            cfg["displays"][display_name]["paused"] = False
+            cfg["displays"][display_name].pop("paused", None)
             save_config(cfg)
             ok_msg = f"Stream started: {source} → {display_name}"
             log.info(ok_msg)
@@ -626,9 +651,11 @@ pipeline_mgr = PipelineManager()
 
 # ── Auto-Recovery Thread ──────────────────────────────────────────────────────
 _pipeline_failures  = {}  # disp_name -> (fail_count, last_start_time)
+_pipeline_backoff   = {}  # disp_name -> retry_after (unix timestamp)
 _display_connected  = {}  # disp_name -> bool (last known state for hotplug detection)
-MAX_FAST_FAILURES   = 3   # pause after this many crashes within FAST_FAIL_WINDOW seconds
+MAX_FAST_FAILURES   = 3   # clear url cache + backoff after this many crashes within window
 FAST_FAIL_WINDOW    = 30  # seconds
+BACKOFF_SECS        = 120 # seconds to wait after fast-failure before retrying
 
 def _sysfs_connected(disp_name):
     """Read display connected state from sysfs (reliable, no subprocess)."""
@@ -640,27 +667,58 @@ def _sysfs_connected(disp_name):
             pass
     return False
 
+_last_weston_restart = 0.0  # unix timestamp of last weston restart attempt
+
+def _ensure_weston():
+    """If we're on a Wayland board and the socket is missing, restart weston (max once/30s)."""
+    global _last_weston_restart
+    if not getattr(pipeline_mgr, 'use_wayland', False):
+        return
+    xdg_rt = "/run/user/0"
+    if any(os.path.exists(f"{xdg_rt}/wayland-{n}") for n in range(5)):
+        return  # socket present — nothing to do
+    now = time.time()
+    if now - _last_weston_restart < 30:
+        return  # restarted recently — wait it out
+    log.warning("Weston socket missing — restarting weston")
+    _last_weston_restart = now
+    subprocess.run(["systemctl", "restart", "weston"], check=False)
+    # Wait up to 15s for socket to appear
+    for _ in range(30):
+        time.sleep(0.5)
+        if any(os.path.exists(f"{xdg_rt}/wayland-{n}") for n in range(5)):
+            return
+    log.warning("_ensure_weston: socket still missing after 15s")
+
 def auto_recovery_thread():
-    """Every 8s: check active streams, restart dead ones, auto-connect when source appears."""
+    """Every 8s: check active streams, restart dead ones, auto-connect whenever source is set."""
+    time.sleep(15)  # startup grace period — let weston fully initialise before first cycle
     while True:
         try:
+            _ensure_weston()
             cfg = load_config()
             with _ndi_sources_lock:
                 available = set(_ndi_sources_cache)
             for disp_name, d_cfg in cfg["displays"].items():
                 if not d_cfg.get("enabled", True):
                     continue
-                if d_cfg.get("paused", False):
-                    continue  # User manually stopped this stream
                 source        = d_cfg.get("source", "")
                 backup_source = d_cfg.get("backup_source", "")
                 with pipeline_mgr.lock:
                     pipe_info = pipeline_mgr.pipelines.get(disp_name)
                 if pipe_info:
-                    proc      = pipe_info["proc"]
+                    proc       = pipe_info["proc"]
                     start_time = pipe_info.get("start_time", time.time())
                     if proc.poll() is not None:
                         uptime = time.time() - start_time
+                        # Clean up the dead pipeline entry
+                        with pipeline_mgr.lock:
+                            pipeline_mgr.pipelines.pop(disp_name, None)
+                        # Skip restart if in backoff
+                        if time.time() < _pipeline_backoff.get(disp_name, 0):
+                            remain = int(_pipeline_backoff[disp_name] - time.time())
+                            log.debug(f"Pipeline dead on {disp_name}, backoff {remain}s remaining")
+                            continue
                         # Track fast failures
                         fc, last_t = _pipeline_failures.get(disp_name, (0, 0))
                         if time.time() - last_t < FAST_FAIL_WINDOW:
@@ -670,25 +728,30 @@ def auto_recovery_thread():
                         _pipeline_failures[disp_name] = (fc, time.time())
 
                         if fc >= MAX_FAST_FAILURES:
-                            log.error(f"Pipeline on {disp_name} crashed {fc}x in {FAST_FAIL_WINDOW}s "
-                                      f"(last uptime {uptime:.1f}s) — pausing auto-recovery. "
-                                      f"Check logs for pipeline errors.")
-                            cfg2 = load_config()
-                            cfg2["displays"].setdefault(disp_name, {})["paused"] = True
-                            save_config(cfg2)
+                            # Clear stale URL cache for this source (port may have changed)
+                            with _ndi_sources_lock:
+                                _ndi_url_cache.pop(source, None)
                             _pipeline_failures.pop(disp_name, None)
+                            _pipeline_backoff[disp_name] = time.time() + BACKOFF_SECS
+                            log.warning(f"Pipeline on {disp_name} crashed {fc}x in {FAST_FAIL_WINDOW}s "
+                                        f"— cleared URL cache, backing off {BACKOFF_SECS}s")
+                            pipeline_mgr.show_splash(disp_name)
                         else:
                             log.warning(f"Pipeline died on {disp_name} (exit={proc.poll()}, "
                                         f"uptime={uptime:.1f}s, fail #{fc}), restarting...")
                             pipeline_mgr.start_stream(disp_name, source)
                 else:
-                    # No active stream — try to connect if source is visible
-                    if source and source in available:
-                        log.info(f"Auto-connecting {source} → {disp_name}")
-                        pipeline_mgr.start_stream(disp_name, source)
+                    # No active stream — try to connect if source is configured
+                    if time.time() < _pipeline_backoff.get(disp_name, 0):
+                        continue  # Still in backoff after repeated fast failures
+                    active_src = None
+                    if source:
+                        active_src = source
                     elif backup_source and backup_source in available:
-                        log.info(f"Failover: {backup_source} → {disp_name}")
-                        pipeline_mgr.start_stream(disp_name, backup_source)
+                        active_src = backup_source
+                    if active_src:
+                        log.info(f"Auto-connecting {active_src} → {disp_name}")
+                        pipeline_mgr.start_stream(disp_name, active_src)
                     else:
                         # Hotplug: refresh splash if display just reconnected
                         now_connected = _sysfs_connected(disp_name)
@@ -751,6 +814,7 @@ def index():
     displays = pipeline_mgr.displays
     return render_template("index.html", cfg=cfg, status=status,
                            sources=sources, displays=displays,
+                           board=pipeline_mgr.board,
                            ip=get_ip(), uptime=get_system_uptime())
 
 @app.route("/login", methods=["GET", "POST"])
@@ -827,11 +891,30 @@ def api_stream_stop():
     data    = request.get_json()
     display = data.get("display", "HDMI-A-1")
     pipeline_mgr.stop_stream(display)
-    # Mark as manually paused so auto-recovery doesn't restart it
-    cfg = load_config()
-    cfg["displays"].setdefault(display, {})["paused"] = True
-    save_config(cfg)
     return jsonify({"ok": True})
+
+@app.route("/api/stream/select", methods=["POST"])
+@require_auth
+def api_stream_select():
+    """Set the NDI source for a display and trigger connect/disconnect immediately."""
+    data    = request.get_json()
+    display = data.get("display", "HDMI-A-1")
+    source  = data.get("source", "")
+    # Save source to config (clears paused if present)
+    cfg = load_config()
+    disp = cfg["displays"].setdefault(display, {})
+    disp["source"] = source
+    disp.pop("paused", None)
+    save_config(cfg)
+    # Clear any backoff so auto-recovery picks it up immediately
+    _pipeline_backoff.pop(display, None)
+    _pipeline_failures.pop(display, None)
+    if source:
+        ok_flag = pipeline_mgr.start_stream(display, source)
+    else:
+        pipeline_mgr.stop_stream(display)
+        ok_flag = True
+    return jsonify({"ok": ok_flag})
 
 @app.route("/api/stream/record", methods=["POST"])
 @require_auth
@@ -924,15 +1007,25 @@ def api_system_shutdown():
     threading.Timer(2, lambda: subprocess.run(["shutdown", "-h", "now"])).start()
     return jsonify({"ok": True, "message": "Shutting down in 2 seconds..."})
 
-@app.route("/settings")
+@app.route("/ndi")
 @require_auth
-def settings():
+def ndi_page():
     cfg   = load_config()
     modes = {}
     for d in pipeline_mgr.displays:
         modes[d["name"]] = pipeline_mgr.get_supported_modes(d["name"])
+    with _ndi_sources_lock:
+        sources = list(_ndi_sources_cache)
+    status = pipeline_mgr.get_status()
+    return render_template("ndi.html", cfg=cfg, displays=pipeline_mgr.displays,
+                           modes=modes, sources=sources, status=status, ip=get_ip())
+
+@app.route("/settings")
+@require_auth
+def settings():
+    cfg   = load_config()
     return render_template("settings.html", cfg=cfg, displays=pipeline_mgr.displays,
-                           modes=modes, ip=get_ip())
+                           ip=get_ip())
 
 def get_system_uptime():
     try:

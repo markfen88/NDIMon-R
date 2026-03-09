@@ -7,268 +7,191 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
-  :root {--accent:#00b4d8;--bg-card:#1a1d23;--bg-page:#12141a}
+  :root{--accent:#00b4d8;--bg-card:#1a1d23;--bg-page:#12141a}
   body{background:var(--bg-page);font-family:'Segoe UI',system-ui,sans-serif}
   .navbar{background:#0d0f14!important;border-bottom:1px solid #2a2d35}
   .navbar-brand{color:var(--accent)!important;font-weight:700;letter-spacing:.05em}
+  .nav-link-page{color:#aaa;text-decoration:none;font-size:.9rem;padding:.25rem .5rem;border-radius:4px;transition:color .15s}
+  .nav-link-page:hover{color:#fff}
+  .nav-link-page.active{color:var(--accent);font-weight:600}
   .card{background:var(--bg-card);border:1px solid #2a2d35}
   .card-header{background:#14171f;border-bottom:1px solid #2a2d35;font-weight:600}
-  .source-badge{font-size:.7rem;padding:.2em .5em;border-radius:3px}
-  .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-  .status-dot.live{background:#00e676;box-shadow:0 0 6px #00e676}
-  .status-dot.idle{background:#555}
-  .source-select{background:#0d0f14;border:1px solid #2a2d35;color:#fff}
-  .source-select:focus{border-color:var(--accent);box-shadow:0 0 0 .2rem rgba(0,180,216,.25)}
-  .btn-play{background:var(--accent);border:none;font-weight:600}
-  .btn-play:hover{background:#0096b4}
-  .stat-card{background:#0d0f14;border-radius:6px;padding:.75rem 1rem}
-  .stat-val{font-size:1.4rem;font-weight:700;color:var(--accent)}
-  .ticker{font-size:.75rem;color:#888;height:1.5em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .stat-card{background:#0d0f14;border-radius:8px;padding:.85rem 1.1rem;border:1px solid #2a2d35}
+  .stat-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:#666;margin-bottom:.2rem}
+  .stat-val{font-size:1.5rem;font-weight:700;color:var(--accent);line-height:1}
+  .stat-unit{font-size:.75rem;color:#888;margin-left:.2rem}
+  .status-dot{width:11px;height:11px;border-radius:50%;display:inline-block;flex-shrink:0}
+  .status-dot.live{background:#00e676;box-shadow:0 0 8px #00e676}
+  .status-dot.idle{background:#333}
+  .display-card{border:1px solid #2a2d35;border-radius:8px;padding:1.25rem;background:#0d0f14}
+  .display-name{font-size:1rem;font-weight:600;color:#ddd}
+  .source-name{font-size:.85rem;color:var(--accent);font-weight:500;min-height:1.2em}
+  .uptime-val{font-size:.78rem;color:#666}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   .live-pulse{animation:pulse 2s infinite}
+  .badge-live{background:#00e676;color:#000;font-size:.65rem;font-weight:700;border-radius:3px;padding:.15em .45em}
+  .temp-chip{background:#14171f;border:1px solid #2a2d35;border-radius:5px;padding:.3rem .6rem;font-size:.78rem;color:#aaa}
+  .temp-val{color:#f0a030;font-weight:600}
+  .source-chip{display:inline-flex;align-items:center;gap:.3rem;background:#14171f;border:1px solid #2a2d35;
+               border-radius:4px;padding:.2rem .55rem;font-size:.75rem;color:#aaa}
+  .source-chip.active-src{border-color:var(--accent);color:var(--accent)}
   .toast-container{position:fixed;bottom:1rem;right:1rem;z-index:9999}
 </style>
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark px-3">
-  <span class="navbar-brand"><i class="bi bi-broadcast-pin me-2"></i>NDI Monitor</span>
-  <span class="ms-2 text-secondary small">{{ cfg.ndi.alias }}</span>
+  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDI Monitor</a>
+  <div class="d-flex align-items-center gap-3 ms-3">
+    <a href="/" class="nav-link-page active">Dashboard</a>
+    <a href="/ndi" class="nav-link-page">NDI</a>
+    <a href="/settings" class="nav-link-page">Settings</a>
+  </div>
   <div class="ms-auto d-flex align-items-center gap-3">
     <span class="text-secondary small"><i class="bi bi-hdd-network me-1"></i>{{ ip }}</span>
-    <a href="/settings" class="btn btn-sm btn-outline-secondary"><i class="bi bi-gear"></i> Settings</a>
     <a href="/logout" class="btn btn-sm btn-outline-danger"><i class="bi bi-box-arrow-right"></i></a>
   </div>
 </nav>
 
 <div class="container-fluid py-3 px-4">
-  <!-- System Stats Bar -->
-  <div class="row g-2 mb-3" id="stats-bar">
-    <div class="col-6 col-md-3"><div class="stat-card"><div class="text-secondary small">CPU</div><div class="stat-val" id="s-cpu">—</div></div></div>
-    <div class="col-6 col-md-3"><div class="stat-card"><div class="text-secondary small">Memory</div><div class="stat-val" id="s-mem">—</div></div></div>
-    <div class="col-6 col-md-3"><div class="stat-card"><div class="text-secondary small">Uptime</div><div class="stat-val" id="s-up" style="font-size:1rem;padding-top:.3rem">—</div></div></div>
-    <div class="col-6 col-md-3"><div class="stat-card"><div class="text-secondary small">Board</div><div class="stat-val" id="s-board" style="font-size:.9rem;padding-top:.3rem">{{ uptime }}</div></div></div>
+
+  <!-- System Stats -->
+  <div class="row g-2 mb-3">
+    <div class="col-6 col-sm-3 col-lg-2">
+      <div class="stat-card">
+        <div class="stat-label">CPU</div>
+        <div><span class="stat-val" id="s-cpu">—</span><span class="stat-unit">%</span></div>
+      </div>
+    </div>
+    <div class="col-6 col-sm-3 col-lg-2">
+      <div class="stat-card">
+        <div class="stat-label">Memory</div>
+        <div><span class="stat-val" id="s-mem">—</span><span class="stat-unit">%</span></div>
+      </div>
+    </div>
+    <div class="col-6 col-sm-3 col-lg-2">
+      <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-val" id="s-up" style="font-size:1rem;padding-top:.2rem">—</div>
+      </div>
+    </div>
+    <div class="col-6 col-sm-3 col-lg-2">
+      <div class="stat-card">
+        <div class="stat-label">Board</div>
+        <div class="stat-val" id="s-board" style="font-size:.85rem;padding-top:.3rem">{{ board | upper }}</div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-4">
+      <div class="stat-card h-100 d-flex align-items-center flex-wrap gap-2" id="temp-strip">
+        <span class="text-secondary small"><i class="bi bi-thermometer-half me-1"></i>Temps loading…</span>
+      </div>
+    </div>
   </div>
 
   <!-- Display Cards -->
-  <div class="row g-3" id="display-cards">
+  <div class="row g-3 mb-3">
     {% for d in displays %}
     {% set ds = status.get(d.name, {}) %}
     {% set dcfg = cfg.displays.get(d.name, {}) %}
-    <div class="col-12 col-xl-6">
-      <div class="card h-100">
-        <div class="card-header d-flex align-items-center justify-content-between">
-          <div class="d-flex align-items-center gap-2">
-            <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name | replace('-','_') }}"></span>
-            <i class="bi bi-display"></i> {{ d.name }}
-            {% if ds.get('active') %}<span class="badge bg-success live-pulse ms-2">LIVE</span>{% endif %}
-          </div>
-          <small class="text-secondary">Connector {{ d.id }}</small>
+    <div class="col-12 col-md-6 col-xl-4">
+      <div class="display-card h-100">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name|replace('-','_') }}"></span>
+          <span class="display-name"><i class="bi bi-display me-1"></i>{{ d.name }}</span>
+          {% if ds.get('active') %}<span class="badge-live live-pulse ms-1">LIVE</span>{% endif %}
+          <span class="ms-auto text-secondary" style="font-size:.72rem">Conn {{ d.id }}</span>
         </div>
-        <div class="card-body">
-          <!-- Source Selector -->
-          <div class="mb-3">
-            <label class="form-label text-secondary small mb-1">NDI Source</label>
-            <div class="input-group">
-              <select class="form-select source-select" id="src-{{ d.name | replace('-','_') }}">
-                <option value="">— Select Source —</option>
-                {% for s in sources %}
-                <option value="{{ s }}" {{ 'selected' if s == dcfg.get('source','') }}>{{ s }}</option>
-                {% endfor %}
-              </select>
-              <input type="text" class="form-control source-select" style="max-width:200px"
-                     placeholder="Manual source name"
-                     id="manual-{{ d.name | replace('-','_') }}"
-                     value="">
-            </div>
-          </div>
-          <!-- Quick Settings Row -->
-          <div class="row g-2 mb-3">
-            <div class="col-4">
-              <label class="form-label text-secondary small mb-1">Scaling</label>
-              <select class="form-select form-select-sm source-select" id="scale-{{ d.name | replace('-','_') }}">
-                <option value="letterbox" {{ 'selected' if dcfg.get('scaling')=='letterbox' }}>Letterbox</option>
-                <option value="stretch"   {{ 'selected' if dcfg.get('scaling')=='stretch' }}>Stretch</option>
-                <option value="crop"      {{ 'selected' if dcfg.get('scaling')=='crop' }}>Crop</option>
-                <option value="fit"       {{ 'selected' if dcfg.get('scaling')=='fit' }}>Fit</option>
-              </select>
-            </div>
-            <div class="col-4">
-              <label class="form-label text-secondary small mb-1">Chroma</label>
-              <select class="form-select form-select-sm source-select" id="chroma-{{ d.name | replace('-','_') }}">
-                <option value="NV12" {{ 'selected' if dcfg.get('chroma')=='NV12' }}>NV12 4:2:0</option>
-                <option value="YUY2" {{ 'selected' if dcfg.get('chroma')=='YUY2' }}>YUY2 4:2:2</option>
-                <option value="RGB"  {{ 'selected' if dcfg.get('chroma')=='RGB' }}>RGB 4:4:4</option>
-              </select>
-            </div>
-            <div class="col-4">
-              <label class="form-label text-secondary small mb-1">Resolution</label>
-              <select class="form-select form-select-sm source-select" id="res-{{ d.name | replace('-','_') }}">
-                <option value="auto">Auto</option>
-                <option value="3840x2160">4K 2160p</option>
-                <option value="1920x1080">1080p</option>
-                <option value="1280x720">720p</option>
-              </select>
-            </div>
-          </div>
-          <!-- Stream Info -->
-          <div class="ticker mb-3" id="info-{{ d.name | replace('-','_') }}">
-            {% if ds.get('active') %}
-              <i class="bi bi-circle-fill text-success me-1" style="font-size:.5rem"></i>
-              {{ ds.get('source','') }} &nbsp;|&nbsp; Uptime: {{ ds.get('uptime','') }}
-            {% else %}
-              <i class="bi bi-circle text-secondary me-1" style="font-size:.5rem"></i> Idle
-            {% endif %}
-          </div>
-          <!-- Action Buttons -->
-          <div class="d-flex gap-2 flex-wrap">
-            <button class="btn btn-play btn-sm px-3" onclick="startStream('{{ d.name }}')">
-              <i class="bi bi-play-fill"></i> Play
-            </button>
-            <button class="btn btn-sm btn-outline-warning" onclick="stopStream('{{ d.name }}')">
-              <i class="bi bi-stop-fill"></i> Stop
-            </button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="recordStream('{{ d.name }}')">
-              <i class="bi bi-record-circle"></i> Record
-            </button>
-            <button class="btn btn-sm btn-outline-info" onclick="refreshSources()">
-              <i class="bi bi-arrow-clockwise"></i>
-            </button>
-          </div>
+        <div class="source-name mb-1" id="src-{{ d.name|replace('-','_') }}">
+          {% if ds.get('active') %}
+            {{ ds.get('source','') }}
+          {% elif dcfg.get('source') %}
+            <span class="text-secondary">Connecting: {{ dcfg.source }}</span>
+          {% else %}
+            <span class="text-secondary fst-italic">No source</span>
+          {% endif %}
+        </div>
+        <div class="uptime-val" id="up-{{ d.name|replace('-','_') }}">
+          {% if ds.get('active') %}Uptime: {{ ds.get('uptime','') }}{% endif %}
         </div>
       </div>
     </div>
     {% endfor %}
   </div>
 
-  <!-- NDI Sources List -->
-  <div class="row mt-3">
-    <div class="col-12">
-      <div class="card">
-        <div class="card-header d-flex align-items-center justify-content-between">
-          <span><i class="bi bi-broadcast me-2"></i>Discovered NDI Sources</span>
-          <button class="btn btn-sm btn-outline-secondary" onclick="refreshSources()"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-        </div>
-        <div class="card-body py-2">
-          <div id="source-list" class="d-flex flex-wrap gap-2">
-            {% for s in sources %}
-            <span class="badge bg-secondary source-badge" style="cursor:pointer" onclick="fillSource('{{ s }}')">
-              <i class="bi bi-broadcast-pin me-1"></i>{{ s }}
-            </span>
-            {% else %}
-            <span class="text-secondary small">Scanning for NDI sources...</span>
-            {% endfor %}
-          </div>
-        </div>
+  <!-- Discovered Sources -->
+  <div class="card">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span><i class="bi bi-broadcast me-2"></i>NDI Sources on Network</span>
+      <a href="/ndi" class="btn btn-sm btn-outline-info"><i class="bi bi-sliders me-1"></i>Configure</a>
+    </div>
+    <div class="card-body py-2">
+      <div class="d-flex flex-wrap gap-2" id="source-list">
+        {% for s in sources %}
+        {% set ns = namespace(active=false) %}
+        {% for d in displays %}{% if cfg.displays.get(d.name,{}).get('source')==s %}{% set ns.active = true %}{% endif %}{% endfor %}
+        <span class="source-chip {{ 'active-src' if ns.active }}">
+          <i class="bi bi-broadcast-pin"></i>{{ s }}
+        </span>
+        {% else %}
+        <span class="text-secondary small">Scanning for NDI sources…</span>
+        {% endfor %}
       </div>
     </div>
   </div>
+
 </div>
 
-<!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
-
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-function getId(display, prefix) {
-  return prefix + display.replace(/-/g,'_');
-}
-function getSource(display) {
-  const manual = document.getElementById(getId(display,'manual-')).value.trim();
-  if (manual) return manual;
-  return document.getElementById(getId(display,'src-')).value;
-}
-async function startStream(display) {
-  const source   = getSource(display);
-  const scaling  = document.getElementById(getId(display,'scale-')).value;
-  const chroma   = document.getElementById(getId(display,'chroma-')).value;
-  const res      = document.getElementById(getId(display,'res-')).value;
-  if (!source) { showToast('Select or enter an NDI source first', 'warning'); return; }
-  // Update display config
-  await fetch('/api/config/section', {method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({section:'displays',values:{[display]:{source,scaling,chroma,resolution:res}}})});
-  const r = await fetch('/api/stream/start', {method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({display, source})});
-  const d = await r.json();
-  if (d.ok) showToast(`Started: ${source} → ${display}`, 'success');
-  else showToast('Failed to start stream', 'danger');
-  setTimeout(updateStatus, 1500);
-}
-async function stopStream(display) {
-  await fetch('/api/stream/stop', {method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({display})});
-  showToast(`Stopped ${display}`, 'warning');
-  setTimeout(updateStatus, 1000);
-}
-async function recordStream(display) {
-  const r = await fetch('/api/stream/record', {method:'POST',headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({display})});
-  const d = await r.json();
-  if (d.ok) showToast(`Recording: ${d.file}`, 'info');
-  else showToast(`Record failed: ${d.error}`, 'danger');
-}
-async function refreshSources() {
-  const r = await fetch('/api/sources');
-  const d = await r.json();
-  const el = document.getElementById('source-list');
-  if (!d.sources.length) {
-    el.innerHTML = '<span class="text-secondary small">No NDI sources found on network</span>';
-    return;
-  }
-  el.innerHTML = d.sources.map(s =>
-    `<span class="badge bg-secondary source-badge" style="cursor:pointer" onclick="fillSource('${s}')">
-      <i class="bi bi-broadcast-pin me-1"></i>${s}</span>`
-  ).join('');
-  // Update selects
-  document.querySelectorAll('[id^="src-"]').forEach(sel => {
-    const current = sel.value;
-    sel.innerHTML = '<option value="">— Select Source —</option>' +
-      d.sources.map(s => `<option value="${s}" ${s===current?'selected':''}>${s}</option>`).join('');
-  });
-}
-function fillSource(name) {
-  document.querySelectorAll('[id^="src-"]').forEach(s => {
-    for (const o of s.options) if (o.value === name) { s.value = name; break; }
-  });
-}
 async function updateStatus() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
-    // System stats
-    document.getElementById('s-cpu').textContent = d.system.cpu.toFixed(1) + '%';
-    document.getElementById('s-mem').textContent = (d.system.mem_pct).toFixed(1) + '%';
+    document.getElementById('s-cpu').textContent = d.system.cpu.toFixed(1);
+    document.getElementById('s-mem').textContent = d.system.mem_pct.toFixed(1);
     document.getElementById('s-up').textContent  = d.system.uptime;
-    document.getElementById('s-board').textContent = d.system.board.toUpperCase();
-    // Stream dots
+    // Temps
+    const strip = document.getElementById('temp-strip');
+    const entries = Object.entries(d.system.temps||{});
+    if (entries.length) {
+      strip.innerHTML = '<span class="text-secondary small"><i class="bi bi-thermometer-half me-1"></i></span>' +
+        entries.map(([k,v]) => {
+          const label = k.split('/')[0].replace('_thermal','').replace(/_/g,' ');
+          return `<span class="temp-chip">${label} <span class="temp-val">${v.toFixed(0)}°C</span></span>`;
+        }).join('');
+    }
+    // Stream states
     for (const [name, info] of Object.entries(d.streams)) {
-      const key  = name.replace(/-/g,'_');
-      const dot  = document.getElementById('dot-' + key);
-      const ticker = document.getElementById('info-' + key);
-      if (dot) {
-        dot.className = 'status-dot ' + (info.active ? 'live' : 'idle');
-      }
-      if (ticker) {
-        ticker.innerHTML = info.active
-          ? `<i class="bi bi-circle-fill text-success me-1" style="font-size:.5rem"></i>${info.source} &nbsp;|&nbsp; Uptime: ${info.uptime}`
-          : `<i class="bi bi-circle text-secondary me-1" style="font-size:.5rem"></i> Idle`;
-      }
+      const key = name.replace(/-/g,'_');
+      const dot = document.getElementById('dot-'+key);
+      const src = document.getElementById('src-'+key);
+      const up  = document.getElementById('up-'+key);
+      if (dot) dot.className = 'status-dot ' + (info.active?'live':'idle');
+      if (src) src.innerHTML = info.active
+        ? `<span style="color:var(--accent)">${info.source}</span>`
+        : (info.source
+            ? `<span class="text-secondary">Connecting: ${info.source}</span>`
+            : '<span class="text-secondary fst-italic">No source</span>');
+      if (up) up.textContent = info.active ? 'Uptime: '+info.uptime : '';
     }
   } catch(e) {}
 }
-function showToast(msg, type='info') {
-  const id  = 'toast-' + Date.now();
-  const colors = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark'};
-  const html = `<div id="${id}" class="toast align-items-center ${colors[type]||'bg-info'} border-0" role="alert">
-    <div class="d-flex"><div class="toast-body fw-bold">${msg}</div>
-    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`;
-  document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
-  const el = document.getElementById(id);
-  new bootstrap.Toast(el, {delay:4000}).show();
-  el.addEventListener('hidden.bs.toast', () => el.remove());
+async function updateSources() {
+  try {
+    const r = await fetch('/api/sources');
+    const d = await r.json();
+    const el = document.getElementById('source-list');
+    if (!d.sources.length) {
+      el.innerHTML = '<span class="text-secondary small">No NDI sources found on network</span>';
+      return;
+    }
+    el.innerHTML = d.sources.map(s =>
+      `<span class="source-chip"><i class="bi bi-broadcast-pin"></i>${s}</span>`
+    ).join('');
+  } catch(e) {}
 }
-// Auto-refresh
 setInterval(updateStatus, 5000);
-setInterval(refreshSources, 8000);
+setInterval(updateSources, 10000);
 updateStatus();
 </script>
 </body>

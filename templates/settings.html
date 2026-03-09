@@ -11,6 +11,9 @@
   body{background:var(--bg-page)}
   .navbar{background:#0d0f14!important;border-bottom:1px solid #2a2d35}
   .navbar-brand{color:var(--accent)!important;font-weight:700}
+  .nav-link-page{color:#aaa;text-decoration:none;font-size:.9rem;padding:.25rem .5rem;border-radius:4px;transition:color .15s}
+  .nav-link-page:hover{color:#fff}
+  .nav-link-page.active{color:var(--accent);font-weight:600}
   .card{background:var(--bg-card);border:1px solid #2a2d35}
   .nav-pills .nav-link{color:#aaa}
   .nav-pills .nav-link.active{background:var(--accent);color:#000;font-weight:600}
@@ -25,137 +28,34 @@
 </head>
 <body>
 <nav class="navbar navbar-dark px-3">
-  <a class="navbar-brand" href="/"><i class="bi bi-arrow-left me-2"></i>NDI Monitor</a>
-  <span class="text-secondary small"><i class="bi bi-gear me-1"></i>Settings</span>
+  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDI Monitor</a>
+  <div class="d-flex align-items-center gap-3 ms-3">
+    <a href="/" class="nav-link-page">Dashboard</a>
+    <a href="/ndi" class="nav-link-page">NDI</a>
+    <a href="/settings" class="nav-link-page active">Settings</a>
+  </div>
   <span class="ms-auto text-secondary small">{{ ip }}</span>
 </nav>
+
 <div class="container-fluid py-3 px-4">
   <div class="row g-3">
     <!-- Sidebar Tabs -->
     <div class="col-12 col-md-2">
       <div class="nav flex-column nav-pills" id="settingsTabs" role="tablist">
-        <button class="nav-link active mb-1" data-bs-toggle="pill" data-bs-target="#tab-ndi"><i class="bi bi-broadcast me-2"></i>NDI</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-video"><i class="bi bi-display me-2"></i>Video</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-multiview"><i class="bi bi-grid me-2"></i>Multi-View</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-ptz"><i class="bi bi-joystick me-2"></i>PTZ</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-rec"><i class="bi bi-record-circle me-2"></i>Rec+OSD</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-audio"><i class="bi bi-volume-up me-2"></i>Audio</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-network"><i class="bi bi-hdd-network me-2"></i>Network</button>
-        <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-system"><i class="bi bi-cpu me-2"></i>System</button>
+        <button class="nav-link active mb-1" data-bs-toggle="pill" data-bs-target="#tab-multiview"><i class="bi bi-grid me-2"></i>Multi-View</button>
+        <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-ptz"><i class="bi bi-joystick me-2"></i>PTZ</button>
+        <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-rec"><i class="bi bi-record-circle me-2"></i>Rec+OSD</button>
+        <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-network"><i class="bi bi-hdd-network me-2"></i>Network</button>
+        <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-system"><i class="bi bi-cpu me-2"></i>System</button>
       </div>
     </div>
+
     <!-- Tab Content -->
     <div class="col-12 col-md-10">
       <div class="tab-content" id="settingsContent">
 
-        <!-- NDI Tab -->
-        <div class="tab-pane fade show active" id="tab-ndi">
-          <div class="card">
-            <div class="card-header"><i class="bi bi-broadcast me-2"></i>NDI Settings</div>
-            <div class="card-body">
-              <div class="section-title">Identity</div>
-              <div class="row g-3 mb-4">
-                <div class="col-md-6">
-                  <label class="form-label">NDI Alias (Display Name)</label>
-                  <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Bandwidth</label>
-                  <select class="form-select" id="ndi-bandwidth">
-                    <option value="highest" {{ 'selected' if cfg.ndi.bandwidth=='highest' }}>Highest (Default)</option>
-                    <option value="lowest"  {{ 'selected' if cfg.ndi.bandwidth=='lowest' }}>Lowest (Proxy)</option>
-                    <option value="audio_only" {{ 'selected' if cfg.ndi.bandwidth=='audio_only' }}>Audio Only</option>
-                  </select>
-                </div>
-              </div>
-              <div class="section-title">Groups</div>
-              <div class="mb-3">
-                <label class="form-label">NDI Groups (one per line)</label>
-                <textarea class="form-control" id="ndi-groups" rows="3">{{ cfg.ndi.groups | join('\n') }}</textarea>
-                <div class="form-text text-secondary">Default group is "Public". Add custom groups for isolated NDI networks.</div>
-              </div>
-              <div class="section-title">Discovery</div>
-              <div class="mb-3">
-                <label class="form-label">NDI Discovery Servers (comma-separated IPs)</label>
-                <input type="text" class="form-control" id="ndi-discovery" value="{{ cfg.ndi.discovery_servers | join(', ') }}" placeholder="192.168.1.100, 192.168.1.101">
-              </div>
-              <button class="btn btn-sm btn-outline-info" onclick="saveNDI()"><i class="bi bi-save me-1"></i>Save NDI Settings</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Video Tab -->
-        <div class="tab-pane fade" id="tab-video">
-          <div class="card">
-            <div class="card-header"><i class="bi bi-display me-2"></i>Video Output</div>
-            <div class="card-body">
-              {% for d in displays %}
-              <div class="section-title">{{ d.name }} (Connector {{ d.id }})</div>
-              {% set dc = cfg.displays.get(d.name, {}) %}
-              <div class="row g-3 mb-4">
-                <div class="col-md-3">
-                  <label class="form-label">Resolution</label>
-                  <select class="form-select" id="v-res-{{ d.name|replace('-','_') }}">
-                    <option value="auto" {{ 'selected' if dc.get('resolution')=='auto' }}>Auto (Match Source)</option>
-                    <option value="3840x2160" {{ 'selected' if dc.get('resolution')=='3840x2160' }}>4K (3840×2160)</option>
-                    <option value="1920x1080" {{ 'selected' if dc.get('resolution')=='1920x1080' }}>1080p (1920×1080)</option>
-                    <option value="1280x720"  {{ 'selected' if dc.get('resolution')=='1280x720' }}>720p (1280×720)</option>
-                    {% for m in modes.get(d.name, []) %}
-                    <option value="{{ m.split('@')[0] }}">{{ m }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-                <div class="col-md-3">
-                  <label class="form-label">Framerate</label>
-                  <select class="form-select" id="v-fps-{{ d.name|replace('-','_') }}">
-                    <option value="auto" {{ 'selected' if dc.get('framerate')=='auto' }}>Auto</option>
-                    <option value="60">60 fps</option>
-                    <option value="59.94">59.94 fps</option>
-                    <option value="50">50 fps</option>
-                    <option value="30">30 fps</option>
-                    <option value="29.97">29.97 fps</option>
-                    <option value="25">25 fps</option>
-                    <option value="24">24 fps</option>
-                  </select>
-                </div>
-                <div class="col-md-3">
-                  <label class="form-label">Chroma</label>
-                  <select class="form-select" id="v-chroma-{{ d.name|replace('-','_') }}">
-                    <option value="NV12" {{ 'selected' if dc.get('chroma')=='NV12' }}>NV12 (4:2:0)</option>
-                    <option value="YUY2" {{ 'selected' if dc.get('chroma')=='YUY2' }}>YUY2 (4:2:2)</option>
-                    <option value="RGB"  {{ 'selected' if dc.get('chroma')=='RGB' }}>RGB (4:4:4)</option>
-                  </select>
-                </div>
-                <div class="col-md-3">
-                  <label class="form-label">Scaling Mode</label>
-                  <select class="form-select" id="v-scale-{{ d.name|replace('-','_') }}">
-                    <option value="letterbox" {{ 'selected' if dc.get('scaling')=='letterbox' }}>Letterbox</option>
-                    <option value="stretch"   {{ 'selected' if dc.get('scaling')=='stretch' }}>Stretch</option>
-                    <option value="crop"      {{ 'selected' if dc.get('scaling')=='crop' }}>Crop</option>
-                    <option value="fit"       {{ 'selected' if dc.get('scaling')=='fit' }}>Fit</option>
-                  </select>
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label">Backup/Failover Source</label>
-                  <input type="text" class="form-control" id="v-backup-{{ d.name|replace('-','_') }}"
-                         value="{{ dc.get('backup_source','') }}" placeholder="NDI source name for failover">
-                </div>
-                <div class="col-md-6 d-flex align-items-end">
-                  <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="v-enabled-{{ d.name|replace('-','_') }}"
-                           {{ 'checked' if dc.get('enabled', true) }}>
-                    <label class="form-check-label" for="v-enabled-{{ d.name|replace('-','_') }}">Display Enabled</label>
-                  </div>
-                </div>
-              </div>
-              {% endfor %}
-              <button class="btn btn-sm btn-outline-info" onclick="saveVideo()"><i class="bi bi-save me-1"></i>Save Video Settings</button>
-            </div>
-          </div>
-        </div>
-
         <!-- Multi-View Tab -->
-        <div class="tab-pane fade" id="tab-multiview">
+        <div class="tab-pane fade show active" id="tab-multiview">
           <div class="card">
             <div class="card-header"><i class="bi bi-grid me-2"></i>Multi-View (Quad 2×2)</div>
             <div class="card-body">
@@ -163,17 +63,15 @@
                 <input class="form-check-input" type="checkbox" id="mv-enabled" {{ 'checked' if cfg.multiview.enabled }}>
                 <label class="form-check-label">Enable Multi-View</label>
               </div>
-              <div class="row g-3 mb-3">
-                <div class="col-md-4">
-                  <label class="form-label">Layout</label>
-                  <select class="form-select" id="mv-layout">
-                    <option value="2x2" {{ 'selected' if cfg.multiview.layout=='2x2' }}>2×2 Quad</option>
-                    <option value="1+3" {{ 'selected' if cfg.multiview.layout=='1+3' }}>1+3 (PIP)</option>
-                  </select>
-                </div>
+              <div class="mb-3" style="max-width:200px">
+                <label class="form-label">Layout</label>
+                <select class="form-select" id="mv-layout">
+                  <option value="2x2" {{ 'selected' if cfg.multiview.layout=='2x2' }}>2×2 Quad</option>
+                  <option value="1+3" {{ 'selected' if cfg.multiview.layout=='1+3' }}>1+3 (PIP)</option>
+                </select>
               </div>
               <div class="section-title">Source Assignment</div>
-              <div class="row g-2">
+              <div class="row g-2 mb-3">
                 {% for i in range(4) %}
                 <div class="col-6">
                   <label class="form-label">Slot {{ i+1 }}</label>
@@ -183,7 +81,7 @@
                 </div>
                 {% endfor %}
               </div>
-              <button class="btn btn-sm btn-outline-info mt-3" onclick="saveMultiview()"><i class="bi bi-save me-1"></i>Save</button>
+              <button class="btn btn-sm btn-outline-info" onclick="saveMultiview()"><i class="bi bi-save me-1"></i>Save</button>
             </div>
           </div>
         </div>
@@ -205,12 +103,12 @@
                 <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('tilt_down')"><i class="bi bi-chevron-down"></i></button>
                 <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('zoom_in')"><i class="bi bi-zoom-in"></i></button>
               </div>
-              <div class="mb-3">
+              <div class="mb-3" style="max-width:300px">
                 <label class="form-label">PTZ Speed</label>
                 <input type="range" class="form-range" id="ptz-speed" min="1" max="100" value="50">
               </div>
               <div class="section-title">USB Gamepad</div>
-              <div class="text-secondary small">Connect a USB gamepad — left stick pans/tilts, triggers zoom. Auto-detected on plug-in.</div>
+              <div class="text-secondary small">Connect a USB gamepad — left stick pans/tilts, triggers zoom.</div>
             </div>
           </div>
         </div>
@@ -225,9 +123,9 @@
                 <input class="form-check-input" type="checkbox" id="osd-enabled" {{ 'checked' if cfg.video.enable_osd }}>
                 <label class="form-check-label">Enable OSD</label>
               </div>
-              <div class="mb-3">
+              <div class="mb-3" style="max-width:200px">
                 <label class="form-label">OSD Timeout (seconds, 0=permanent)</label>
-                <input type="number" class="form-control" style="width:120px" id="osd-timeout" value="{{ cfg.video.osd_timeout }}" min="0" max="600">
+                <input type="number" class="form-control" id="osd-timeout" value="{{ cfg.video.osd_timeout }}" min="0" max="600">
               </div>
               <div class="section-title">Tally Lights (GPIO)</div>
               <div class="form-check form-switch mb-2">
@@ -244,47 +142,18 @@
                   <input type="number" class="form-control" id="tally-green" value="{{ cfg.video.tally_gpio_green }}">
                 </div>
               </div>
-              <div class="section-title">Per-Display Recording</div>
+              <div class="section-title">Per-Display Recording Path</div>
               {% for d in displays %}
               {% set dc = cfg.displays.get(d.name, {}) %}
               <div class="row g-2 mb-2">
                 <div class="col-md-2"><label class="form-label pt-2">{{ d.name }}</label></div>
                 <div class="col-md-6">
                   <input type="text" class="form-control" id="rec-path-{{ d.name|replace('-','_') }}"
-                         value="{{ dc.get('recording_path', '/opt/ndi-monitor/recordings') }}"
-                         placeholder="Recording path">
+                         value="{{ dc.get('recording_path', '/opt/ndi-monitor/recordings') }}">
                 </div>
               </div>
               {% endfor %}
               <button class="btn btn-sm btn-outline-info mt-2" onclick="saveRecOSD()"><i class="bi bi-save me-1"></i>Save</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Audio Tab -->
-        <div class="tab-pane fade" id="tab-audio">
-          <div class="card">
-            <div class="card-header"><i class="bi bi-volume-up me-2"></i>Audio</div>
-            <div class="card-body">
-              <div class="form-check form-switch mb-3">
-                <input class="form-check-input" type="checkbox" id="audio-enabled" {{ 'checked' if cfg.audio.enabled }}>
-                <label class="form-check-label">Enable Audio Output</label>
-              </div>
-              <div class="mb-3">
-                <label class="form-label">Audio Sink</label>
-                <select class="form-select" id="audio-sink">
-                  <option value="auto"  {{ 'selected' if cfg.audio.sink=='auto' }}>Auto (HDMI preferred)</option>
-                  <option value="hdmi0" {{ 'selected' if cfg.audio.sink=='hdmi0' }}>HDMI 1</option>
-                  <option value="hdmi1" {{ 'selected' if cfg.audio.sink=='hdmi1' }}>HDMI 2</option>
-                  <option value="analog" {{ 'selected' if cfg.audio.sink=='analog' }}>Analog / 3.5mm</option>
-                </select>
-              </div>
-              <div class="mb-3">
-                <label class="form-label">Volume: <span id="vol-val">{{ cfg.audio.volume }}</span>%</label>
-                <input type="range" class="form-range" id="audio-volume" min="0" max="100" value="{{ cfg.audio.volume }}"
-                       oninput="document.getElementById('vol-val').textContent=this.value">
-              </div>
-              <button class="btn btn-sm btn-outline-info" onclick="saveAudio()"><i class="bi bi-save me-1"></i>Save Audio</button>
             </div>
           </div>
         </div>
@@ -294,9 +163,9 @@
           <div class="card">
             <div class="card-header"><i class="bi bi-hdd-network me-2"></i>Network</div>
             <div class="card-body">
-              <div class="mb-3">
+              <div class="mb-3" style="max-width:200px">
                 <label class="form-label">Network Mode</label>
-                <select class="form-select" id="net-mode" onchange="toggleStaticFields()" style="max-width:200px">
+                <select class="form-select" id="net-mode" onchange="toggleStaticFields()">
                   <option value="dhcp"   {{ 'selected' if cfg.network.mode=='dhcp' }}>DHCP (Auto)</option>
                   <option value="static" {{ 'selected' if cfg.network.mode=='static' }}>Static IP</option>
                 </select>
@@ -317,13 +186,13 @@
                   </div>
                   <div class="col-md-3">
                     <label class="form-label">DNS (comma-separated)</label>
-                    <input type="text" class="form-control" id="net-dns" value="{{ cfg.network.dns | join(', ') }}" placeholder="8.8.8.8, 1.1.1.1">
+                    <input type="text" class="form-control" id="net-dns" value="{{ cfg.network.dns | join(', ') }}" placeholder="8.8.8.8">
                   </div>
                 </div>
               </div>
-              <div class="mb-3">
+              <div class="mb-3" style="max-width:200px">
                 <label class="form-label">Network Interface</label>
-                <input type="text" class="form-control" id="net-iface" value="{{ cfg.network.interface }}" style="max-width:150px" placeholder="eth0">
+                <input type="text" class="form-control" id="net-iface" value="{{ cfg.network.interface }}" placeholder="eth0">
               </div>
               <button class="btn btn-sm btn-outline-warning" onclick="applyNetwork()"><i class="bi bi-ethernet me-1"></i>Apply Network (reconnects!)</button>
             </div>
@@ -339,7 +208,7 @@
               <div class="row g-3 mb-4">
                 <div class="col-md-4">
                   <label class="form-label">Web UI Password (blank = no auth)</label>
-                  <input type="password" class="form-control" id="sys-pw" placeholder="Enter new password">
+                  <input type="password" class="form-control" id="sys-pw" placeholder="New password">
                 </div>
                 <div class="col-md-4">
                   <label class="form-label">Confirm Password</label>
@@ -361,12 +230,12 @@
               </div>
               <div class="mb-3">
                 <label class="form-label">Custom Splash Image (auto-resized to 1920×1080)</label>
-                <div class="input-group" style="max-width:400px">
+                <div class="input-group" style="max-width:420px">
                   <input type="file" class="form-control" id="splash-file" accept="image/*">
                   <button class="btn btn-outline-info" onclick="uploadSplash()"><i class="bi bi-upload me-1"></i>Upload</button>
                 </div>
                 {% if cfg.splash.custom_image %}
-                <div class="form-text text-success mt-1"><i class="bi bi-check-circle me-1"></i>Custom image: {{ cfg.splash.custom_image }}</div>
+                <div class="form-text text-success mt-1"><i class="bi bi-check-circle me-1"></i>{{ cfg.splash.custom_image }}</div>
                 {% endif %}
               </div>
               <div class="section-title">System Actions</div>
@@ -388,8 +257,10 @@
 <script>
 function showToast(msg, type='info') {
   const id = 'toast-' + Date.now();
-  const colors = {success:'bg-success',danger:'bg-danger text-dark',warning:'bg-warning text-dark',info:'bg-info text-dark'};
-  const html = `<div id="${id}" class="toast align-items-center ${colors[type]||'bg-info'} border-0"><div class="d-flex"><div class="toast-body fw-bold">${msg}</div><button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`;
+  const c  = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark'};
+  const html = `<div id="${id}" class="toast align-items-center ${c[type]||'bg-info'} border-0"><div class="d-flex">
+    <div class="toast-body fw-bold">${msg}</div>
+    <button type="button" class="btn-close me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`;
   document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
   const el = document.getElementById(id);
   new bootstrap.Toast(el,{delay:4000}).show();
@@ -399,33 +270,6 @@ async function post(url, data) {
   const r = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
   return r.json();
 }
-async function saveNDI() {
-  const cfg = await (await fetch('/api/config')).json();
-  const groups = document.getElementById('ndi-groups').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  const discovery = document.getElementById('ndi-discovery').value.split(',').map(s=>s.trim()).filter(Boolean);
-  cfg.ndi.alias = document.getElementById('ndi-alias').value;
-  cfg.ndi.groups = groups;
-  cfg.ndi.discovery_servers = discovery;
-  cfg.ndi.bandwidth = document.getElementById('ndi-bandwidth').value;
-  const d = await post('/api/config', cfg);
-  showToast(d.ok ? 'NDI settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
-}
-async function saveVideo() {
-  const cfg = await (await fetch('/api/config')).json();
-  {% for d in displays %}
-  const k = '{{ d.name|replace("-","_") }}';
-  const dn = '{{ d.name }}';
-  if (!cfg.displays[dn]) cfg.displays[dn] = {};
-  cfg.displays[dn].resolution = document.getElementById('v-res-' + k)?.value || 'auto';
-  cfg.displays[dn].framerate  = document.getElementById('v-fps-' + k)?.value || 'auto';
-  cfg.displays[dn].chroma     = document.getElementById('v-chroma-' + k)?.value || 'NV12';
-  cfg.displays[dn].scaling    = document.getElementById('v-scale-' + k)?.value || 'letterbox';
-  cfg.displays[dn].backup_source = document.getElementById('v-backup-' + k)?.value || '';
-  cfg.displays[dn].enabled    = document.getElementById('v-enabled-' + k)?.checked ?? true;
-  {% endfor %}
-  const d = await post('/api/config', cfg);
-  showToast(d.ok ? 'Video settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
-}
 async function saveMultiview() {
   const cfg = await (await fetch('/api/config')).json();
   cfg.multiview.enabled = document.getElementById('mv-enabled').checked;
@@ -433,14 +277,6 @@ async function saveMultiview() {
   cfg.multiview.sources = [0,1,2,3].map(i => document.getElementById('mv-src-'+i)?.value || '');
   const d = await post('/api/config', cfg);
   showToast(d.ok ? 'Multi-View saved' : 'Save failed', d.ok ? 'success' : 'danger');
-}
-async function saveAudio() {
-  const cfg = await (await fetch('/api/config')).json();
-  cfg.audio.enabled = document.getElementById('audio-enabled').checked;
-  cfg.audio.sink    = document.getElementById('audio-sink').value;
-  cfg.audio.volume  = parseInt(document.getElementById('audio-volume').value);
-  const d = await post('/api/config', cfg);
-  showToast(d.ok ? 'Audio settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
 }
 async function saveRecOSD() {
   const cfg = await (await fetch('/api/config')).json();
@@ -452,7 +288,7 @@ async function saveRecOSD() {
   {% for d in displays %}
   const dn = '{{ d.name }}'; const k = '{{ d.name|replace("-","_") }}';
   if (!cfg.displays[dn]) cfg.displays[dn] = {};
-  cfg.displays[dn].recording_path = document.getElementById('rec-path-' + k)?.value || '/opt/ndi-monitor/recordings';
+  cfg.displays[dn].recording_path = document.getElementById('rec-path-'+k)?.value || '/opt/ndi-monitor/recordings';
   {% endfor %}
   const d = await post('/api/config', cfg);
   showToast(d.ok ? 'Settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
@@ -467,15 +303,14 @@ async function applyNetwork() {
     dns: (document.getElementById('net-dns')?.value || '8.8.8.8').split(',').map(s=>s.trim())
   };
   const d = await post('/api/network/apply', data);
-  showToast(d.ok ? 'Network applied — reconnecting...' : ('Error: ' + d.error), d.ok ? 'success' : 'danger');
+  showToast(d.ok ? 'Network applied — reconnecting…' : ('Error: '+d.error), d.ok ? 'success' : 'danger');
 }
 async function savePassword() {
-  const pw = document.getElementById('sys-pw').value;
+  const pw  = document.getElementById('sys-pw').value;
   const pw2 = document.getElementById('sys-pw2').value;
   if (pw !== pw2) { showToast('Passwords do not match', 'danger'); return; }
   const cfg = await (await fetch('/api/config')).json();
-  cfg.auth.password = pw;
-  cfg.auth.enabled  = pw.length > 0;
+  cfg.auth.password = pw; cfg.auth.enabled = pw.length > 0;
   const d = await post('/api/config', cfg);
   showToast(d.ok ? (pw ? 'Password set' : 'Auth disabled') : 'Save failed', d.ok ? 'success' : 'danger');
 }
@@ -488,14 +323,27 @@ async function uploadSplash() {
   const fi = document.getElementById('splash-file');
   if (!fi.files.length) { showToast('Select a file first', 'warning'); return; }
   const fd = new FormData(); fd.append('file', fi.files[0]);
-  const r = await fetch('/api/splash/upload', {method:'POST', body: fd});
-  const d = await r.json();
-  showToast(d.ok ? 'Splash image uploaded & resized to 1080p' : ('Error: ' + d.error), d.ok ? 'success' : 'danger');
+  const r  = await fetch('/api/splash/upload', {method:'POST', body: fd});
+  const d  = await r.json();
+  showToast(d.ok ? 'Splash uploaded & resized to 1080p' : ('Error: '+d.error), d.ok ? 'success' : 'danger');
 }
-function ptz(action) { showToast('PTZ: ' + action, 'info'); /* extend with NDI PTZ API */ }
+function ptz(action) { showToast('PTZ: '+action, 'info'); }
 function toggleStaticFields() {
-  document.getElementById('static-fields').style.display = document.getElementById('net-mode').value === 'static' ? '' : 'none';
+  document.getElementById('static-fields').style.display = document.getElementById('net-mode').value==='static' ? '' : 'none';
 }
+// Restore CEC toggle save
+document.getElementById('cec-enabled').addEventListener('change', async function() {
+  const cfg = await (await fetch('/api/config')).json();
+  cfg.cec.enabled = this.checked;
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'CEC setting saved' : 'Save failed', d.ok ? 'success' : 'danger');
+});
+document.getElementById('splash-overlay').addEventListener('change', async function() {
+  const cfg = await (await fetch('/api/config')).json();
+  cfg.splash.show_overlay = this.checked;
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'Splash setting saved' : 'Save failed', d.ok ? 'success' : 'danger');
+});
 </script>
 </body>
 </html>
