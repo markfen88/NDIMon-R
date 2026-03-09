@@ -1,6 +1,6 @@
-# NDI Monitor Appliance
+# NDIMon-R
 
-Open-source NDI Monitor appliance for single-board computers.
+Open-source NDI monitor appliance for Rockchip single-board computers.
 Replicates and exceeds BirdDog Play functionality.
 
 ## Supported Hardware

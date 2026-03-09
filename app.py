@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NDI Monitor Appliance - Flask Application"""
+"""NDIMon-R - NDI Monitor Appliance for Rockchip SBCs"""
 import os, json, time, subprocess, threading, socket, re, glob, signal, ctypes, fcntl
 import logging
 from pathlib import Path
@@ -1377,7 +1377,7 @@ def api_system_shutdown():
 def api_backup_download():
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-    zip_name = f"ndi-monitor-backup-{ts}.zip"
+    zip_name = f"ndimon-r-backup-{ts}.zip"
     zip_path = BACKUP_DIR / zip_name
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
