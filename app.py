@@ -119,8 +119,16 @@ def _get_ndi_lib():
     return _ndi_lib
 
 def _ndi_env():
-    """Build environment dict (kept for gst-launch pipelines)."""
-    return os.environ.copy()
+    """Build environment dict for gst-launch pipelines.
+    Auto-injects Wayland vars if a weston socket is present (RK3399 headless)."""
+    env = os.environ.copy()
+    xdg_rt = "/run/user/0"
+    for n in range(5):
+        if os.path.exists(f"{xdg_rt}/wayland-{n}"):
+            env["XDG_RUNTIME_DIR"] = xdg_rt
+            env["WAYLAND_DISPLAY"] = f"wayland-{n}"
+            break
+    return env
 
 def _extra_ips_from_config():
     try:
@@ -223,20 +231,24 @@ class PipelineManager:
         except Exception:
             pass
         if "rk3588" in compatible:
-            self.board    = "rk3588"
+            self.board      = "rk3588"
             self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
+            self.use_wayland = False  # kmssink works fine on rk3588
         elif "rk3399" in compatible:
-            self.board    = "rk3399"
+            self.board      = "rk3399"
             self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
+            self.use_wayland = True   # RK3399 dumb-buffer alloc fails; use Weston+waylandsink
         elif "bcm2712" in compatible or "Raspberry Pi 5" in open("/proc/cpuinfo").read():
-            self.board    = "rpi5"
-            self.hw_dec   = "v4l2h264dec"
-            self.mpp_avail = False
+            self.board      = "rpi5"
+            self.hw_dec     = "v4l2h264dec"
+            self.mpp_avail  = False
+            self.use_wayland = False
         else:
-            self.board    = "generic"
-            self.hw_dec   = "avdec_h264"
-            self.mpp_avail = False
-        log.info(f"Board: {self.board}, HW decoder: {self.hw_dec}")
+            self.board      = "generic"
+            self.hw_dec     = "avdec_h264"
+            self.mpp_avail  = False
+            self.use_wayland = False
+        log.info(f"Board: {self.board}, HW decoder: {self.hw_dec}, Wayland: {self.use_wayland}")
 
     def _probe_mpp_decoder(self):
         """Return (element_name, available) for whichever Rockchip MPP decoder plugin is installed."""
@@ -411,10 +423,13 @@ class PipelineManager:
             osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=center '
                         f'font-desc="Sans Bold 24" ! ')
 
-        # kmssink — bus-id only if probed to work on this platform
-        bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
-        sink = (f"kmssink {bus_id_part}connector-id={connector} "
-                f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
+        # Sink — Wayland (RK3399 headless) or KMS (RK3588/others)
+        if self.use_wayland:
+            sink = "waylandsink sync=false"
+        else:
+            bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
+            sink = (f"kmssink {bus_id_part}connector-id={connector} "
+                    f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
 
         # Audio
         audio_pipe = ""
@@ -448,13 +463,19 @@ class PipelineManager:
 
         fmt_part = "video/x-raw,format=BGRx,width=1920,height=1080" if self.board == "rk3588" \
                    else "video/x-raw,width=1920,height=1080"
+
+        if self.use_wayland:
+            sink = "waylandsink sync=false"
+        else:
+            sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
+
         pipeline = (
             f"gst-launch-1.0 -e "
             f"{src} ! videoconvert ! videoscale ! "
             f"{fmt_part} ! "
             f'textoverlay text="{overlay}" valignment=bottom halignment=center '
             f'font-desc="Sans Bold 32" shaded-background=true ! '
-            f"kmssink {bus_id_part}connector-id={connector} sync=false"
+            f"{sink}"
         )
         return pipeline
 
