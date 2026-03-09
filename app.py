@@ -924,13 +924,16 @@ def get_system_uptime():
         return "N/A"
 
 # ── Startup ───────────────────────────────────────────────────────────────────
+_worker_lock_fd = None  # module-level keeps fd alive so fcntl lock isn't released on return
+
 def startup():
     """Run pipeline management only in the first gunicorn worker (lock file guard)."""
+    global _worker_lock_fd
     import fcntl
     lock_path = BASE_DIR / "worker.lock"
     try:
-        lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _worker_lock_fd = open(lock_path, "w")
+        fcntl.flock(_worker_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         log.info(f"Worker {os.getpid()}: standby (pipeline manager already running)")
         # Still run NDI discovery so all workers can serve the /api/sources endpoint
