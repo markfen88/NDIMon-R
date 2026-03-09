@@ -379,27 +379,46 @@ class PipelineManager:
         if groups and self.ndisrc_has_app_name:
             ndi_src += f'ndi-app-name="{groups}" '
 
-        # Scaling pipeline element
-        # IMPORTANT: must force pixel-aspect-ratio=1/1 or GStreamer encodes AR via PAR
-        # metadata instead of adding actual black border pixels (makes all modes look identical).
-        par = "pixel-aspect-ratio=1/1"
-        if scaling == "stretch":
-            scale_pipe = (f"videoscale ! "
-                          f"video/x-raw,width={scale_w},height={scale_h},{par}")
-        elif scaling == "crop":
-            # aspectratiocrop crops to target AR first, then videoscale fits to exact size
-            scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
-                          f"videoscale ! "
-                          f"video/x-raw,width={scale_w},height={scale_h},{par}")
-        else:  # letterbox / fit
-            scale_pipe = (f"videoscale add-borders=true ! "
-                          f"video/x-raw,width={scale_w},height={scale_h},{par}")
-
-        # HW conversion — RK3588 primary plane needs BGRx; RK3399 uses NV12
+        # Output format: RK3588 primary plane requires BGRx; everything else uses NV12
         if self.board == "rk3588":
-            conv = "videoconvert ! video/x-raw,format=BGRx"
+            final_fmt = "video/x-raw,format=BGRx"
         else:
-            conv = "videoconvert ! video/x-raw,format=NV12"
+            final_fmt = "video/x-raw,format=NV12"
+
+        # IMPORTANT: force pixel-aspect-ratio=1/1 in all caps so GStreamer adds real border
+        # pixels instead of encoding AR correction via PAR metadata (makes modes look identical).
+        par = "pixel-aspect-ratio=1/1"
+        size = f"width={scale_w},height={scale_h}"
+
+        # Hardware scaler: Rockchip RGA via v4l2video1convert (/dev/video1).
+        # Offloads format conversion + scaling to hardware; eliminates all SW videoconvert.
+        # Only available on rk3399 (RGA device confirmed at /dev/video1).
+        # rk3588 always uses software path (BGRx requirement on primary plane).
+        scaler = cfg_disp.get("scaler", "auto")
+        use_hw = self.board == "rk3399" and scaler in ("auto", "hardware")
+
+        if use_hw:
+            if scaling == "stretch":
+                # RGA: single-pass 4K UYVY → target NV12 (no SW videoconvert at all)
+                video_pipe = f"v4l2video1convert ! {final_fmt},{size}"
+            elif scaling == "crop":
+                # SW crop to target AR → RGA scale + format convert
+                video_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                              f"v4l2video1convert ! {final_fmt},{size}")
+            else:  # letterbox / fit
+                # SW scale with borders (geometry only, no format change) → RGA format convert
+                video_pipe = (f"videoscale add-borders=true ! "
+                              f"video/x-raw,{size},{par} ! "
+                              f"v4l2video1convert ! {final_fmt}")
+        else:
+            if scaling == "stretch":
+                scale_pipe = f"videoscale ! video/x-raw,{size},{par}"
+            elif scaling == "crop":
+                scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                              f"videoscale ! video/x-raw,{size},{par}")
+            else:  # letterbox / fit
+                scale_pipe = f"videoscale add-borders=true ! video/x-raw,{size},{par}"
+            video_pipe = f"videoconvert ! {scale_pipe} ! videoconvert ! {final_fmt}"
 
         # OSD overlay
         osd_pipe = ""
@@ -424,7 +443,7 @@ class PipelineManager:
             f"{ndi_src}! queue ! "
             f"ndisrcdemux name=demux "
             f"demux.video ! queue max-size-bytes=0 max-size-buffers=3 max-size-time=0 ! "
-            f"videoconvert ! {scale_pipe} ! {conv} ! "
+            f"{video_pipe} ! "
             f"{osd_pipe}"
             f"{sink} "
             f"{audio_branch}"

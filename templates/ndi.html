@@ -151,10 +151,22 @@
               <option value="fit"       {{ 'selected' if dc.get('scaling')=='fit' }}>Fit</option>
             </select>
           </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Scaler</label>
+            <select class="form-select form-select-sm" id="v-scaler-{{ d.name|replace('-','_') }}">
+              <option value="auto"     {{ 'selected' if dc.get('scaler','auto')=='auto' }}>Auto</option>
+              <option value="hardware" {{ 'selected' if dc.get('scaler')=='hardware' }}>Hardware (RGA)</option>
+              <option value="software" {{ 'selected' if dc.get('scaler')=='software' }}>Software</option>
+            </select>
+          </div>
           <div class="col-12 col-md-6">
             <label class="form-label">Backup / Failover Source</label>
-            <input type="text" class="form-control form-control-sm" id="v-backup-{{ d.name|replace('-','_') }}"
-                   value="{{ dc.get('backup_source','') }}" placeholder="NDI source name for failover">
+            <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}">
+              <option value="">— None —</option>
+              {% for s in sources %}
+              <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
+              {% endfor %}
+            </select>
           </div>
           <div class="col-12 col-md-6 d-flex align-items-end pb-1">
             <div class="form-check form-switch">
@@ -274,6 +286,7 @@ async function applySourceValue(display, source) {
   cfg.displays[display].framerate    = document.getElementById('v-fps-'+key)?.value || 'auto';
   cfg.displays[display].chroma       = document.getElementById('v-chroma-'+key)?.value || 'NV12';
   cfg.displays[display].scaling      = document.getElementById('v-scale-'+key)?.value || 'letterbox';
+  cfg.displays[display].scaler       = document.getElementById('v-scaler-'+key)?.value || 'auto';
   cfg.displays[display].backup_source= document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled      = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
@@ -296,6 +309,7 @@ async function saveDisplayVideo(display) {
   cfg.displays[display].framerate     = document.getElementById('v-fps-'+key)?.value || 'auto';
   cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
   cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
+  cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
   cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
@@ -346,6 +360,12 @@ async function refreshSources() {
   document.querySelectorAll('[id^="src-"]').forEach(sel => {
     const cur = sel.value;
     sel.innerHTML = '<option value="">— No Source —</option>' +
+      d.sources.map(s => `<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
+  });
+  // Refresh all backup source dropdowns
+  document.querySelectorAll('[id^="v-backup-"]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— None —</option>' +
       d.sources.map(s => `<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
   });
 }
