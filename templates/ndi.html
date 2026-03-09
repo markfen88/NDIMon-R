@@ -152,12 +152,16 @@
             </select>
           </div>
           <div class="col-6 col-md-3">
-            <label class="form-label">Scaler Quality</label>
+            <label class="form-label">Scaler</label>
             <select class="form-select form-select-sm" id="v-scaler-{{ d.name|replace('-','_') }}">
-              <option value="auto"    {{ 'selected' if dc.get('scaler','auto') not in ('fast','quality') }}>Balanced (bilinear, 6 threads)</option>
-              <option value="fast"    {{ 'selected' if dc.get('scaler')=='fast' }}>Fast (nearest, 6 threads)</option>
-              <option value="quality" {{ 'selected' if dc.get('scaler')=='quality' }}>Quality (sinc, 4 threads)</option>
+              <option value="hardware" {{ 'selected' if dc.get('scaler')=='hardware' }} id="opt-rga-{{ d.name|replace('-','_') }}">Hardware (RGA)</option>
+              <option value="auto"     {{ 'selected' if dc.get('scaler','auto') not in ('fast','quality','hardware') }}>Balanced (bilinear, 6 threads)</option>
+              <option value="fast"     {{ 'selected' if dc.get('scaler')=='fast' }}>Fast (nearest, 6 threads)</option>
+              <option value="quality"  {{ 'selected' if dc.get('scaler')=='quality' }}>Quality (sinc, 4 threads)</option>
             </select>
+            <div class="form-text" id="rga-hint-{{ d.name|replace('-','_') }}" style="display:none;color:#f0a030;font-size:.72rem">
+              <i class="bi bi-exclamation-triangle me-1"></i>RGA not detected — will fall back to software
+            </div>
           </div>
           <div class="col-12 col-md-6">
             <label class="form-label">Backup / Failover Source</label>
@@ -381,12 +385,40 @@ async function updateStatus() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
+    // RGA availability — annotate the hardware option for every display
+    const rgaAvail = d.system?.rga_avail || false;
+    const rgaDev   = d.system?.rga_dev   || '';
+    document.querySelectorAll('[id^="opt-rga-"]').forEach(el => {
+      const key = el.id.replace('opt-rga-','');
+      const hint = document.getElementById('rga-hint-'+key);
+      if (rgaAvail) {
+        el.textContent = `Hardware RGA (${rgaDev})`;
+        el.disabled = false;
+        if (hint) hint.style.display = 'none';
+      } else {
+        el.textContent = 'Hardware (RGA) — not detected';
+        el.disabled = true;
+        if (hint) {
+          // Only show hint when this option is selected
+          const sel = document.getElementById('v-scaler-'+key);
+          if (sel && sel.value === 'hardware') hint.style.display = '';
+        }
+      }
+    });
     for (const [name, info] of Object.entries(d.streams)) {
       const key  = name.replace(/-/g,'_');
       const dot  = document.getElementById('dot-'+key);
       const info_el = document.getElementById('info-'+key);
       if (dot) dot.className = 'status-dot ' + (info.active?'live':'idle');
-      if (info_el) info_el.textContent = info.active ? `${info.source} — ${info.uptime}` : '';
+      if (info_el) {
+        if (info.active) {
+          const c = info.in_caps;
+          const caps_str = c ? ` · ${c.width}×${c.height} ${c.format} ${c.fps ? c.fps.toFixed(2)+'fps' : ''}` : '';
+          info_el.textContent = `${info.source} — ${info.uptime}${caps_str}`;
+        } else {
+          info_el.textContent = '';
+        }
+      }
     }
   } catch(e) {}
 }

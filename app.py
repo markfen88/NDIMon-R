@@ -216,6 +216,7 @@ class PipelineManager:
         self._detect_displays()
         self._probe_kmssink_bus_id()
         self._probe_ndisrc_props()
+        self._probe_rga()
 
     def _detect_board(self):
         compatible = ""
@@ -289,6 +290,69 @@ class PipelineManager:
                 log.warning(f"ndisrc so scan failed: {e}")
         else:
             log.warning("ndisrc probe: libgstndi*.so not found, ndi-app-name assumed no")
+
+    def _probe_rga(self):
+        """Detect Rockchip RGA hardware scaler/converter via sysfs V4L2 device names."""
+        self.rga_avail = False
+        self.rga_dev   = None
+        self.rga_el    = None
+        for name_path in sorted(glob.glob("/sys/class/video4linux/video*/name")):
+            try:
+                dev_name = Path(name_path).read_text().strip().lower()
+                if "rga" in dev_name:
+                    m = re.search(r'video(\d+)', name_path)
+                    if m:
+                        n = m.group(1)
+                        self.rga_dev   = f"/dev/video{n}"
+                        self.rga_el    = f"v4l2video{n}convert"
+                        self.rga_avail = True
+                        log.info(f"RGA hardware scaler: {self.rga_dev} ({dev_name})")
+                        return
+            except Exception:
+                pass
+        log.info("No RGA hardware scaler detected")
+
+    @staticmethod
+    def _parse_gst_caps(line):
+        """Extract incoming stream info from a GStreamer -v caps negotiation line."""
+        if "video/x-raw" not in line or "caps =" not in line:
+            return None
+        m_w   = re.search(r'width=\(int\)(\d+)', line)
+        m_h   = re.search(r'height=\(int\)(\d+)', line)
+        m_fps = re.search(r'framerate=\(fraction\)(\d+)/(\d+)', line)
+        m_fmt = re.search(r'format=\(string\)(\w+)', line)
+        if not (m_w and m_h):
+            return None
+        fps = None
+        if m_fps:
+            num, den = int(m_fps.group(1)), int(m_fps.group(2))
+            fps = round(num / den, 3) if den else 0
+        return {
+            "width":  int(m_w.group(1)),
+            "height": int(m_h.group(1)),
+            "format": m_fmt.group(1) if m_fmt else "RAW",
+            "fps":    fps,
+        }
+
+    def _stderr_reader(self, display_name, proc):
+        """Read gst-launch stderr, parse caps negotiation, store largest (input) caps."""
+        try:
+            for raw in proc.stderr:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if not line:
+                    continue
+                log.debug(f"[gst:{display_name}] {line}")
+                caps = self._parse_gst_caps(line)
+                if caps:
+                    with self.lock:
+                        info = self.pipelines.get(display_name)
+                        if info:
+                            cur = info.get("in_caps")
+                            # Keep the caps with largest resolution — that's the source, not scaled output
+                            if not cur or caps["width"] > cur.get("width", 0):
+                                info["in_caps"] = caps
+        except Exception as e:
+            log.debug(f"stderr reader for {display_name} exited: {e}")
 
     def _detect_displays(self):
         """Detect all DRM connectors from sysfs. Each entry includes connected status.
@@ -391,26 +455,53 @@ class PipelineManager:
         size = f"width={scale_w},height={scale_h}"
 
         # Scaler quality/speed setting.
-        # n-threads=6 uses all cores (4x A53 + 2x A72 on RK3399).
-        # Skip the pre-scale videoconvert: videoscale handles UYVY natively, saving a full-res
-        # format conversion (~12 MB per 4K frame). Only one videoconvert runs at output size.
+        # Scaler selection.
+        # Hardware (RGA): UYVY→NV12 SW conversion first (at source res), then RGA scales
+        # NV12→NV12 in hardware (cheap), then final colorspace convert at output res.
+        # On RK3588, RGA3 supports NV12 input — much more capable than RK3399 RGA2.
+        # Software paths: n-threads=6 uses all cores. Skip pre-scale videoconvert since
+        # videoscale handles UYVY natively, saving ~12 MB/frame format conversion.
         scaler = cfg_disp.get("scaler", "auto")
-        if scaler == "fast":
-            vs = "videoscale method=0 n-threads=6"
-        elif scaler == "quality":
-            vs = "videoscale method=3 n-threads=4"
-        else:  # auto / balanced
-            vs = "videoscale method=1 n-threads=6"
+        if scaler == "hardware" and self.rga_avail:
+            # Hardware RGA path: SW convert UYVY→NV12, RGA scales, SW convert to final fmt
+            rga = self.rga_el
+            if scaling == "stretch":
+                scale_pipe = (
+                    f"videoconvert ! video/x-raw,format=NV12 ! "
+                    f"{rga} ! video/x-raw,{size},format=NV12,{par}"
+                )
+            elif scaling == "crop":
+                scale_pipe = (
+                    f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                    f"videoconvert ! video/x-raw,format=NV12 ! "
+                    f"{rga} ! video/x-raw,{size},format=NV12,{par}"
+                )
+            else:  # letterbox / fit
+                scale_pipe = (
+                    f"videoconvert ! video/x-raw,format=NV12 ! "
+                    f"{rga} add-borders=true ! video/x-raw,{size},format=NV12,{par}"
+                )
+            video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
+            log.info(f"Using hardware RGA scaler ({self.rga_el})")
+        else:
+            if scaler == "hardware":
+                log.warning("Hardware scaler requested but RGA not available — falling back to software")
+            if scaler == "fast":
+                vs = "videoscale method=0 n-threads=6"
+            elif scaler == "quality":
+                vs = "videoscale method=3 n-threads=4"
+            else:  # auto / balanced / hardware fallback
+                vs = "videoscale method=1 n-threads=6"
 
-        if scaling == "stretch":
-            scale_pipe = f"{vs} ! video/x-raw,{size},{par}"
-        elif scaling == "crop":
-            scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
-                          f"{vs} ! video/x-raw,{size},{par}")
-        else:  # letterbox / fit
-            scale_pipe = f"{vs} add-borders=true ! video/x-raw,{size},{par}"
+            if scaling == "stretch":
+                scale_pipe = f"{vs} ! video/x-raw,{size},{par}"
+            elif scaling == "crop":
+                scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                              f"{vs} ! video/x-raw,{size},{par}")
+            else:  # letterbox / fit
+                scale_pipe = f"{vs} add-borders=true ! video/x-raw,{size},{par}"
 
-        video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
+            video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
 
         # OSD overlay
         osd_pipe = ""
@@ -431,7 +522,7 @@ class PipelineManager:
         # causing deadlock). leaky=downstream drops oldest queued frame when full so the
         # pipeline never backs up — always shows the most recent live frame.
         pipeline = (
-            f"nice -n -10 gst-launch-1.0 -e "
+            f"nice -n -10 gst-launch-1.0 -e -v "
             f"{ndi_src}! queue ! "
             f"ndisrcdemux name=demux "
             f"demux.video ! queue max-size-bytes=0 max-size-buffers=2 max-size-time=0 leaky=downstream ! "
@@ -522,12 +613,16 @@ class PipelineManager:
         cmd = self._build_pipeline(source, display, cfg_disp, chroma, scaling, resolution, framerate, osd)
         log.info(f"Starting pipeline: {cmd}")
         try:
-            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=os.environ.copy())
+            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid,
+                                    env=os.environ.copy(), stderr=subprocess.PIPE)
             with self.lock:
                 self.pipelines[display_name] = {
                     "proc": proc, "source": source,
-                    "start_time": time.time(), "pid": proc.pid, "cmd": cmd
+                    "start_time": time.time(), "pid": proc.pid, "cmd": cmd,
+                    "in_caps": None,
                 }
+            threading.Thread(target=self._stderr_reader, args=(display_name, proc),
+                             daemon=True).start()
             # OSD auto-dismiss
             if osd:
                 osd_timeout = cfg["video"].get("osd_timeout", 8)
@@ -598,10 +693,11 @@ class PipelineManager:
                 proc = info["proc"]
                 uptime = int(time.time() - info["start_time"])
                 status[name] = {
-                    "active": proc.poll() is None,
-                    "source": info["source"],
-                    "uptime": str(timedelta(seconds=uptime)),
-                    "pid": info["pid"]
+                    "active":   proc.poll() is None,
+                    "source":   info["source"],
+                    "uptime":   str(timedelta(seconds=uptime)),
+                    "pid":      info["pid"],
+                    "in_caps":  info.get("in_caps"),
                 }
         for d in self.displays:
             if d["name"] not in status:
@@ -838,7 +934,9 @@ def api_status():
             "mem_pct": mem.percent, "temps": temps,
             "uptime": get_system_uptime(), "ip": get_ip(),
             "board": pipeline_mgr.board,
-            "cec": _cec_status
+            "cec": _cec_status,
+            "rga_avail": pipeline_mgr.rga_avail,
+            "rga_dev":   pipeline_mgr.rga_dev,
         }
     })
 

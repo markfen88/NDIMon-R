@@ -118,7 +118,14 @@
         <div class="uptime-val" id="up-{{ d.name|replace('-','_') }}">
           {% if ds.get('active') %}Uptime: {{ ds.get('uptime','') }}{% endif %}
         </div>
-        <div class="d-flex gap-3 mt-2" style="font-size:.72rem;color:#555">
+        <div class="d-flex flex-wrap gap-3 mt-2" style="font-size:.72rem;color:#555">
+          <span>In: <span id="ires-{{ d.name|replace('-','_') }}" style="color:#888">{% if ds.get('in_caps') %}{{ ds.in_caps.width }}×{{ ds.in_caps.height }}{% else %}—{% endif %}</span></span>
+          <span id="ifps-wrap-{{ d.name|replace('-','_') }}" {% if not ds.get('in_caps') %}style="display:none"{% endif %}>
+            <span id="ifps-{{ d.name|replace('-','_') }}" style="color:#888">{% if ds.get('in_caps') and ds.in_caps.fps %}{{ ds.in_caps.fps|round(2) }}fps{% endif %}</span>
+          </span>
+          <span id="ifmt-wrap-{{ d.name|replace('-','_') }}" {% if not ds.get('in_caps') %}style="display:none"{% endif %}>
+            <span id="ifmt-{{ d.name|replace('-','_') }}" style="color:#666">{% if ds.get('in_caps') %}{{ ds.in_caps.format }}{% endif %}</span>
+          </span>
           <span>Out: <span id="ores-{{ d.name|replace('-','_') }}" style="color:#888">{{ dcfg.get('resolution','auto') }}</span></span>
         </div>
       </div>
@@ -190,6 +197,25 @@ async function updateStatus() {
       if (up) up.textContent = info.active ? 'Uptime: '+info.uptime : '';
       const ores = document.getElementById('ores-'+key);
       if (ores) ores.textContent = info.output_res || 'auto';
+      const ires = document.getElementById('ires-'+key);
+      const ifps = document.getElementById('ifps-'+key);
+      const ifmt = document.getElementById('ifmt-'+key);
+      const ifpsW = document.getElementById('ifps-wrap-'+key);
+      const ifmtW = document.getElementById('ifmt-wrap-'+key);
+      if (ires) {
+        const c = info.in_caps;
+        if (c) {
+          ires.textContent = `${c.width}×${c.height}`;
+          if (ifps) ifps.textContent = c.fps ? `${c.fps.toFixed(2)}fps` : '';
+          if (ifmt) ifmt.textContent = c.format || '';
+          if (ifpsW) ifpsW.style.display = '';
+          if (ifmtW) ifmtW.style.display = '';
+        } else {
+          ires.textContent = info.active ? 'detecting…' : '—';
+          if (ifpsW) ifpsW.style.display = 'none';
+          if (ifmtW) ifmtW.style.display = 'none';
+        }
+      }
     }
   } catch(e) {}
 }
