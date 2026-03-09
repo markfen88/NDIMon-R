@@ -119,14 +119,37 @@
             <div class="card-header"><i class="bi bi-record-circle me-2"></i>Recording, OSD &amp; Tally</div>
             <div class="card-body">
               <div class="section-title">OSD (On-Screen Display)</div>
-              <div class="form-check form-switch mb-2">
-                <input class="form-check-input" type="checkbox" id="osd-enabled" {{ 'checked' if cfg.video.enable_osd }}>
-                <label class="form-check-label">Enable OSD</label>
+              <div class="row g-3 mb-3">
+                <div class="col-auto d-flex align-items-center">
+                  <div class="form-check form-switch m-0">
+                    <input class="form-check-input" type="checkbox" id="osd-enabled" {{ 'checked' if cfg.video.enable_osd }}>
+                    <label class="form-check-label">Enable OSD</label>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <label class="form-label">Timeout <span class="text-secondary small">(0=permanent)</span></label>
+                  <div class="input-group input-group-sm" style="max-width:160px">
+                    <input type="number" class="form-control" id="osd-timeout" value="{{ cfg.video.osd_timeout }}" min="0" max="600">
+                    <span class="input-group-text">s</span>
+                  </div>
+                </div>
+                <div class="col-auto">
+                  <label class="form-label">Font Color</label>
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="color" class="form-control form-control-color" id="osd-color"
+                           value="{{ cfg.video.get('osd_color','#ffffff') }}" style="width:50px;height:32px;padding:2px">
+                    <input type="text" class="form-control form-control-sm" id="osd-color-hex"
+                           value="{{ cfg.video.get('osd_color','#ffffff') }}" style="max-width:90px;font-family:monospace">
+                  </div>
+                </div>
+                <div class="col-auto d-flex align-items-end pb-1">
+                  <div class="form-check form-switch m-0">
+                    <input class="form-check-input" type="checkbox" id="osd-keyed" {{ 'checked' if cfg.video.get('osd_keyed') }}>
+                    <label class="form-check-label">Keyed <span class="text-secondary small">(no background box)</span></label>
+                  </div>
+                </div>
               </div>
-              <div class="mb-3" style="max-width:200px">
-                <label class="form-label">OSD Timeout (seconds, 0=permanent)</label>
-                <input type="number" class="form-control" id="osd-timeout" value="{{ cfg.video.osd_timeout }}" min="0" max="600">
-              </div>
+              <div class="form-text mb-3">OSD appears top-right on the live stream. Also controls the alias/IP overlay on the splash screen.</div>
               <div class="section-title">Tally Lights (GPIO)</div>
               <div class="form-check form-switch mb-2">
                 <input class="form-check-input" type="checkbox" id="tally-enabled" {{ 'checked' if cfg.video.enable_tally }}>
@@ -251,7 +274,7 @@
                     <input class="form-check-input" type="checkbox" id="splash-overlay" {{ 'checked' if cfg.splash.show_overlay }}>
                     <label class="form-check-label small">Show alias &amp; IP (top-right, small)</label>
                   </div>
-                  <button class="btn btn-sm btn-outline-secondary" onclick="saveSplashSettings()">
+                  <button class="btn btn-sm btn-outline-info" onclick="saveSplashSettings()">
                     <i class="bi bi-save me-1"></i>Save Splash Settings
                   </button>
                 </div>
@@ -332,6 +355,8 @@ async function saveRecOSD() {
   const cfg = await (await fetch('/api/config')).json();
   cfg.video.enable_osd   = document.getElementById('osd-enabled').checked;
   cfg.video.osd_timeout  = parseInt(document.getElementById('osd-timeout').value);
+  cfg.video.osd_color    = document.getElementById('osd-color').value;
+  cfg.video.osd_keyed    = document.getElementById('osd-keyed').checked;
   cfg.video.enable_tally = document.getElementById('tally-enabled').checked;
   cfg.video.tally_gpio_red   = parseInt(document.getElementById('tally-red').value);
   cfg.video.tally_gpio_green = parseInt(document.getElementById('tally-green').value);
@@ -410,14 +435,16 @@ async function restoreBackup() {
 function ptz(action) { showToast('PTZ: '+action, 'info'); }
 // Sync color picker ↔ hex text field
 document.addEventListener('DOMContentLoaded', () => {
-  const picker = document.getElementById('splash-bgcolor');
-  const hex    = document.getElementById('splash-bgcolor-hex');
-  if (picker && hex) {
+  // Sync color picker ↔ hex text for splash bg and OSD font color
+  [['splash-bgcolor', 'splash-bgcolor-hex'], ['osd-color', 'osd-color-hex']].forEach(([pid, hid]) => {
+    const picker = document.getElementById(pid);
+    const hex    = document.getElementById(hid);
+    if (!picker || !hex) return;
     picker.addEventListener('input', () => { hex.value = picker.value; });
     hex.addEventListener('input',   () => {
       if (/^#[0-9a-fA-F]{6}$/.test(hex.value)) picker.value = hex.value;
     });
-  }
+  });
 });
 function toggleStaticFields() {
   document.getElementById('static-fields').style.display = document.getElementById('net-mode').value==='static' ? '' : 'none';

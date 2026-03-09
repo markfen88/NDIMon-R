@@ -95,6 +95,26 @@ def get_system_uptime():
     except Exception:
         return "N/A"
 
+def _hex_to_gst_argb(hex_color, alpha=0xFF):
+    """Convert #RRGGBB to GStreamer ARGB uint32 (used for textoverlay color property)."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return (alpha << 24) | (r << 16) | (g << 8) | b
+    except Exception:
+        return 0xFFFFFFFF  # default white
+
+def _overlay_props(cfg):
+    """Return GStreamer textoverlay property string for color and keyed mode."""
+    color_hex = cfg.get("video", {}).get("osd_color", "#ffffff")
+    keyed     = cfg.get("video", {}).get("osd_keyed", False)
+    fg        = _hex_to_gst_argb(color_hex)
+    if keyed:
+        # Keyed: no shaded box, just colored text with black outline for readability
+        return f"color={fg} outline-color=0xFF000000 shaded-background=false"
+    else:
+        return f"color={fg} shaded-background=true"
+
 # ── Splash Image Generator ───────────────────────────────────────────────────
 def _generate_splash_image(cfg, display_w=1920, display_h=1080):
     """Compose splash PNG: solid color background + centered logo (PNG with alpha)."""
@@ -570,10 +590,12 @@ class PipelineManager:
             osd_pipe = (f'textoverlay text="{safe}" valignment=center halignment=center '
                         f'font-desc="Sans Bold 52" shaded-background=true ! ')
         elif osd:
-            ip = get_ip()
-            osd_text = f"{source} | {ip}:8080"
-            osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=center '
-                        f'font-desc="Sans Bold 24" ! ')
+            ip       = get_ip()
+            cfg_full = load_config()
+            osd_text = f"{source}  |  {ip}:8080"
+            ov_props = _overlay_props(cfg_full)
+            osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=right '
+                        f'font-desc="Sans Bold 11" {ov_props} ! ')
 
         bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
         sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
@@ -616,8 +638,9 @@ class PipelineManager:
         overlay_pipe = ""
         if cfg["splash"].get("show_overlay", True):
             label        = f"{alias}  {ip}:8080"
+            ov_props     = _overlay_props(cfg)
             overlay_pipe = (f'textoverlay text="{label}" valignment=top halignment=right '
-                            f'font-desc="Sans Bold 11" shaded-background=true ! ')
+                            f'font-desc="Sans Bold 11" {ov_props} ! ')
 
         pipeline = (
             f"gst-launch-1.0 -e "
