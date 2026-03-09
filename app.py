@@ -6,7 +6,8 @@ from pathlib import Path
 from functools import wraps
 from datetime import datetime, timedelta
 
-from flask import Flask, render_template, jsonify, request, redirect, url_for, session, flash
+import zipfile
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session, flash, send_file
 from PIL import Image
 import psutil
 
@@ -16,6 +17,8 @@ CONFIG_FILE = BASE_DIR / "config.json"
 UPLOAD_DIR  = BASE_DIR / "uploads"
 LOG_DIR     = BASE_DIR / "logs"
 STATIC_DIR  = BASE_DIR / "static"
+BACKUP_DIR  = BASE_DIR / "backups"
+BACKUP_TTL  = 15 * 60  # seconds — generated zips auto-deleted after this
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -91,6 +94,28 @@ def get_system_uptime():
         return str(timedelta(seconds=int(secs)))
     except Exception:
         return "N/A"
+
+# ── Backup / Restore ─────────────────────────────────────────────────────────
+def _cleanup_old_backups():
+    """Delete backup zips older than BACKUP_TTL. Safe to call at any time."""
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        for f in BACKUP_DIR.glob("*.zip"):
+            try:
+                if now - f.stat().st_mtime > BACKUP_TTL:
+                    f.unlink()
+                    log.info(f"Backup cleanup: removed {f.name}")
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"Backup cleanup error: {e}")
+
+def _backup_cleanup_thread():
+    """Sweep backup dir every 60 s so zips never outlast a restart."""
+    while True:
+        time.sleep(60)
+        _cleanup_old_backups()
 
 # ── NDI Source Discovery ──────────────────────────────────────────────────────
 _ndi_sources_cache = []   # list of source names
@@ -1084,6 +1109,62 @@ def api_system_shutdown():
     threading.Timer(2, lambda: subprocess.run(["shutdown", "-h", "now"])).start()
     return jsonify({"ok": True, "message": "Shutting down in 2 seconds..."})
 
+@app.route("/api/backup/download")
+@require_auth
+def api_backup_download():
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_name = f"ndi-monitor-backup-{ts}.zip"
+    zip_path = BACKUP_DIR / zip_name
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(CONFIG_FILE, "config.json")
+            for f in UPLOAD_DIR.glob("*"):
+                if f.is_file():
+                    zf.write(f, f"uploads/{f.name}")
+        log.info(f"Backup created: {zip_name}")
+        return send_file(str(zip_path), as_attachment=True,
+                         download_name=zip_name, mimetype="application/zip")
+    except Exception as e:
+        log.error(f"Backup failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/backup/restore", methods=["POST"])
+@require_auth
+def api_backup_restore():
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "No file uploaded"}), 400
+    f = request.files["file"]
+    if not f.filename.lower().endswith(".zip"):
+        return jsonify({"ok": False, "error": "Expected a .zip backup file"}), 400
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = BACKUP_DIR / f"restore_tmp_{int(time.time())}.zip"
+    try:
+        f.save(str(tmp))
+        with zipfile.ZipFile(tmp, "r") as zf:
+            names = zf.namelist()
+            if "config.json" not in names:
+                return jsonify({"ok": False, "error": "Invalid backup: config.json not found"}), 400
+            raw = zf.read("config.json")
+            cfg = json.loads(raw)          # validate JSON before writing anything
+            CONFIG_FILE.write_bytes(raw)
+            _write_ndi_sdk_config(cfg)
+            for name in names:
+                if name.startswith("uploads/") and not name.endswith("/"):
+                    dest = BASE_DIR / name
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(zf.read(name))
+        log.info("Config restored from backup upload")
+        return jsonify({"ok": True, "message": "Config restored — page will reload"})
+    except json.JSONDecodeError:
+        return jsonify({"ok": False, "error": "Invalid backup: config.json contains bad JSON"}), 400
+    except Exception as e:
+        log.error(f"Restore failed: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        try: tmp.unlink()
+        except Exception: pass
+
 @app.route("/ndi")
 @require_auth
 def ndi_page():
@@ -1140,6 +1221,8 @@ def startup():
     # Background threads (only in the lock-holding worker)
     threading.Thread(target=background_ndi_discovery, daemon=True).start()
     threading.Thread(target=auto_recovery_thread,     daemon=True).start()
+    _cleanup_old_backups()
+    threading.Thread(target=_backup_cleanup_thread,   daemon=True).start()
     cfg = load_config()
     if cfg["cec"]["enabled"]:
         threading.Thread(target=cec_listener_thread, daemon=True).start()

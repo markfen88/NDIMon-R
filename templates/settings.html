@@ -238,6 +238,25 @@
                 <div class="form-text text-success mt-1"><i class="bi bi-check-circle me-1"></i>{{ cfg.splash.custom_image }}</div>
                 {% endif %}
               </div>
+              <div class="section-title">Backup &amp; Restore</div>
+              <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                  <p class="text-secondary small mb-2">Downloads a zip of your full config and splash images. The file is auto-deleted after 15 minutes.</p>
+                  <a class="btn btn-sm btn-outline-info" href="/api/backup/download" download>
+                    <i class="bi bi-download me-1"></i>Download Backup
+                  </a>
+                </div>
+                <div class="col-md-8">
+                  <label class="form-label">Restore from Backup</label>
+                  <div class="input-group" style="max-width:460px">
+                    <input type="file" class="form-control" id="restore-file" accept=".zip">
+                    <button class="btn btn-outline-warning" onclick="restoreBackup()">
+                      <i class="bi bi-upload me-1"></i>Restore
+                    </button>
+                  </div>
+                  <div class="form-text">Restores config.json and uploaded splash images. Page reloads automatically.</div>
+                </div>
+              </div>
               <div class="section-title">System Actions</div>
               <div class="d-flex gap-2 flex-wrap">
                 <button class="btn btn-sm btn-outline-warning" onclick="sysAction('reboot')"><i class="bi bi-arrow-clockwise me-1"></i>Reboot</button>
@@ -326,6 +345,23 @@ async function uploadSplash() {
   const r  = await fetch('/api/splash/upload', {method:'POST', body: fd});
   const d  = await r.json();
   showToast(d.ok ? 'Splash uploaded & resized to 1080p' : ('Error: '+d.error), d.ok ? 'success' : 'danger');
+}
+async function restoreBackup() {
+  const fi = document.getElementById('restore-file');
+  if (!fi.files.length) { showToast('Select a backup .zip first', 'warning'); return; }
+  if (!confirm('This will overwrite your current config. Continue?')) return;
+  const fd = new FormData(); fd.append('file', fi.files[0]);
+  showToast('Restoring…', 'info');
+  try {
+    const r = await fetch('/api/backup/restore', {method:'POST', body: fd});
+    const d = await r.json();
+    if (d.ok) {
+      showToast(d.message, 'success');
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      showToast('Restore failed: ' + d.error, 'danger');
+    }
+  } catch(e) { showToast('Restore error: ' + e, 'danger'); }
 }
 function ptz(action) { showToast('PTZ: '+action, 'info'); }
 function toggleStaticFields() {
