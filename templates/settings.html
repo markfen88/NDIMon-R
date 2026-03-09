@@ -44,7 +44,6 @@
     <div class="col-12 col-md-2">
       <div class="nav flex-column nav-pills" id="settingsTabs" role="tablist">
         <button class="nav-link active mb-1" data-bs-toggle="pill" data-bs-target="#tab-multiview"><i class="bi bi-grid me-2"></i>Multi-View</button>
-        <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-ptz"><i class="bi bi-joystick me-2"></i>PTZ</button>
         <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-splash"><i class="bi bi-image me-2"></i>Splash</button>
         <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-rec"><i class="bi bi-record-circle me-2"></i>Recording</button>
         <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-network"><i class="bi bi-hdd-network me-2"></i>Network</button>
@@ -84,33 +83,6 @@
                 {% endfor %}
               </div>
               <button class="btn btn-sm btn-outline-info" onclick="saveMultiview()"><i class="bi bi-save me-1"></i>Save</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- PTZ Tab -->
-        <div class="tab-pane fade" id="tab-ptz">
-          <div class="card">
-            <div class="card-header"><i class="bi bi-joystick me-2"></i>PTZ Control</div>
-            <div class="card-body">
-              <div class="section-title">Virtual Joystick</div>
-              <div class="ptz-pad mb-4">
-                <div></div>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('tilt_up')"><i class="bi bi-chevron-up"></i></button>
-                <div></div>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('pan_left')"><i class="bi bi-chevron-left"></i></button>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('home')"><i class="bi bi-house"></i></button>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('pan_right')"><i class="bi bi-chevron-right"></i></button>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('zoom_out')"><i class="bi bi-zoom-out"></i></button>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('tilt_down')"><i class="bi bi-chevron-down"></i></button>
-                <button class="btn btn-outline-secondary ptz-btn" onclick="ptz('zoom_in')"><i class="bi bi-zoom-in"></i></button>
-              </div>
-              <div class="mb-3" style="max-width:300px">
-                <label class="form-label">PTZ Speed</label>
-                <input type="range" class="form-range" id="ptz-speed" min="1" max="100" value="50">
-              </div>
-              <div class="section-title">USB Gamepad</div>
-              <div class="text-secondary small">Connect a USB gamepad — left stick pans/tilts, triggers zoom.</div>
             </div>
           </div>
         </div>
@@ -499,9 +471,6 @@ async function restoreBackup() {
     else showToast('Restore failed: ' + d.error, 'danger');
   } catch(e) { showToast('Restore error: ' + e, 'danger'); }
 }
-
-// ── PTZ ───────────────────────────────────────────────────────────────────────
-function ptz(action) { showToast('PTZ: '+action, 'info'); }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {

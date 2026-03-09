@@ -243,12 +243,430 @@
       </div>
     </div>
 
+    <!-- PTZ full-width collapsible card -->
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header d-flex align-items-center justify-content-between"
+             style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#ptz-collapse"
+             aria-expanded="false" aria-controls="ptz-collapse"
+             id="ptz-card-header">
+          <span><i class="bi bi-joystick me-2"></i>Camera / PTZ</span>
+          <i class="bi bi-chevron-down" id="ptz-chevron" style="transition:transform .2s"></i>
+        </div>
+        <div class="collapse" id="ptz-collapse">
+          <div class="card-body" id="ptz-body">
+
+            <!-- Per-display PTZ panels (rendered by JS below) -->
+            <div id="ptz-panels"></div>
+
+            <hr class="border-secondary mt-4">
+            <!-- Gamepad section -->
+            <div class="section-title"><i class="bi bi-controller me-1"></i>Gamepad Control</div>
+            <div class="row g-3 align-items-center mb-3">
+              <div class="col-auto">
+                <div class="form-check form-switch m-0">
+                  <input class="form-check-input" type="checkbox" id="gamepad-enable"
+                         onchange="toggleGamepad()">
+                  <label class="form-check-label">Enable Gamepad Control</label>
+                </div>
+              </div>
+              <div class="col-auto">
+                <label class="form-label mb-0 me-2">Active Control</label>
+                <select class="form-select form-select-sm d-inline-block" id="gamepad-target"
+                        style="max-width:260px">
+                  {% for d in displays %}
+                  {% set dc = cfg.displays.get(d.name, {}) %}
+                  <option value="{{ dc.get('source','') }}"
+                          data-display="{{ d.name }}">{{ d.name }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            <div id="gamepad-status" class="text-secondary small">No gamepad detected</div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
 <div class="toast-container" id="toast-container"></div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+// ── PTZ display data from Jinja ───────────────────────────────────────────────
+const PTZ_DISPLAYS = [
+  {% for d in displays %}
+  {% set dc = cfg.displays.get(d.name, {}) %}
+  { name: {{ d.name|tojson }}, source: {{ dc.get('source','')|tojson }}, key: {{ d.name|replace('-','_')|tojson }} },
+  {% endfor %}
+];
+
+// ── Chevron rotation on collapse ──────────────────────────────────────────────
+document.getElementById('ptz-collapse').addEventListener('show.bs.collapse', () => {
+  document.getElementById('ptz-chevron').style.transform = 'rotate(180deg)';
+  renderPTZPanels();
+});
+document.getElementById('ptz-collapse').addEventListener('hide.bs.collapse', () => {
+  document.getElementById('ptz-chevron').style.transform = 'rotate(0deg)';
+});
+
+// ── PTZ helpers ───────────────────────────────────────────────────────────────
+async function ptzPost(source, action, extra={}) {
+  try {
+    const r = await fetch('/api/ptz/control', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({source, action, ...extra})
+    });
+    return r.json();
+  } catch(e) { return {ok: false}; }
+}
+
+function startPanTilt(source, panDir, tiltDir) {
+  ptzPost(source, 'pan_tilt_speed', {pan_speed: panDir, tilt_speed: tiltDir});
+}
+function stopPanTilt(source) {
+  ptzPost(source, 'pan_tilt_speed', {pan_speed: 0, tilt_speed: 0});
+}
+function zoomSpeed(source, speed) {
+  ptzPost(source, 'zoom_speed', {speed});
+}
+function focusSpeed(source, speed) {
+  ptzPost(source, 'focus_speed', {speed});
+}
+function autoFocus(source) {
+  ptzPost(source, 'auto_focus');
+}
+function storePreset(source, key, idx) {
+  const nameEl = document.getElementById(`ptz-preset-name-${key}-${idx}`);
+  const name   = nameEl ? nameEl.value.trim() || `Preset ${idx+1}` : `Preset ${idx+1}`;
+  ptzPost(source, 'store_preset', {preset: idx, name})
+    .then(d => showToast(d.ok ? `Preset ${idx+1} stored` : 'Store failed', d.ok ? 'success' : 'danger'));
+}
+function recallPreset(source, idx) {
+  ptzPost(source, 'recall_preset', {preset: idx, speed: 1.0})
+    .then(d => showToast(d.ok ? `Preset ${idx+1} recalled` : 'Recall failed', d.ok ? 'success' : 'danger'));
+}
+function loadPresets(source, key) {
+  if (!source) return;
+  fetch(`/api/ptz/presets/${encodeURIComponent(source)}`)
+    .then(r => r.json())
+    .then(d => {
+      const presets = d.presets || {};
+      for (let i = 0; i < 8; i++) {
+        const el = document.getElementById(`ptz-preset-name-${key}-${i}`);
+        if (el && presets[String(i)]) el.value = presets[String(i)];
+      }
+    }).catch(() => {});
+}
+function applyWB(source, key) {
+  const mode = document.getElementById(`ptz-wb-mode-${key}`).value;
+  const red  = parseFloat(document.getElementById(`ptz-wb-red-${key}`)?.value  || 0);
+  const blue = parseFloat(document.getElementById(`ptz-wb-blue-${key}`)?.value || 0);
+  ptzPost(source, 'white_balance', {mode, red, blue})
+    .then(d => showToast(d.ok ? 'White balance applied' : 'WB failed', d.ok ? 'success' : 'danger'));
+}
+function applyExposure(source, key) {
+  const auto_    = document.getElementById(`ptz-exp-auto-${key}`).checked;
+  const iris     = parseFloat(document.getElementById(`ptz-exp-iris-${key}`)?.value   || 0);
+  const gain     = parseFloat(document.getElementById(`ptz-exp-gain-${key}`)?.value   || 0);
+  const shutter  = parseFloat(document.getElementById(`ptz-exp-shutter-${key}`)?.value || 0);
+  ptzPost(source, 'exposure', {auto: auto_, iris, gain, shutter})
+    .then(d => showToast(d.ok ? 'Exposure applied' : 'Exposure failed', d.ok ? 'success' : 'danger'));
+}
+
+function ptzBtnEvents(el, source, startFn, stopFn) {
+  // Returns event-handler attrs string for inline use — we wire in renderPTZPanels instead
+}
+
+// ── Render per-display PTZ panels ─────────────────────────────────────────────
+let _ptzRendered = false;
+function renderPTZPanels() {
+  if (_ptzRendered) return;
+  _ptzRendered = true;
+  const container = document.getElementById('ptz-panels');
+  let html = '';
+  for (const d of PTZ_DISPLAYS) {
+    const src = d.source;
+    const key = d.key;
+    html += `
+    <div class="display-section mb-3">
+      <div class="display-section-header">
+        <strong><i class="bi bi-camera-video me-1"></i>${d.name}</strong>
+        <span class="ms-2 text-secondary small">Source: ${src || '(none)'}</span>
+      </div>
+      ${src ? `
+      <div class="row g-4">
+
+        <!-- Pan/Tilt D-Pad -->
+        <div class="col-auto">
+          <div class="section-title">Pan / Tilt</div>
+          <div style="display:grid;grid-template-columns:repeat(3,52px);gap:4px">
+            <div></div>
+            <button class="btn btn-outline-secondary ptz-dpad-btn"
+              id="ptz-up-${key}"
+              style="width:52px;height:52px;font-size:1.2rem">
+              <i class="bi bi-chevron-up"></i>
+            </button>
+            <div></div>
+            <button class="btn btn-outline-secondary ptz-dpad-btn"
+              id="ptz-left-${key}"
+              style="width:52px;height:52px;font-size:1.2rem">
+              <i class="bi bi-chevron-left"></i>
+            </button>
+            <button class="btn btn-outline-light ptz-dpad-btn"
+              id="ptz-home-${key}"
+              style="width:52px;height:52px;font-size:1.2rem"
+              title="Center">
+              <i class="bi bi-house"></i>
+            </button>
+            <button class="btn btn-outline-secondary ptz-dpad-btn"
+              id="ptz-right-${key}"
+              style="width:52px;height:52px;font-size:1.2rem">
+              <i class="bi bi-chevron-right"></i>
+            </button>
+            <div></div>
+            <button class="btn btn-outline-secondary ptz-dpad-btn"
+              id="ptz-down-${key}"
+              style="width:52px;height:52px;font-size:1.2rem">
+              <i class="bi bi-chevron-down"></i>
+            </button>
+            <div></div>
+          </div>
+        </div>
+
+        <!-- Zoom -->
+        <div class="col-auto">
+          <div class="section-title">Zoom</div>
+          <div class="d-flex flex-column gap-2" style="width:56px">
+            <button class="btn btn-outline-info btn-sm" id="ptz-zoom-in-${key}">
+              <i class="bi bi-zoom-in"></i> Tele
+            </button>
+            <button class="btn btn-outline-secondary btn-sm" id="ptz-zoom-stop-${key}"
+              onclick="zoomSpeed(${JSON.stringify(src)}, 0)">Stop</button>
+            <button class="btn btn-outline-info btn-sm" id="ptz-zoom-out-${key}">
+              <i class="bi bi-zoom-out"></i> Wide
+            </button>
+          </div>
+        </div>
+
+        <!-- Focus -->
+        <div class="col-auto">
+          <div class="section-title">Focus</div>
+          <div class="d-flex flex-column gap-2" style="width:70px">
+            <button class="btn btn-outline-info btn-sm" id="ptz-focus-far-${key}">Far</button>
+            <button class="btn btn-outline-secondary btn-sm" id="ptz-focus-stop-${key}"
+              onclick="focusSpeed(${JSON.stringify(src)}, 0)">Stop</button>
+            <button class="btn btn-outline-info btn-sm" id="ptz-focus-near-${key}">Near</button>
+            <button class="btn btn-outline-success btn-sm mt-1"
+              onclick="autoFocus(${JSON.stringify(src)})">Auto</button>
+          </div>
+        </div>
+
+        <!-- Exposure -->
+        <div class="col-auto" style="min-width:200px">
+          <div class="section-title">Exposure</div>
+          <div class="form-check form-switch mb-2">
+            <input class="form-check-input" type="checkbox" id="ptz-exp-auto-${key}" checked
+              onchange="document.getElementById('ptz-exp-manual-${key}').style.display=this.checked?'none':''">
+            <label class="form-check-label small">Auto Exposure</label>
+          </div>
+          <div id="ptz-exp-manual-${key}" style="display:none">
+            <label class="form-label small">Iris <span id="ptz-exp-iris-val-${key}">0.5</span></label>
+            <input type="range" class="form-range" id="ptz-exp-iris-${key}" min="0" max="1" step="0.01" value="0.5"
+              oninput="document.getElementById('ptz-exp-iris-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
+            <label class="form-label small">Gain <span id="ptz-exp-gain-val-${key}">0.5</span></label>
+            <input type="range" class="form-range" id="ptz-exp-gain-${key}" min="0" max="1" step="0.01" value="0.5"
+              oninput="document.getElementById('ptz-exp-gain-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
+            <label class="form-label small">Shutter <span id="ptz-exp-shutter-val-${key}">0.5</span></label>
+            <input type="range" class="form-range" id="ptz-exp-shutter-${key}" min="0" max="1" step="0.01" value="0.5"
+              oninput="document.getElementById('ptz-exp-shutter-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
+          </div>
+          <button class="btn btn-outline-info btn-sm mt-1"
+            onclick="applyExposure(${JSON.stringify(src)}, ${JSON.stringify(key)})">Apply</button>
+        </div>
+
+        <!-- White Balance -->
+        <div class="col-auto" style="min-width:200px">
+          <div class="section-title">White Balance</div>
+          <select class="form-select form-select-sm mb-2" id="ptz-wb-mode-${key}">
+            <option value="auto">Auto</option>
+            <option value="indoor">Indoor</option>
+            <option value="outdoor">Outdoor</option>
+            <option value="oneshot">One-Shot</option>
+            <option value="manual">Manual</option>
+          </select>
+          <label class="form-label small">Red <span id="ptz-wb-red-val-${key}">0.5</span></label>
+          <input type="range" class="form-range" id="ptz-wb-red-${key}" min="0" max="1" step="0.01" value="0.5"
+            oninput="document.getElementById('ptz-wb-red-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
+          <label class="form-label small">Blue <span id="ptz-wb-blue-val-${key}">0.5</span></label>
+          <input type="range" class="form-range" id="ptz-wb-blue-${key}" min="0" max="1" step="0.01" value="0.5"
+            oninput="document.getElementById('ptz-wb-blue-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
+          <button class="btn btn-outline-info btn-sm mt-1"
+            onclick="applyWB(${JSON.stringify(src)}, ${JSON.stringify(key)})">Apply</button>
+        </div>
+
+      </div><!-- /row -->
+
+      <!-- Presets (full width row) -->
+      <div class="mt-3">
+        <div class="section-title">Presets</div>
+        <div class="row g-2">
+          ${Array.from({length:8},(_,i) => `
+          <div class="col-6 col-md-3">
+            <div class="input-group input-group-sm">
+              <span class="input-group-text text-secondary">${i+1}</span>
+              <input type="text" class="form-control" id="ptz-preset-name-${key}-${i}"
+                     placeholder="Preset ${i+1}">
+              <button class="btn btn-outline-warning" title="Store"
+                onclick="storePreset(${JSON.stringify(src)}, ${JSON.stringify(key)}, ${i})">
+                <i class="bi bi-bookmark-plus"></i>
+              </button>
+              <button class="btn btn-outline-success" title="Recall"
+                onclick="recallPreset(${JSON.stringify(src)}, ${i})">
+                <i class="bi bi-play-fill"></i>
+              </button>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>
+      ` : '<p class="text-secondary small">No source configured for this display.</p>'}
+    </div>`;
+  }
+  container.innerHTML = html;
+
+  // Wire hold-to-move buttons for each display
+  for (const d of PTZ_DISPLAYS) {
+    const src = d.source;
+    if (!src) continue;
+    const key = d.key;
+
+    const holdBtn = (id, startCb, stopCb) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const start = (e) => { e.preventDefault(); startCb(); };
+      const stop  = ()  => stopCb();
+      el.addEventListener('mousedown',   start);
+      el.addEventListener('touchstart',  start, {passive:false});
+      el.addEventListener('mouseup',     stop);
+      el.addEventListener('mouseleave',  stop);
+      el.addEventListener('touchend',    stop);
+      el.addEventListener('touchcancel', stop);
+    };
+
+    holdBtn(`ptz-up-${key}`,
+      () => startPanTilt(src, 0, -1),
+      () => stopPanTilt(src));
+    holdBtn(`ptz-down-${key}`,
+      () => startPanTilt(src, 0, 1),
+      () => stopPanTilt(src));
+    holdBtn(`ptz-left-${key}`,
+      () => startPanTilt(src, -1, 0),
+      () => stopPanTilt(src));
+    holdBtn(`ptz-right-${key}`,
+      () => startPanTilt(src, 1, 0),
+      () => stopPanTilt(src));
+    holdBtn(`ptz-home-${key}`,
+      () => ptzPost(src, 'pan_tilt', {pan:0, tilt:0}),
+      () => {});
+
+    holdBtn(`ptz-zoom-in-${key}`,
+      () => zoomSpeed(src, 1),
+      () => zoomSpeed(src, 0));
+    holdBtn(`ptz-zoom-out-${key}`,
+      () => zoomSpeed(src, -1),
+      () => zoomSpeed(src, 0));
+
+    holdBtn(`ptz-focus-far-${key}`,
+      () => focusSpeed(src, 1),
+      () => focusSpeed(src, 0));
+    holdBtn(`ptz-focus-near-${key}`,
+      () => focusSpeed(src, -1),
+      () => focusSpeed(src, 0));
+
+    // Load saved preset names
+    loadPresets(src, key);
+  }
+}
+
+// ── Gamepad ───────────────────────────────────────────────────────────────────
+let _gamepadInterval = null;
+function toggleGamepad() {
+  const enabled = document.getElementById('gamepad-enable').checked;
+  if (enabled) {
+    _gamepadInterval = setInterval(pollGamepad, 100);
+    showToast('Gamepad control enabled', 'info');
+  } else {
+    clearInterval(_gamepadInterval);
+    _gamepadInterval = null;
+    showToast('Gamepad control disabled', 'info');
+  }
+}
+
+function pollGamepad() {
+  const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const statusEl = document.getElementById('gamepad-status');
+  let gp = null;
+  for (const g of gamepads) { if (g) { gp = g; break; } }
+  if (!gp) {
+    if (statusEl) statusEl.textContent = 'No gamepad detected';
+    return;
+  }
+  if (statusEl) statusEl.textContent = `Gamepad: ${gp.id}`;
+
+  const selEl  = document.getElementById('gamepad-target');
+  const source = selEl ? selEl.value : '';
+  if (!source) return;
+
+  const DEADZONE = 0.1;
+  const ax = (v) => Math.abs(v) < DEADZONE ? 0 : v;
+
+  const pan  = ax(gp.axes[0] || 0);
+  const tilt = ax(-(gp.axes[1] || 0));  // invert Y
+
+  // R2=button7, L2=button6 (standard gamepad mapping)
+  const r2 = gp.buttons[7] ? gp.buttons[7].value : 0;
+  const l2 = gp.buttons[6] ? gp.buttons[6].value : 0;
+  const zoom = ax(r2 - l2);
+
+  // RB=button5, LB=button4
+  const rb = gp.buttons[5] ? gp.buttons[5].pressed : false;
+  const lb = gp.buttons[4] ? gp.buttons[4].pressed : false;
+  const focus = rb ? 1 : (lb ? -1 : 0);
+
+  if (pan !== 0 || tilt !== 0) {
+    ptzPost(source, 'pan_tilt_speed', {pan_speed: pan, tilt_speed: tilt});
+  } else {
+    ptzPost(source, 'pan_tilt_speed', {pan_speed: 0, tilt_speed: 0});
+  }
+
+  if (zoom !== 0) ptzPost(source, 'zoom_speed', {speed: zoom});
+  else            ptzPost(source, 'zoom_speed', {speed: 0});
+
+  if (focus !== 0) ptzPost(source, 'focus_speed', {speed: focus});
+
+  // Preset recall: buttons 0-7
+  for (let i = 0; i < 8 && i < gp.buttons.length; i++) {
+    if (gp.buttons[i] && gp.buttons[i].pressed && i < 4) {
+      // avoid mapping face buttons used for pan/focus — only recall if not already panning
+      if (pan === 0 && tilt === 0 && focus === 0 && zoom === 0) {
+        ptzPost(source, 'recall_preset', {preset: i, speed: 1.0});
+      }
+    }
+  }
+}
+
+window.addEventListener('gamepadconnected', (e) => {
+  document.getElementById('gamepad-status').textContent =
+    `Gamepad connected: ${e.gamepad.id}`;
+  showToast(`Gamepad detected: ${e.gamepad.id}`, 'success');
+});
+window.addEventListener('gamepaddisconnected', () => {
+  document.getElementById('gamepad-status').textContent = 'No gamepad detected';
+});
+
 function showToast(msg, type='info') {
   const id = 'toast-' + Date.now();
   const c  = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark'};

@@ -826,6 +826,170 @@ class PipelineManager:
         except Exception as e:
             return False, str(e)
 
+# ── PTZ Manager ───────────────────────────────────────────────────────────────
+class _NDIRecvCreate(ctypes.Structure):
+    _fields_ = [
+        ("source_to_connect_to", _NDISource),
+        ("color_format",         ctypes.c_int),
+        ("bandwidth",            ctypes.c_int),
+        ("allow_video_fields",   ctypes.c_bool),
+        ("_pad",                 ctypes.c_uint8 * 7),
+        ("p_ndi_recv_name",      ctypes.c_char_p),
+    ]
+
+class PTZManager:
+    def __init__(self):
+        self._recvs = {}   # source_name -> recv handle (c_void_p value)
+        self._lock  = threading.Lock()
+        try:
+            self._lib = ctypes.CDLL("/usr/local/lib/libndi.so")
+            # Ensure NDI is initialised (idempotent call)
+            self._lib.NDIlib_initialize.restype = ctypes.c_bool
+            self._lib.NDIlib_initialize()
+            self._available = True
+            log.info("PTZManager: libndi.so loaded successfully")
+        except Exception as e:
+            self._lib = None
+            self._available = False
+            log.warning(f"PTZManager: could not load libndi.so: {e}")
+
+    @property
+    def available(self):
+        return self._available
+
+    def _get_recv(self, source_name):
+        """Return (or create) a metadata-only NDI receiver for the given source."""
+        with self._lock:
+            if source_name in self._recvs:
+                return self._recvs[source_name]
+        if not self._lib:
+            return None
+        try:
+            lib = self._lib
+            lib.NDIlib_recv_create_v3.restype  = ctypes.c_void_p
+            lib.NDIlib_recv_create_v3.argtypes = [ctypes.c_void_p]
+            enc_name = source_name.encode("utf-8")
+            # Look up URL from cache if available
+            with _ndi_sources_lock:
+                url = _ndi_url_cache.get(source_name, "")
+            enc_url = url.encode("utf-8") if url else None
+            src = _NDISource(p_ndi_name=enc_name, p_url_address=enc_url)
+            cfg_s = _NDIRecvCreate(
+                source_to_connect_to=src,
+                color_format=0,
+                bandwidth=-10,
+                allow_video_fields=False,
+                p_ndi_recv_name=b"NDIMonitorPTZ",
+            )
+            recv = lib.NDIlib_recv_create_v3(ctypes.byref(cfg_s))
+            if recv:
+                with self._lock:
+                    self._recvs[source_name] = recv
+                log.info(f"PTZ receiver created for: {source_name}")
+                return recv
+            log.warning(f"PTZ: NDIlib_recv_create_v3 returned NULL for {source_name}")
+        except Exception as e:
+            log.warning(f"PTZ: _get_recv error for {source_name}: {e}")
+        return None
+
+    def _call(self, fn_name, source_name, *args):
+        """Call an NDI PTZ function; returns bool result or False on failure."""
+        if not self._lib:
+            return False
+        recv = self._get_recv(source_name)
+        if not recv:
+            return False
+        try:
+            fn = getattr(self._lib, fn_name)
+            fn.restype = ctypes.c_bool
+            result = fn(ctypes.c_void_p(recv), *args)
+            return bool(result)
+        except Exception as e:
+            log.warning(f"PTZ: {fn_name} failed for {source_name}: {e}")
+            return False
+
+    def pan_tilt(self, source, pan, tilt):
+        return self._call("NDIlib_recv_ptz_pan_tilt", source,
+                          ctypes.c_float(pan), ctypes.c_float(tilt))
+
+    def pan_tilt_speed(self, source, pan_speed, tilt_speed):
+        return self._call("NDIlib_recv_ptz_pan_tilt_speed", source,
+                          ctypes.c_float(pan_speed), ctypes.c_float(tilt_speed))
+
+    def zoom(self, source, value):
+        return self._call("NDIlib_recv_ptz_zoom", source, ctypes.c_float(value))
+
+    def zoom_speed(self, source, speed):
+        return self._call("NDIlib_recv_ptz_zoom_speed", source, ctypes.c_float(speed))
+
+    def focus(self, source, value):
+        return self._call("NDIlib_recv_ptz_focus", source, ctypes.c_float(value))
+
+    def focus_speed(self, source, speed):
+        return self._call("NDIlib_recv_ptz_focus_speed", source, ctypes.c_float(speed))
+
+    def auto_focus(self, source):
+        return self._call("NDIlib_recv_ptz_auto_focus", source)
+
+    def store_preset(self, source, idx):
+        return self._call("NDIlib_recv_ptz_store_preset", source, ctypes.c_int(idx))
+
+    def recall_preset(self, source, idx, speed=1.0):
+        return self._call("NDIlib_recv_ptz_recall_preset", source,
+                          ctypes.c_int(idx), ctypes.c_float(speed))
+
+    def is_supported(self, source):
+        return self._call("NDIlib_recv_ptz_is_supported", source)
+
+    def expose(self, source, auto=True, level=0.0, iris=0.0, gain=0.0, shutter=0.0):
+        if not self._lib:
+            return False
+        recv = self._get_recv(source)
+        if not recv:
+            return False
+        try:
+            if auto:
+                fn = self._lib.NDIlib_recv_ptz_exposure_auto
+                fn.restype = ctypes.c_bool
+                return bool(fn(ctypes.c_void_p(recv)))
+            else:
+                fn = self._lib.NDIlib_recv_ptz_exposure_manual_v2
+                fn.restype = ctypes.c_bool
+                return bool(fn(ctypes.c_void_p(recv),
+                               ctypes.c_float(iris),
+                               ctypes.c_float(gain),
+                               ctypes.c_float(shutter)))
+        except Exception as e:
+            log.warning(f"PTZ expose error for {source}: {e}")
+            return False
+
+    def white_balance(self, source, mode, red=0.0, blue=0.0):
+        if not self._lib:
+            return False
+        recv = self._get_recv(source)
+        if not recv:
+            return False
+        try:
+            fn_map = {
+                "auto":    "NDIlib_recv_ptz_white_balance_auto",
+                "indoor":  "NDIlib_recv_ptz_white_balance_indoor",
+                "outdoor": "NDIlib_recv_ptz_white_balance_outdoor",
+                "oneshot": "NDIlib_recv_ptz_white_balance_oneshot",
+            }
+            if mode in fn_map:
+                fn = getattr(self._lib, fn_map[mode])
+                fn.restype = ctypes.c_bool
+                return bool(fn(ctypes.c_void_p(recv)))
+            else:  # manual
+                fn = self._lib.NDIlib_recv_ptz_white_balance_manual
+                fn.restype = ctypes.c_bool
+                return bool(fn(ctypes.c_void_p(recv),
+                               ctypes.c_float(red), ctypes.c_float(blue)))
+        except Exception as e:
+            log.warning(f"PTZ white_balance error for {source}: {e}")
+            return False
+
+ptz_mgr = PTZManager()
 pipeline_mgr = PipelineManager()
 
 # ── Auto-Recovery Thread ──────────────────────────────────────────────────────
@@ -1263,6 +1427,63 @@ def api_backup_restore():
     finally:
         try: tmp.unlink()
         except Exception: pass
+
+@app.route("/api/ptz/control", methods=["POST"])
+@require_auth
+def api_ptz_control():
+    data   = request.get_json()
+    source = data.get("source", "")
+    action = data.get("action", "")
+    if not source or not action:
+        return jsonify({"ok": False, "error": "source and action required"}), 400
+
+    ok = False
+    if action == "pan_tilt":
+        ok = ptz_mgr.pan_tilt(source, float(data.get("pan", 0)), float(data.get("tilt", 0)))
+    elif action == "pan_tilt_speed":
+        ok = ptz_mgr.pan_tilt_speed(source, float(data.get("pan_speed", 0)), float(data.get("tilt_speed", 0)))
+    elif action == "zoom":
+        ok = ptz_mgr.zoom(source, float(data.get("value", 0.5)))
+    elif action == "zoom_speed":
+        ok = ptz_mgr.zoom_speed(source, float(data.get("speed", 0)))
+    elif action == "focus":
+        ok = ptz_mgr.focus(source, float(data.get("value", 0.5)))
+    elif action == "focus_speed":
+        ok = ptz_mgr.focus_speed(source, float(data.get("speed", 0)))
+    elif action == "auto_focus":
+        ok = ptz_mgr.auto_focus(source)
+    elif action == "store_preset":
+        idx  = int(data.get("preset", 0))
+        name = data.get("name", f"Preset {idx+1}")
+        ok   = ptz_mgr.store_preset(source, idx)
+        if ok:
+            cfg = load_config()
+            src_ptz = cfg.setdefault("ptz", {}).setdefault(source, {})
+            presets = src_ptz.setdefault("presets", {})
+            presets[str(idx)] = name
+            save_config(cfg)
+    elif action == "recall_preset":
+        ok = ptz_mgr.recall_preset(source, int(data.get("preset", 0)), float(data.get("speed", 1.0)))
+    elif action == "exposure":
+        if data.get("auto"):
+            ok = ptz_mgr.expose(source, auto=True)
+        else:
+            ok = ptz_mgr.expose(source, auto=False,
+                                level=float(data.get("level", 0)),
+                                iris=float(data.get("iris", 0)),
+                                gain=float(data.get("gain", 0)),
+                                shutter=float(data.get("shutter", 0)))
+    elif action == "white_balance":
+        ok = ptz_mgr.white_balance(source, data.get("mode", "auto"),
+                                   float(data.get("red", 0)), float(data.get("blue", 0)))
+    return jsonify({"ok": ok, "ptz_available": ptz_mgr.available})
+
+@app.route("/api/ptz/presets/<path:source>")
+@require_auth
+def api_ptz_presets(source):
+    cfg     = load_config()
+    presets = cfg.get("ptz", {}).get(source, {}).get("presets", {})
+    return jsonify({"presets": presets})
 
 @app.route("/ndi")
 @require_auth
