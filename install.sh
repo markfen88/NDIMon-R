@@ -175,23 +175,36 @@ if [[ "$BOARD" == "rk3588" || "$BOARD" == "rk3399" ]]; then
     section "Installing Rockchip MPP (hardware decode)"
 
     if ! apt-cache show librockchip-mpp1 &>/dev/null; then
-        info "Adding Radxa package repository..."
+        info "Adding Radxa board-specific MPP repository..."
         apt-get install -y --no-install-recommends curl gnupg
-        # Fetch keyring
-        KEYRING_URL="https://apt.radxa.com/bookworm-stable/public.key"
-        curl -fsSL "$KEYRING_URL" | gpg --batch --yes --dearmor -o /usr/share/keyrings/radxa-archive-keyring.gpg \
-            || warn "Could not fetch Radxa keyring — skipping MPP install"
-        if [[ -f /usr/share/keyrings/radxa-archive-keyring.gpg ]]; then
-            # Try bookworm-stable; fall back to trixie-stable for Debian 13 hosts
-            OS_CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-bookworm}")
-            RADXA_SUITE="bookworm-stable"
-            # Check if the bookworm-stable suite has a Release file; if not, try trixie-stable
-            if ! curl -sfI "https://apt.radxa.com/bookworm-stable/dists/bookworm/Release" &>/dev/null; then
-                RADXA_SUITE="trixie-stable"
+
+        # Board-specific repos use "bookworm" suite regardless of host OS version.
+        # rk3399-bookworm and rk3588-bookworm repos work on Bookworm and Trixie hosts.
+        if [[ "$BOARD" == "rk3588" ]]; then
+            RADXA_REPO_BASE="rk3588-bookworm"
+        else
+            RADXA_REPO_BASE="rk3399-bookworm"
+        fi
+
+        # Try to fetch Radxa GPG keyring (try multiple known URLs)
+        KEYRING_FETCHED=0
+        for KEY_URL in \
+            "https://apt.radxa.com/${RADXA_REPO_BASE}/public.key" \
+            "https://apt.radxa.com/bookworm-stable/public.key" \
+            "https://radxa-repo.github.io/bookworm/public.key"; do
+            if curl -fsSL --connect-timeout 10 "$KEY_URL" | gpg --batch --yes --dearmor -o /usr/share/keyrings/radxa-archive-keyring.gpg 2>/dev/null; then
+                KEYRING_FETCHED=1
+                info "Radxa keyring fetched from $KEY_URL"
+                break
             fi
-            echo "deb [signed-by=/usr/share/keyrings/radxa-archive-keyring.gpg] https://apt.radxa.com/${RADXA_SUITE}/ ${OS_CODENAME} main" \
+        done
+
+        if [[ $KEYRING_FETCHED -eq 1 ]]; then
+            echo "deb [signed-by=/usr/share/keyrings/radxa-archive-keyring.gpg] https://apt.radxa.com/${RADXA_REPO_BASE}/ bookworm main" \
                 > /etc/apt/sources.list.d/radxa.list
             apt-get update -qq || warn "Radxa repo update failed — hardware decode may be unavailable"
+        else
+            warn "Could not fetch Radxa keyring from any source — skipping MPP install"
         fi
     fi
 
