@@ -120,9 +120,10 @@ def _get_ndi_lib():
 
 def _ndi_env(wait_secs=15):
     """Build environment dict for gst-launch pipelines.
-    Auto-injects Wayland vars if a weston socket is present (RK3399 headless).
-    Waits up to wait_secs for the socket to appear (handles weston restart after kiosk-shell exit)."""
+    On Wayland boards, waits up to wait_secs for the compositor socket to appear."""
     env = os.environ.copy()
+    if not getattr(pipeline_mgr, 'use_wayland', False):
+        return env  # kmssink — no Wayland env needed
     xdg_rt = "/run/user/0"
     env["XDG_RUNTIME_DIR"] = xdg_rt
     deadline = time.time() + wait_secs
@@ -134,7 +135,6 @@ def _ndi_env(wait_secs=15):
         if time.time() >= deadline:
             break
         time.sleep(0.5)
-    # No socket found within timeout — return env without WAYLAND_DISPLAY
     log.warning("_ndi_env: no Wayland socket found after waiting")
     return env
 
@@ -246,7 +246,7 @@ class PipelineManager:
         elif "rk3399" in compatible:
             self.board      = "rk3399"
             self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
-            self.use_wayland = True   # RK3399 dumb-buffer alloc fails; use Weston+waylandsink
+            self.use_wayland = False  # kmssink works on RK3399 Armbian bookworm (no bus-id needed)
         elif "bcm2712" in compatible or "Raspberry Pi 5" in open("/proc/cpuinfo").read():
             self.board      = "rpi5"
             self.hw_dec     = "v4l2h264dec"
