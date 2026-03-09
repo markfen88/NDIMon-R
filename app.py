@@ -1525,6 +1525,8 @@ def startup():
         raise SystemExit(1)
 
     log.info(f"PID {os.getpid()}: pipeline manager active")
+    # Write NDI SDK config so gst-launch ndisrc uses the discovery server at startup.
+    _write_ndi_sdk_config(load_config())
     # Set CPU governor to performance — eliminates frequency-scaling latency during 4K decode.
     try:
         gov_path = "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor"

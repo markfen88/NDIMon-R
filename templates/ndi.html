@@ -209,9 +209,10 @@
           </div>
           <div class="section-title">Discovery</div>
           <div class="mb-3">
-            <label class="form-label">Discovery Servers (comma-separated)</label>
+            <label class="form-label">Discovery Servers / Source IPs (comma-separated)</label>
             <input type="text" class="form-control" id="ndi-discovery"
                    value="{{ cfg.ndi.discovery_servers | join(', ') }}" placeholder="192.168.1.100">
+            <div class="form-text">Enter NDI discovery server IPs <em>or</em> the IP address of any host running NDI sources. Either method works without needing mDNS multicast. Leave blank to rely on mDNS only.</div>
           </div>
           <div class="mb-3">
             <label class="form-label">NDI Groups (one per line)</label>
