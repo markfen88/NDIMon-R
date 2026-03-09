@@ -1151,13 +1151,13 @@ def api_splash_upload():
 @app.route("/api/splash/settings", methods=["POST"])
 @require_auth
 def api_splash_settings():
-    """Save splash bg_color and show_overlay."""
+    """Save splash bg_color, show_overlay, osd_color, osd_keyed."""
     data = request.get_json()
     cfg  = load_config()
-    if "bg_color" in data:
-        cfg["splash"]["bg_color"]    = data["bg_color"]
-    if "show_overlay" in data:
-        cfg["splash"]["show_overlay"] = bool(data["show_overlay"])
+    if "bg_color"     in data: cfg["splash"]["bg_color"]      = data["bg_color"]
+    if "show_overlay" in data: cfg["splash"]["show_overlay"]  = bool(data["show_overlay"])
+    if "osd_color"    in data: cfg["video"]["osd_color"]      = data["osd_color"]
+    if "osd_keyed"    in data: cfg["video"]["osd_keyed"]      = bool(data["osd_keyed"])
     save_config(cfg)
     _refresh_idle_splashes(cfg)
     return jsonify({"ok": True})
