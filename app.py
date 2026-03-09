@@ -425,7 +425,7 @@ class PipelineManager:
 
         # Sink — Wayland (RK3399 headless) or KMS (RK3588/others)
         if self.use_wayland:
-            sink = "waylandsink sync=false"
+            sink = "waylandsink sync=false fullscreen=true"
         else:
             bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
             sink = (f"kmssink {bus_id_part}connector-id={connector} "
@@ -465,7 +465,7 @@ class PipelineManager:
                    else "video/x-raw,width=1920,height=1080"
 
         if self.use_wayland:
-            sink = "waylandsink sync=false"
+            sink = "waylandsink sync=false fullscreen=true"
         else:
             sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
 
