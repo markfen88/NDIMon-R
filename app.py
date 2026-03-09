@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """NDI Monitor Appliance - Flask Application"""
-import os, sys, json, time, subprocess, threading, socket, re, glob, signal
+import os, json, time, subprocess, threading, socket, re, glob, signal, ctypes, fcntl
 import logging
 from pathlib import Path
 from functools import wraps
 from datetime import datetime, timedelta
 
-from flask import (Flask, render_template, jsonify, request, redirect,
-                   url_for, session, send_from_directory, flash)
+from flask import Flask, render_template, jsonify, request, redirect, url_for, session, flash
 from PIL import Image
 import psutil
 
@@ -85,24 +84,30 @@ def require_auth(f):
         return f(*args, **kwargs)
     return decorated
 
+def get_system_uptime():
+    try:
+        with open("/proc/uptime") as f:
+            secs = float(f.read().split()[0])
+        return str(timedelta(seconds=int(secs)))
+    except Exception:
+        return "N/A"
+
 # ── NDI Source Discovery ──────────────────────────────────────────────────────
 _ndi_sources_cache = []   # list of source names
 _ndi_url_cache     = {}   # name -> url
 _ndi_sources_lock  = threading.Lock()
 
-import ctypes as _ctypes
-
-class _NDIFindCreate(_ctypes.Structure):
+class _NDIFindCreate(ctypes.Structure):
     _fields_ = [
-        ("show_local_sources", _ctypes.c_bool),
-        ("p_groups",           _ctypes.c_char_p),
-        ("p_extra_ips",        _ctypes.c_char_p),
+        ("show_local_sources", ctypes.c_bool),
+        ("p_groups",           ctypes.c_char_p),
+        ("p_extra_ips",        ctypes.c_char_p),
     ]
 
-class _NDISource(_ctypes.Structure):
+class _NDISource(ctypes.Structure):
     _fields_ = [
-        ("p_ndi_name",    _ctypes.c_char_p),
-        ("p_url_address", _ctypes.c_char_p),
+        ("p_ndi_name",    ctypes.c_char_p),
+        ("p_url_address", ctypes.c_char_p),
     ]
 
 _ndi_lib = None
@@ -110,17 +115,13 @@ def _get_ndi_lib():
     global _ndi_lib
     if _ndi_lib is None:
         try:
-            lib = _ctypes.CDLL("/usr/local/lib/libndi.so.6")
-            lib.NDIlib_initialize.restype = _ctypes.c_bool
+            lib = ctypes.CDLL("/usr/local/lib/libndi.so.6")
+            lib.NDIlib_initialize.restype = ctypes.c_bool
             lib.NDIlib_initialize()
             _ndi_lib = lib
         except Exception as e:
             log.warning(f"NDI lib load failed: {e}")
     return _ndi_lib
-
-def _ndi_env():
-    """Build environment dict for gst-launch pipelines (kmssink, no Wayland needed)."""
-    return os.environ.copy()
 
 def _extra_ips_from_config():
     try:
@@ -145,24 +146,24 @@ def discover_ndi_sources():
     lib = _get_ndi_lib()
     if lib:
         try:
-            lib.NDIlib_find_create_v2.restype = _ctypes.c_void_p
+            lib.NDIlib_find_create_v2.restype = ctypes.c_void_p
             settings = _NDIFindCreate(
                 show_local_sources=True,
                 p_groups=_groups_from_config(),
                 p_extra_ips=_extra_ips_from_config(),
             )
-            find = lib.NDIlib_find_create_v2(_ctypes.byref(settings))
+            find = lib.NDIlib_find_create_v2(ctypes.byref(settings))
             if find:
                 wait = lib.NDIlib_find_wait_for_sources
-                wait.restype = _ctypes.c_bool
-                wait.argtypes = [_ctypes.c_void_p, _ctypes.c_uint32]
+                wait.restype = ctypes.c_bool
+                wait.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
                 wait(find, 5000)
 
                 get = lib.NDIlib_find_get_current_sources
-                get.restype = _ctypes.POINTER(_NDISource)
-                get.argtypes = [_ctypes.c_void_p, _ctypes.POINTER(_ctypes.c_uint32)]
-                count = _ctypes.c_uint32(0)
-                ptr = get(find, _ctypes.byref(count))
+                get.restype = ctypes.POINTER(_NDISource)
+                get.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+                count = ctypes.c_uint32(0)
+                ptr = get(find, ctypes.byref(count))
                 for i in range(count.value):
                     name = ptr[i].p_ndi_name
                     url  = ptr[i].p_url_address
@@ -172,7 +173,7 @@ def discover_ndi_sources():
                             sources.append(name)
                         if url:
                             urls[name] = url.decode("utf-8", errors="replace")
-                lib.NDIlib_find_destroy.argtypes = [_ctypes.c_void_p]
+                lib.NDIlib_find_destroy.argtypes = [ctypes.c_void_p]
                 lib.NDIlib_find_destroy(find)
         except Exception as e:
             log.warning(f"NDI SDK discovery error: {e}")
@@ -229,7 +230,7 @@ class PipelineManager:
         elif "rk3399" in compatible:
             self.board      = "rk3399"
             self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
-        elif "bcm2712" in compatible or "Raspberry Pi 5" in open("/proc/cpuinfo").read():
+        elif "bcm2712" in compatible or "Raspberry Pi 5" in Path("/proc/cpuinfo").read_text(errors="ignore"):
             self.board      = "rpi5"
             self.hw_dec     = "v4l2h264dec"
             self.mpp_avail  = False
@@ -241,17 +242,16 @@ class PipelineManager:
 
     def _probe_mpp_decoder(self):
         """Return (element_name, available) for whichever Rockchip MPP decoder plugin is installed."""
-        import glob as _glob
         plugin_dirs = [
             "/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
             "/usr/lib/gstreamer-1.0",
         ]
         for d in plugin_dirs:
             # gstreamer1.0-rockchip1 ships libgstrockchipmpp.so (mppvideodec)
-            if _glob.glob(f"{d}/libgstrockchipmpp.so"):
+            if glob.glob(f"{d}/libgstrockchipmpp.so"):
                 return "mppvideodec", True
             # Older Radxa packages ship libgstrkmppdec.so (rkmppdec)
-            if _glob.glob(f"{d}/libgstrkmppdec.so") or _glob.glob(f"{d}/libgstmpp.so"):
+            if glob.glob(f"{d}/libgstrkmppdec.so") or glob.glob(f"{d}/libgstmpp.so"):
                 return "rkmppdec", True
         return "avdec_h264", False
 
@@ -269,7 +269,6 @@ class PipelineManager:
     def _probe_ndisrc_props(self):
         """Probe which optional properties ndisrc supports by inspecting the plugin .so directly."""
         self.ndisrc_has_app_name = False
-        import glob as _glob
         plugin_dirs = [
             "/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
             "/lib/aarch64-linux-gnu/gstreamer-1.0",
@@ -277,7 +276,7 @@ class PipelineManager:
         ]
         so_path = None
         for d in plugin_dirs:
-            hits = _glob.glob(f"{d}/libgstndi*.so")
+            hits = glob.glob(f"{d}/libgstndi*.so")
             if hits:
                 so_path = hits[0]
                 break
@@ -294,13 +293,12 @@ class PipelineManager:
     def _detect_displays(self):
         """Detect all DRM connectors from sysfs. Each entry includes connected status.
         Connector IDs come from modetest; connection state from /sys/class/drm."""
-        import glob as _glob
         self.displays = []
         self.drm_card = "card0"  # determined below
 
         # Build name→status map from sysfs (reliable, no driver detection needed)
         sysfs_status = {}
-        for path in sorted(_glob.glob("/sys/class/drm/card*-*")):
+        for path in sorted(glob.glob("/sys/class/drm/card*-*")):
             base = os.path.basename(path)
             parts = base.split("-", 1)
             if len(parts) < 2:
@@ -341,7 +339,6 @@ class PipelineManager:
         if not connected:
             log.warning("No connected displays found — check cable connections")
         log.info(f"Detected displays: {all_names} (connected: {connected})")
-        log.info(f"Detected displays: {[d['name'] for d in self.displays]}")
 
     def get_supported_modes(self, display_name):
         """Return list of (WxH@fps) from modetest."""
@@ -362,27 +359,6 @@ class PipelineManager:
             pass
         return modes or ["1920x1080@60.00", "1280x720@60.00"]
 
-    def _resolve_audio_sink(self, cfg):
-        """Pick a working GStreamer audio sink. autoaudiosink fails on headless systems
-        with no PulseAudio; fall back to the first available ALSA device, then fakesink."""
-        sink_pref = cfg["audio"].get("sink", "auto")
-        alsa_map  = {"hdmi0": "hw:0,0", "hdmi1": "hw:1,0", "analog": "hw:1,0"}
-        if sink_pref in alsa_map:
-            return f"alsasink device={alsa_map[sink_pref]}"
-        # "auto" — probe ALSA cards; use first available, else fakesink
-        try:
-            result = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
-            if "card" in result.stdout:
-                # prefer HDMI (card 0 on RK3399), otherwise first card
-                import re as _re
-                m = _re.search(r"card (\d+):.*hdmi", result.stdout, _re.IGNORECASE)
-                card = m.group(1) if m else "0"
-                return f"alsasink device=hw:{card},0"
-        except Exception:
-            pass
-        log.warning("No ALSA audio device found — muting audio output")
-        return "fakesink sync=false"
-
     def _build_pipeline(self, source, display, cfg_disp, chroma, scaling, resolution, framerate, osd=False):
         """Build gst-launch-1.0 command for NDI → HDMI."""
         connector = display["id"]
@@ -402,10 +378,6 @@ class PipelineManager:
         groups = ",".join(cfg["ndi"]["groups"])
         if groups and self.ndisrc_has_app_name:
             ndi_src += f'ndi-app-name="{groups}" '
-
-        # Chroma format
-        fmt_map = {"NV12": "NV12", "YUY2": "YUY2", "RGB": "BGR"}
-        fmt = fmt_map.get(chroma, "NV12")
 
         # Scaling pipeline element
         # IMPORTANT: must force pixel-aspect-ratio=1/1 or GStreamer encodes AR via PAR
@@ -539,7 +511,7 @@ class PipelineManager:
         cmd = self._build_pipeline(source, display, cfg_disp, chroma, scaling, resolution, framerate, osd)
         log.info(f"Starting pipeline: {cmd}")
         try:
-            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=_ndi_env())
+            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=os.environ.copy())
             with self.lock:
                 self.pipelines[display_name] = {
                     "proc": proc, "source": source,
@@ -591,7 +563,7 @@ class PipelineManager:
             return
         cmd = self._build_splash(display, img if img else None)
         try:
-            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=_ndi_env())
+            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=os.environ.copy())
             with self.lock:
                 self.splash_procs[display_name] = proc
         except Exception as e:
@@ -641,7 +613,7 @@ class PipelineManager:
                f'd.audio ! queue ! audioconvert ! audioresample ! lamemp3enc ! mux. '
                f'mux. ! filesink location="{outfile}"')
         try:
-            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=_ndi_env())
+            proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=os.environ.copy())
             log.info(f"Recording started: {outfile}")
             return True, outfile
         except Exception as e:
@@ -659,8 +631,7 @@ BACKOFF_SECS        = 120 # seconds to wait after fast-failure before retrying
 
 def _sysfs_connected(disp_name):
     """Read display connected state from sysfs (reliable, no subprocess)."""
-    import glob as _glob
-    for path in _glob.glob(f"/sys/class/drm/card*-{disp_name}/status"):
+    for path in glob.glob(f"/sys/class/drm/card*-{disp_name}/status"):
         try:
             return open(path).read().strip() == "connected"
         except Exception:
@@ -1024,21 +995,12 @@ def settings():
     return render_template("settings.html", cfg=cfg, displays=pipeline_mgr.displays,
                            ip=get_ip())
 
-def get_system_uptime():
-    try:
-        with open("/proc/uptime") as f:
-            secs = float(f.read().split()[0])
-        return str(timedelta(seconds=int(secs)))
-    except Exception:
-        return "N/A"
-
 # ── Startup ───────────────────────────────────────────────────────────────────
 _worker_lock_fd = None  # module-level keeps fd alive so fcntl lock isn't released on return
 
 def startup():
     """Initialise pipeline management. Lock file prevents a second instance."""
     global _worker_lock_fd
-    import fcntl
 
     # Kill any gst-launch orphans left by a previous crash before acquiring the lock.
     subprocess.run(["pkill", "-9", "-f", "gst-launch-1.0"], check=False)
