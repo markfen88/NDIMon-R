@@ -298,9 +298,15 @@ async function saveDisplayVideo(display) {
   cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
-  const d = await post('/api/config', cfg);
-  showToast(d.ok ? 'Video settings saved — will apply on next stream start' : 'Save failed',
-            d.ok ? 'success' : 'danger');
+  await post('/api/config', cfg);
+  // Restart stream immediately if one is running so settings apply now
+  const source = cfg.displays[display]?.source || '';
+  if (source) {
+    const d = await post('/api/stream/select', {display, source});
+    showToast(d.ok ? 'Video settings applied' : 'Save failed', d.ok ? 'success' : 'danger');
+  } else {
+    showToast('Video settings saved', 'success');
+  }
 }
 
 async function saveNDI() {

@@ -362,6 +362,27 @@ class PipelineManager:
             pass
         return modes or ["1920x1080@60.00", "1280x720@60.00"]
 
+    def _resolve_audio_sink(self, cfg):
+        """Pick a working GStreamer audio sink. autoaudiosink fails on headless systems
+        with no PulseAudio; fall back to the first available ALSA device, then fakesink."""
+        sink_pref = cfg["audio"].get("sink", "auto")
+        alsa_map  = {"hdmi0": "hw:0,0", "hdmi1": "hw:1,0", "analog": "hw:1,0"}
+        if sink_pref in alsa_map:
+            return f"alsasink device={alsa_map[sink_pref]}"
+        # "auto" — probe ALSA cards; use first available, else fakesink
+        try:
+            result = subprocess.run(["aplay", "-l"], capture_output=True, text=True, timeout=3)
+            if "card" in result.stdout:
+                # prefer HDMI (card 0 on RK3399), otherwise first card
+                import re as _re
+                m = _re.search(r"card (\d+):.*hdmi", result.stdout, _re.IGNORECASE)
+                card = m.group(1) if m else "0"
+                return f"alsasink device=hw:{card},0"
+        except Exception:
+            pass
+        log.warning("No ALSA audio device found — muting audio output")
+        return "fakesink sync=false"
+
     def _build_pipeline(self, source, display, cfg_disp, chroma, scaling, resolution, framerate, osd=False):
         """Build gst-launch-1.0 command for NDI → HDMI."""
         connector = display["id"]
@@ -387,22 +408,26 @@ class PipelineManager:
         fmt = fmt_map.get(chroma, "NV12")
 
         # Scaling pipeline element
+        # IMPORTANT: must force pixel-aspect-ratio=1/1 or GStreamer encodes AR via PAR
+        # metadata instead of adding actual black border pixels (makes all modes look identical).
+        par = "pixel-aspect-ratio=1/1"
         if scaling == "stretch":
-            scale_pipe = f"videoscale ! video/x-raw,width={scale_w},height={scale_h}"
+            scale_pipe = (f"videoscale ! "
+                          f"video/x-raw,width={scale_w},height={scale_h},{par}")
         elif scaling == "crop":
-            scale_pipe = (f"videoscale method=0 add-borders=false ! "
-                          f"video/x-raw,width={scale_w},height={scale_h}")
+            # aspectratiocrop crops to target AR first, then videoscale fits to exact size
+            scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                          f"videoscale ! "
+                          f"video/x-raw,width={scale_w},height={scale_h},{par}")
         else:  # letterbox / fit
             scale_pipe = (f"videoscale add-borders=true ! "
-                          f"video/x-raw,width={scale_w},height={scale_h}")
+                          f"video/x-raw,width={scale_w},height={scale_h},{par}")
 
-        # HW conversion — RK3588 primary plane (Cluster) only supports RGB, not NV12
+        # HW conversion — RK3588 primary plane needs BGRx; RK3399 uses NV12
         if self.board == "rk3588":
             conv = "videoconvert ! video/x-raw,format=BGRx"
-        elif self.mpp_avail:
-            conv = "videoconvert ! video/x-raw,format=NV12"
         else:
-            conv = f"videoconvert ! video/x-raw,format={fmt}"
+            conv = "videoconvert ! video/x-raw,format=NV12"
 
         # OSD overlay
         osd_pipe = ""
@@ -413,26 +438,24 @@ class PipelineManager:
                         f'font-desc="Sans Bold 24" ! ')
 
         bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
-        sink = (f"kmssink {bus_id_part}connector-id={connector} "
-                f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
+        sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
 
-        # Audio
-        audio_pipe = ""
-        if cfg["audio"]["enabled"]:
-            audio_pipe = " ! queue max-size-buffers=4 max-size-bytes=0 max-size-time=0 ! audioconvert ! audioresample ! autoaudiosink"
+        # Audio branch: hardware audio sinks conflict with kmssink on RK3399.
+        # Use fakesink with audioconvert to properly drain the audio pad.
+        audio_branch = "demux.audio ! queue ! audioconvert ! fakesink sync=false"
 
-        # Video queue: leaky=downstream drops frames instead of stalling the pipeline
-        # (critical for 4K where videoconvert may lag behind the source rate)
-        vqueue = "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream"
-
+        # Video queue: max-size-bytes=0 (unlimited bytes) because a single uncompressed
+        # 4K frame (~12 MB NV12 / ~32 MB BGRx) exceeds the 10 MB default and causes
+        # GStreamer to deadlock after the first frame is delivered.
         pipeline = (
             f"gst-launch-1.0 -e "
-            f"{ndi_src}! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
+            f"{ndi_src}! queue ! "
             f"ndisrcdemux name=demux "
-            f"demux.video ! {vqueue} ! {scale_pipe} ! {conv} ! "
+            f"demux.video ! queue max-size-bytes=0 max-size-buffers=3 max-size-time=0 ! "
+            f"videoconvert ! {scale_pipe} ! {conv} ! "
             f"{osd_pipe}"
             f"{sink} "
-            f"demux.audio ! queue{audio_pipe}"
+            f"{audio_branch}"
         )
         return pipeline
 
