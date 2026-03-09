@@ -118,25 +118,9 @@ def _get_ndi_lib():
             log.warning(f"NDI lib load failed: {e}")
     return _ndi_lib
 
-def _ndi_env(wait_secs=15):
-    """Build environment dict for gst-launch pipelines.
-    On Wayland boards, waits up to wait_secs for the compositor socket to appear."""
-    env = os.environ.copy()
-    if not getattr(pipeline_mgr, 'use_wayland', False):
-        return env  # kmssink — no Wayland env needed
-    xdg_rt = "/run/user/0"
-    env["XDG_RUNTIME_DIR"] = xdg_rt
-    deadline = time.time() + wait_secs
-    while True:
-        for n in range(5):
-            if os.path.exists(f"{xdg_rt}/wayland-{n}"):
-                env["WAYLAND_DISPLAY"] = f"wayland-{n}"
-                return env
-        if time.time() >= deadline:
-            break
-        time.sleep(0.5)
-    log.warning("_ndi_env: no Wayland socket found after waiting")
-    return env
+def _ndi_env():
+    """Build environment dict for gst-launch pipelines (kmssink, no Wayland needed)."""
+    return os.environ.copy()
 
 def _extra_ips_from_config():
     try:
@@ -242,22 +226,18 @@ class PipelineManager:
         if "rk3588" in compatible:
             self.board      = "rk3588"
             self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
-            self.use_wayland = False  # kmssink works fine on rk3588
         elif "rk3399" in compatible:
             self.board      = "rk3399"
             self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
-            self.use_wayland = False  # kmssink works on RK3399 Armbian bookworm (no bus-id needed)
         elif "bcm2712" in compatible or "Raspberry Pi 5" in open("/proc/cpuinfo").read():
             self.board      = "rpi5"
             self.hw_dec     = "v4l2h264dec"
             self.mpp_avail  = False
-            self.use_wayland = False
         else:
             self.board      = "generic"
             self.hw_dec     = "avdec_h264"
             self.mpp_avail  = False
-            self.use_wayland = False
-        log.info(f"Board: {self.board}, HW decoder: {self.hw_dec}, Wayland: {self.use_wayland}")
+        log.info(f"Board: {self.board}, HW decoder: {self.hw_dec}")
 
     def _probe_mpp_decoder(self):
         """Return (element_name, available) for whichever Rockchip MPP decoder plugin is installed."""
@@ -432,13 +412,9 @@ class PipelineManager:
             osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=center '
                         f'font-desc="Sans Bold 24" ! ')
 
-        # Sink — Wayland (RK3399 headless) or KMS (RK3588/others)
-        if self.use_wayland:
-            sink = "waylandsink sync=false fullscreen=true"
-        else:
-            bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
-            sink = (f"kmssink {bus_id_part}connector-id={connector} "
-                    f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
+        bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
+        sink = (f"kmssink {bus_id_part}connector-id={connector} "
+                f"sync=false render-rectangle=\"<0,0,{scale_w},{scale_h}>\"")
 
         # Audio
         audio_pipe = ""
@@ -473,10 +449,7 @@ class PipelineManager:
         fmt_part = "video/x-raw,format=BGRx,width=1920,height=1080" if self.board == "rk3588" \
                    else "video/x-raw,width=1920,height=1080"
 
-        if self.use_wayland:
-            sink = "waylandsink sync=false fullscreen=true"
-        else:
-            sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
+        sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
 
         pipeline = (
             f"gst-launch-1.0 -e "
@@ -667,35 +640,11 @@ def _sysfs_connected(disp_name):
             pass
     return False
 
-_last_weston_restart = 0.0  # unix timestamp of last weston restart attempt
-
-def _ensure_weston():
-    """If we're on a Wayland board and the socket is missing, restart weston (max once/30s)."""
-    global _last_weston_restart
-    if not getattr(pipeline_mgr, 'use_wayland', False):
-        return
-    xdg_rt = "/run/user/0"
-    if any(os.path.exists(f"{xdg_rt}/wayland-{n}") for n in range(5)):
-        return  # socket present — nothing to do
-    now = time.time()
-    if now - _last_weston_restart < 30:
-        return  # restarted recently — wait it out
-    log.warning("Weston socket missing — restarting weston")
-    _last_weston_restart = now
-    subprocess.run(["systemctl", "restart", "weston"], check=False)
-    # Wait up to 15s for socket to appear
-    for _ in range(30):
-        time.sleep(0.5)
-        if any(os.path.exists(f"{xdg_rt}/wayland-{n}") for n in range(5)):
-            return
-    log.warning("_ensure_weston: socket still missing after 15s")
-
 def auto_recovery_thread():
     """Every 8s: check active streams, restart dead ones, auto-connect whenever source is set."""
-    time.sleep(15)  # startup grace period — let weston fully initialise before first cycle
+    time.sleep(15)  # startup grace period before first cycle
     while True:
         try:
-            _ensure_weston()
             cfg = load_config()
             with _ndi_sources_lock:
                 available = set(_ndi_sources_cache)
