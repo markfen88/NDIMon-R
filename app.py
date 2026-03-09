@@ -1039,20 +1039,23 @@ def get_system_uptime():
 _worker_lock_fd = None  # module-level keeps fd alive so fcntl lock isn't released on return
 
 def startup():
-    """Run pipeline management only in the first gunicorn worker (lock file guard)."""
+    """Initialise pipeline management. Lock file prevents a second instance."""
     global _worker_lock_fd
     import fcntl
+
+    # Kill any gst-launch orphans left by a previous crash before acquiring the lock.
+    subprocess.run(["pkill", "-9", "-f", "gst-launch-1.0"], check=False)
+    time.sleep(0.5)
+
     lock_path = BASE_DIR / "worker.lock"
     try:
         _worker_lock_fd = open(lock_path, "w")
         fcntl.flock(_worker_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        log.info(f"Worker {os.getpid()}: standby (pipeline manager already running)")
-        # Still run NDI discovery so all workers can serve the /api/sources endpoint
-        threading.Thread(target=background_ndi_discovery, daemon=True).start()
-        return
+        log.error("Another instance is already running — exiting.")
+        raise SystemExit(1)
 
-    log.info(f"Worker {os.getpid()}: pipeline manager active")
+    log.info(f"PID {os.getpid()}: pipeline manager active")
     # Show splash on connected displays only
     for d in pipeline_mgr.displays:
         if d.get("connected"):
@@ -1067,4 +1070,4 @@ def startup():
 startup()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)
