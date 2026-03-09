@@ -390,35 +390,26 @@ class PipelineManager:
         par = "pixel-aspect-ratio=1/1"
         size = f"width={scale_w},height={scale_h}"
 
-        # Hardware scaler: Rockchip RGA via v4l2video1convert (/dev/video1).
-        # Offloads format conversion + scaling to hardware; eliminates all SW videoconvert.
-        # Only available on rk3399 (RGA device confirmed at /dev/video1).
-        # rk3588 always uses software path (BGRx requirement on primary plane).
+        # Scaler quality/speed setting.
+        # n-threads splits the frame into bands processed in parallel (big win for 4K downscale).
+        # method=0 nearest-neighbor (fastest), method=1 bilinear (default), method=3 sinc (best).
         scaler = cfg_disp.get("scaler", "auto")
-        use_hw = self.board == "rk3399" and scaler in ("auto", "hardware")
+        if scaler == "fast":
+            vs = "videoscale method=0 n-threads=4"
+        elif scaler == "quality":
+            vs = "videoscale method=3 n-threads=2"
+        else:  # auto / balanced
+            vs = "videoscale method=1 n-threads=4"
 
-        if use_hw:
-            if scaling == "stretch":
-                # RGA: single-pass 4K UYVY → target NV12 (no SW videoconvert at all)
-                video_pipe = f"v4l2video1convert ! {final_fmt},{size}"
-            elif scaling == "crop":
-                # SW crop to target AR → RGA scale + format convert
-                video_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
-                              f"v4l2video1convert ! {final_fmt},{size}")
-            else:  # letterbox / fit
-                # SW scale with borders (geometry only, no format change) → RGA format convert
-                video_pipe = (f"videoscale add-borders=true ! "
-                              f"video/x-raw,{size},{par} ! "
-                              f"v4l2video1convert ! {final_fmt}")
-        else:
-            if scaling == "stretch":
-                scale_pipe = f"videoscale ! video/x-raw,{size},{par}"
-            elif scaling == "crop":
-                scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
-                              f"videoscale ! video/x-raw,{size},{par}")
-            else:  # letterbox / fit
-                scale_pipe = f"videoscale add-borders=true ! video/x-raw,{size},{par}"
-            video_pipe = f"videoconvert ! {scale_pipe} ! videoconvert ! {final_fmt}"
+        if scaling == "stretch":
+            scale_pipe = f"{vs} ! video/x-raw,{size},{par}"
+        elif scaling == "crop":
+            scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                          f"{vs} ! video/x-raw,{size},{par}")
+        else:  # letterbox / fit
+            scale_pipe = f"{vs} add-borders=true ! video/x-raw,{size},{par}"
+
+        video_pipe = f"videoconvert ! {scale_pipe} ! videoconvert ! {final_fmt}"
 
         # OSD overlay
         osd_pipe = ""

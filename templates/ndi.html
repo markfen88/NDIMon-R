@@ -152,11 +152,11 @@
             </select>
           </div>
           <div class="col-6 col-md-3">
-            <label class="form-label">Scaler</label>
+            <label class="form-label">Scaler Quality</label>
             <select class="form-select form-select-sm" id="v-scaler-{{ d.name|replace('-','_') }}">
-              <option value="auto"     {{ 'selected' if dc.get('scaler','auto')=='auto' }}>Auto</option>
-              <option value="hardware" {{ 'selected' if dc.get('scaler')=='hardware' }}>Hardware (RGA)</option>
-              <option value="software" {{ 'selected' if dc.get('scaler')=='software' }}>Software</option>
+              <option value="auto"    {{ 'selected' if dc.get('scaler','auto') not in ('fast','quality') }}>Balanced (4 threads)</option>
+              <option value="fast"    {{ 'selected' if dc.get('scaler')=='fast' }}>Fast (nearest, 4 threads)</option>
+              <option value="quality" {{ 'selected' if dc.get('scaler')=='quality' }}>Quality (sinc, 2 threads)</option>
             </select>
           </div>
           <div class="col-12 col-md-6">
