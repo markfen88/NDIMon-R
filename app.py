@@ -391,15 +391,16 @@ class PipelineManager:
         size = f"width={scale_w},height={scale_h}"
 
         # Scaler quality/speed setting.
-        # n-threads splits the frame into bands processed in parallel (big win for 4K downscale).
-        # method=0 nearest-neighbor (fastest), method=1 bilinear (default), method=3 sinc (best).
+        # n-threads=6 uses all cores (4x A53 + 2x A72 on RK3399).
+        # Skip the pre-scale videoconvert: videoscale handles UYVY natively, saving a full-res
+        # format conversion (~12 MB per 4K frame). Only one videoconvert runs at output size.
         scaler = cfg_disp.get("scaler", "auto")
         if scaler == "fast":
-            vs = "videoscale method=0 n-threads=4"
+            vs = "videoscale method=0 n-threads=6"
         elif scaler == "quality":
-            vs = "videoscale method=3 n-threads=2"
+            vs = "videoscale method=3 n-threads=4"
         else:  # auto / balanced
-            vs = "videoscale method=1 n-threads=4"
+            vs = "videoscale method=1 n-threads=6"
 
         if scaling == "stretch":
             scale_pipe = f"{vs} ! video/x-raw,{size},{par}"
@@ -409,7 +410,7 @@ class PipelineManager:
         else:  # letterbox / fit
             scale_pipe = f"{vs} add-borders=true ! video/x-raw,{size},{par}"
 
-        video_pipe = f"videoconvert ! {scale_pipe} ! videoconvert ! {final_fmt}"
+        video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
 
         # OSD overlay
         osd_pipe = ""
@@ -426,14 +427,14 @@ class PipelineManager:
         # Use fakesink with audioconvert to properly drain the audio pad.
         audio_branch = "demux.audio ! queue ! audioconvert ! fakesink sync=false"
 
-        # Video queue: max-size-bytes=0 (unlimited bytes) because a single uncompressed
-        # 4K frame (~12 MB NV12 / ~32 MB BGRx) exceeds the 10 MB default and causes
-        # GStreamer to deadlock after the first frame is delivered.
+        # Video queue: unlimited bytes (single 4K UYVY frame is ~12 MB, exceeds 10 MB default
+        # causing deadlock). leaky=downstream drops oldest queued frame when full so the
+        # pipeline never backs up — always shows the most recent live frame.
         pipeline = (
-            f"gst-launch-1.0 -e "
+            f"nice -n -10 gst-launch-1.0 -e "
             f"{ndi_src}! queue ! "
             f"ndisrcdemux name=demux "
-            f"demux.video ! queue max-size-bytes=0 max-size-buffers=3 max-size-time=0 ! "
+            f"demux.video ! queue max-size-bytes=0 max-size-buffers=2 max-size-time=0 leaky=downstream ! "
             f"{video_pipe} ! "
             f"{osd_pipe}"
             f"{sink} "
@@ -1025,6 +1026,15 @@ def startup():
         raise SystemExit(1)
 
     log.info(f"PID {os.getpid()}: pipeline manager active")
+    # Set CPU governor to performance — eliminates frequency-scaling latency during 4K decode.
+    try:
+        gov_path = "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor"
+        count = int(Path("/sys/devices/system/cpu/present").read_text().strip().split("-")[-1]) + 1
+        for i in range(count):
+            Path(gov_path.format(i)).write_text("performance")
+        log.info(f"CPU governor set to performance on {count} cores")
+    except Exception as e:
+        log.warning(f"Could not set CPU governor: {e}")
     # Show splash on connected displays only
     for d in pipeline_mgr.displays:
         if d.get("connected"):
