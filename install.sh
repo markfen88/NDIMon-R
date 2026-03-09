@@ -39,22 +39,25 @@ BOARD="generic"
 SoC="unknown"
 BOARD_NAME="Unknown"
 
-DT_MODEL=$(cat /sys/firmware/devicetree/base/model 2>/dev/null || true)
+# Use compatible string (null-separated) which reliably contains SoC ID
+DT_MODEL=$(tr -d "\0" < /sys/firmware/devicetree/base/model 2>/dev/null || true)
+DT_COMPAT=$(tr "\0" "\n" < /sys/firmware/devicetree/base/compatible 2>/dev/null || true)
 CPUINFO=$(cat /proc/cpuinfo 2>/dev/null || true)
+DETECT_SRC="$DT_MODEL $DT_COMPAT $CPUINFO"
 
-if echo "$DT_MODEL $CPUINFO" | grep -qi "rk3588"; then
+if echo "$DETECT_SRC" | grep -qi "rk3588"; then
     BOARD="rk3588"; SoC="RK3588"
     echo "$DT_MODEL" | grep -qi "rock 5b" && BOARD_NAME="Rock 5B" || BOARD_NAME="RK3588 board"
-elif echo "$DT_MODEL $CPUINFO" | grep -qi "rk3399"; then
+elif echo "$DETECT_SRC" | grep -qi "rk3399"; then
     BOARD="rk3399"; SoC="RK3399"
-    if echo "$DT_MODEL" | grep -qi "rock 4c"; then
+    if echo "$DT_MODEL" | grep -qi "rock.*4c\|rockpi4c"; then
         BOARD_NAME="Rock 4C"
-    elif echo "$DT_MODEL" | grep -qi "rock pi 4\|rockpi 4"; then
+    elif echo "$DT_MODEL" | grep -qi "rock pi 4\|rockpi 4\|rock 4b"; then
         BOARD_NAME="Rock Pi 4B+"
     else
         BOARD_NAME="RK3399 board"
     fi
-elif echo "$DT_MODEL $CPUINFO" | grep -qi "raspberry pi 5"; then
+elif echo "$DETECT_SRC" | grep -qi "raspberry pi 5"; then
     BOARD="rpi5"; SoC="BCM2712"; BOARD_NAME="Raspberry Pi 5"
 fi
 
