@@ -223,20 +223,51 @@
                 <input class="form-check-input" type="checkbox" id="cec-enabled" {{ 'checked' if cfg.cec.enabled }}>
                 <label class="form-check-label">Enable HDMI CEC (Channel Up/Down cycles NDI sources)</label>
               </div>
-              <div class="section-title">Splash Screen</div>
-              <div class="form-check form-switch mb-3">
-                <input class="form-check-input" type="checkbox" id="splash-overlay" {{ 'checked' if cfg.splash.show_overlay }}>
-                <label class="form-check-label">Show alias + IP overlay on splash</label>
-              </div>
-              <div class="mb-3">
-                <label class="form-label">Custom Splash Image (auto-resized to 1920×1080)</label>
-                <div class="input-group" style="max-width:420px">
-                  <input type="file" class="form-control" id="splash-file" accept="image/*">
-                  <button class="btn btn-outline-info" onclick="uploadSplash()"><i class="bi bi-upload me-1"></i>Upload</button>
+              <div class="section-title">Splash Logo</div>
+              <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                  <label class="form-label">Background Color</label>
+                  <div class="d-flex align-items-center gap-2">
+                    <input type="color" class="form-control form-control-color" id="splash-bgcolor"
+                           value="{{ cfg.splash.get('bg_color','#1a1d23') }}" style="width:56px;height:38px;padding:2px">
+                    <input type="text" class="form-control form-control-sm" id="splash-bgcolor-hex"
+                           value="{{ cfg.splash.get('bg_color','#1a1d23') }}" style="max-width:100px;font-family:monospace">
+                  </div>
                 </div>
-                {% if cfg.splash.custom_image %}
-                <div class="form-text text-success mt-1"><i class="bi bi-check-circle me-1"></i>{{ cfg.splash.custom_image }}</div>
-                {% endif %}
+                <div class="col-md-4">
+                  <label class="form-label">Logo PNG <span class="text-secondary small">(transparency supported)</span></label>
+                  <div class="input-group">
+                    <input type="file" class="form-control form-control-sm" id="splash-file" accept=".png">
+                    <button class="btn btn-outline-info btn-sm" onclick="uploadSplash()"><i class="bi bi-upload me-1"></i>Upload</button>
+                  </div>
+                  {% if cfg.splash.get('logo') %}
+                  <div class="form-text text-success mt-1"><i class="bi bi-check-circle me-1"></i>{{ cfg.splash.logo.split('/')[-1] }}</div>
+                  {% endif %}
+                  <div class="form-text">Auto-scaled so the largest dimension fits within 60% of the screen, centered.</div>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Overlay</label>
+                  <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" id="splash-overlay" {{ 'checked' if cfg.splash.show_overlay }}>
+                    <label class="form-check-label small">Show alias &amp; IP (top-right, small)</label>
+                  </div>
+                  <button class="btn btn-sm btn-outline-secondary" onclick="saveSplashSettings()">
+                    <i class="bi bi-save me-1"></i>Save Splash Settings
+                  </button>
+                </div>
+              </div>
+              <div class="section-title">Channel Banner</div>
+              <div class="row g-3 mb-4">
+                <div class="col-md-5">
+                  <label class="form-label">Duration on Source Switch <span class="text-secondary small">(0 = disabled)</span></label>
+                  <div class="input-group" style="max-width:220px">
+                    <input type="number" class="form-control form-control-sm" id="banner-duration"
+                           value="{{ cfg.video.get('banner_duration', 5) }}" min="0" max="30">
+                    <span class="input-group-text small">seconds</span>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="saveBannerDuration()"><i class="bi bi-save"></i></button>
+                  </div>
+                  <div class="form-text">Briefly shows source name + display info when switching channels (via CEC or web UI). Helps identify the right source.</div>
+                </div>
               </div>
               <div class="section-title">Backup &amp; Restore</div>
               <div class="row g-3 mb-4">
@@ -340,11 +371,24 @@ async function sysAction(action) {
 }
 async function uploadSplash() {
   const fi = document.getElementById('splash-file');
-  if (!fi.files.length) { showToast('Select a file first', 'warning'); return; }
+  if (!fi.files.length) { showToast('Select a PNG file first', 'warning'); return; }
   const fd = new FormData(); fd.append('file', fi.files[0]);
   const r  = await fetch('/api/splash/upload', {method:'POST', body: fd});
   const d  = await r.json();
-  showToast(d.ok ? 'Splash uploaded & resized to 1080p' : ('Error: '+d.error), d.ok ? 'success' : 'danger');
+  showToast(d.ok ? 'Logo uploaded — splash updated on idle displays' : ('Error: '+d.error), d.ok ? 'success' : 'danger');
+}
+async function saveSplashSettings() {
+  const color   = document.getElementById('splash-bgcolor').value;
+  const overlay = document.getElementById('splash-overlay').checked;
+  const d = await post('/api/splash/settings', {bg_color: color, show_overlay: overlay});
+  showToast(d.ok ? 'Splash settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
+}
+async function saveBannerDuration() {
+  const dur = parseInt(document.getElementById('banner-duration').value) || 0;
+  const cfg = await (await fetch('/api/config')).json();
+  cfg.video.banner_duration = dur;
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? `Banner duration set to ${dur}s` : 'Save failed', d.ok ? 'success' : 'danger');
 }
 async function restoreBackup() {
   const fi = document.getElementById('restore-file');
@@ -364,6 +408,17 @@ async function restoreBackup() {
   } catch(e) { showToast('Restore error: ' + e, 'danger'); }
 }
 function ptz(action) { showToast('PTZ: '+action, 'info'); }
+// Sync color picker ↔ hex text field
+document.addEventListener('DOMContentLoaded', () => {
+  const picker = document.getElementById('splash-bgcolor');
+  const hex    = document.getElementById('splash-bgcolor-hex');
+  if (picker && hex) {
+    picker.addEventListener('input', () => { hex.value = picker.value; });
+    hex.addEventListener('input',   () => {
+      if (/^#[0-9a-fA-F]{6}$/.test(hex.value)) picker.value = hex.value;
+    });
+  }
+});
 function toggleStaticFields() {
   document.getElementById('static-fields').style.display = document.getElementById('net-mode').value==='static' ? '' : 'none';
 }

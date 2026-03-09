@@ -95,6 +95,40 @@ def get_system_uptime():
     except Exception:
         return "N/A"
 
+# ── Splash Image Generator ───────────────────────────────────────────────────
+def _generate_splash_image(cfg, display_w=1920, display_h=1080):
+    """Compose splash PNG: solid color background + centered logo (PNG with alpha)."""
+    splash_cfg = cfg.get("splash", {})
+    bg_raw = splash_cfg.get("bg_color", "#1a1d23").lstrip("#")
+    try:
+        bg_color = tuple(int(bg_raw[i:i+2], 16) for i in (0, 2, 4))
+    except Exception:
+        bg_color = (26, 29, 35)
+
+    img = Image.new("RGB", (display_w, display_h), bg_color)
+
+    logo_path = splash_cfg.get("logo", "")
+    if logo_path and Path(logo_path).exists():
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            lw, lh = logo.size
+            # Scale so the LARGEST dimension fits within 60% of the screen
+            max_w = int(display_w * 0.6)
+            max_h = int(display_h * 0.6)
+            scale = min(max_w / lw, max_h / lh, 1.0)  # never upscale
+            new_w = max(1, int(lw * scale))
+            new_h = max(1, int(lh * scale))
+            logo = logo.resize((new_w, new_h), Image.LANCZOS)
+            x = (display_w - new_w) // 2
+            y = (display_h - new_h) // 2
+            img.paste(logo, (x, y), logo)
+        except Exception as e:
+            log.warning(f"Splash logo load failed: {e}")
+
+    out = STATIC_DIR / "splash_generated.png"
+    img.save(str(out), "PNG")
+    return str(out)
+
 # ── Backup / Restore ─────────────────────────────────────────────────────────
 def _cleanup_old_backups():
     """Delete backup zips older than BACKUP_TTL. Safe to call at any time."""
@@ -448,7 +482,7 @@ class PipelineManager:
             pass
         return modes or ["1920x1080@60.00", "1280x720@60.00"]
 
-    def _build_pipeline(self, source, display, cfg_disp, chroma, scaling, resolution, framerate, osd=False):
+    def _build_pipeline(self, source, display, cfg_disp, chroma, scaling, resolution, framerate, osd=False, banner_text=None):
         """Build gst-launch-1.0 command for NDI → HDMI."""
         connector = display["id"]
         scale_w, scale_h = 1920, 1080
@@ -528,9 +562,14 @@ class PipelineManager:
 
             video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
 
-        # OSD overlay
+        # OSD / channel banner overlay
         osd_pipe = ""
-        if osd:
+        if banner_text:
+            # Channel info banner: shown briefly on source switch, dismissed by restart
+            safe = banner_text.replace('"', "'")
+            osd_pipe = (f'textoverlay text="{safe}" valignment=center halignment=center '
+                        f'font-desc="Sans Bold 52" shaded-background=true ! ')
+        elif osd:
             ip = get_ip()
             osd_text = f"{source} | {ip}:8080"
             osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=center '
@@ -558,36 +597,38 @@ class PipelineManager:
         )
         return pipeline
 
-    def _build_splash(self, display, image_path=None):
-        """Build splash screen pipeline."""
-        connector  = display["id"]
+    def _build_splash(self, display, cfg=None):
+        """Build splash pipeline: PIL-generated PNG (logo + bg color) + small top-right overlay."""
+        connector   = display["id"]
         bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
-        cfg        = load_config()
-        alias      = cfg["ndi"]["alias"]
-        ip         = get_ip()
-        overlay    = f"{alias}  |  {ip}:8080"
+        if cfg is None:
+            cfg = load_config()
+        alias       = cfg["ndi"]["alias"]
+        ip          = get_ip()
 
-        if image_path and Path(image_path).exists():
-            src = f'filesrc location="{image_path}" ! decodebin'
-        else:
-            src = f'videotestsrc pattern=black'
+        splash_img  = _generate_splash_image(cfg)
+        # imagefreeze holds the single decoded PNG frame as a live infinite stream
+        src         = f'filesrc location="{splash_img}" ! pngdec ! imagefreeze ! videoconvert'
+        fmt_part    = "video/x-raw,format=BGRx,width=1920,height=1080" if self.board == "rk3588" \
+                      else "video/x-raw,width=1920,height=1080"
+        sink        = f"kmssink {bus_id_part}connector-id={connector} sync=false"
 
-        fmt_part = "video/x-raw,format=BGRx,width=1920,height=1080" if self.board == "rk3588" \
-                   else "video/x-raw,width=1920,height=1080"
-
-        sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
+        overlay_pipe = ""
+        if cfg["splash"].get("show_overlay", True):
+            label        = f"{alias}  {ip}:8080"
+            overlay_pipe = (f'textoverlay text="{label}" valignment=top halignment=right '
+                            f'font-desc="Sans Bold 11" shaded-background=true ! ')
 
         pipeline = (
             f"gst-launch-1.0 -e "
-            f"{src} ! videoconvert ! videoscale ! "
+            f"{src} ! videoscale ! "
             f"{fmt_part} ! "
-            f'textoverlay text="{overlay}" valignment=bottom halignment=center '
-            f'font-desc="Sans Bold 32" shaded-background=true ! '
+            f"{overlay_pipe}"
             f"{sink}"
         )
         return pipeline
 
-    def start_stream(self, display_name, source, cfg_disp=None):
+    def start_stream(self, display_name, source, cfg_disp=None, show_banner=False):
         cfg = load_config()
         if cfg_disp is None:
             cfg_disp = cfg["displays"].get(display_name, {})
@@ -620,12 +661,12 @@ class PipelineManager:
             return False
         try:
             return self._start_stream_locked(display_name, source, display, cfg_disp, chroma,
-                                             scaling, resolution, framerate, osd, cfg)
+                                             scaling, resolution, framerate, osd, cfg, show_banner)
         finally:
             disp_lock.release()
 
     def _start_stream_locked(self, display_name, source, display, cfg_disp, chroma,
-                              scaling, resolution, framerate, osd, cfg):
+                              scaling, resolution, framerate, osd, cfg, show_banner=False):
         """Inner start_stream — called only while the per-display start lock is held."""
         # Kill existing stream, splash, and any orphaned NDI gst-launch processes.
         with self.lock:
@@ -635,7 +676,15 @@ class PipelineManager:
         subprocess.run(["pkill", "-TERM", "-f", "gst-launch-1.0.*ndisrc"], check=False)
         time.sleep(0.3)  # let killed processes actually exit
 
-        cmd = self._build_pipeline(source, display, cfg_disp, chroma, scaling, resolution, framerate, osd)
+        # Build channel info banner text if requested
+        banner_duration = cfg["video"].get("banner_duration", 5) if show_banner else 0
+        banner_text = None
+        if banner_duration > 0:
+            res_label = resolution if resolution and resolution != "auto" else "auto"
+            banner_text = f"{source}  |  {display_name}  |  {res_label}"
+
+        cmd = self._build_pipeline(source, display, cfg_disp, chroma, scaling, resolution, framerate, osd,
+                                   banner_text=banner_text)
         log.info(f"Starting pipeline: {cmd}")
         try:
             proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid,
@@ -644,18 +693,21 @@ class PipelineManager:
                 self.pipelines[display_name] = {
                     "proc": proc, "source": source,
                     "start_time": time.time(), "pid": proc.pid, "cmd": cmd,
-                    "in_caps": None,
+                    "in_caps": None, "has_banner": banner_text is not None,
                 }
             threading.Thread(target=self._stderr_reader, args=(display_name, proc),
                              daemon=True).start()
-            # OSD auto-dismiss
-            if osd:
-                osd_timeout = cfg["video"].get("osd_timeout", 8)
-                def dismiss_osd():
-                    time.sleep(osd_timeout)
-                    # Would need proper overlay toggle — log for now
-                    log.info(f"OSD dismissed after {osd_timeout}s on {display_name}")
-                threading.Thread(target=dismiss_osd, daemon=True).start()
+            # Channel banner dismiss: restart clean pipeline after banner_duration seconds
+            if banner_duration > 0:
+                def _dismiss_banner(dname=display_name, src=source, dur=banner_duration):
+                    time.sleep(dur)
+                    with self.lock:
+                        info = self.pipelines.get(dname)
+                        if not info or info.get("source") != src or not info.get("has_banner"):
+                            return  # source changed or already clean
+                    log.info(f"Channel banner dismissed on {dname}, restarting clean")
+                    self.start_stream(dname, src, show_banner=False)
+                threading.Thread(target=_dismiss_banner, daemon=True).start()
             # Save last source
             cfg["displays"][display_name]["source"] = source
             cfg["displays"][display_name].pop("paused", None)
@@ -685,14 +737,14 @@ class PipelineManager:
         if show_splash_after:
             self.show_splash(display_name)
 
-    def show_splash(self, display_name):
+    def show_splash(self, display_name, cfg=None):
         self.stop_splash(display_name)
-        cfg        = load_config()
-        img        = cfg["splash"].get("custom_image", "")
-        display    = next((d for d in self.displays if d["name"] == display_name), None)
+        if cfg is None:
+            cfg = load_config()
+        display = next((d for d in self.displays if d["name"] == display_name), None)
         if not display:
             return
-        cmd = self._build_splash(display, img if img else None)
+        cmd = self._build_splash(display, cfg)
         try:
             proc = subprocess.Popen(cmd, shell=True, preexec_fn=os.setsid, env=os.environ.copy())
             with self.lock:
@@ -892,7 +944,7 @@ def cec_listener_thread():
             current = d_cfg.get("source", "")
             idx = sources.index(current) if current in sources else -1
             next_src = sources[(idx + direction) % len(sources)]
-            pipeline_mgr.start_stream(disp_name, next_src)
+            pipeline_mgr.start_stream(disp_name, next_src, show_banner=True)
 
     _cec_status = "error: cec-client exited"
     log.warning("CEC: cec-client process exited")
@@ -1012,7 +1064,7 @@ def api_stream_select():
     _pipeline_backoff.pop(display, None)
     _pipeline_failures.pop(display, None)
     if source:
-        ok_flag = pipeline_mgr.start_stream(display, source)
+        ok_flag = pipeline_mgr.start_stream(display, source, show_banner=True)
     else:
         pipeline_mgr.stop_stream(display)
         ok_flag = True
@@ -1054,24 +1106,48 @@ def api_config_section():
 @app.route("/api/splash/upload", methods=["POST"])
 @require_auth
 def api_splash_upload():
+    """Upload a PNG logo for the splash screen. Alpha channel preserved; stored raw."""
     if "file" not in request.files:
         return jsonify({"ok": False, "error": "No file"}), 400
-    f       = request.files["file"]
-    outpath = UPLOAD_DIR / "splash.jpg"
-    img     = Image.open(f)
-    img     = img.convert("RGB")
-    img     = img.resize((1920, 1080), Image.LANCZOS)
-    img.save(str(outpath), "JPEG", quality=95)
-    cfg     = load_config()
-    cfg["splash"]["custom_image"] = str(outpath)
+    f = request.files["file"]
+    if not f.filename.lower().endswith(".png"):
+        return jsonify({"ok": False, "error": "Only PNG files are supported (alpha channel required)"}), 400
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    outpath = UPLOAD_DIR / "logo.png"
+    try:
+        img = Image.open(f).convert("RGBA")  # preserve alpha
+        img.save(str(outpath), "PNG")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    cfg = load_config()
+    cfg["splash"]["logo"] = str(outpath)
     save_config(cfg)
-    # Refresh splash on all idle displays
+    _refresh_idle_splashes(cfg)
+    return jsonify({"ok": True, "path": str(outpath)})
+
+@app.route("/api/splash/settings", methods=["POST"])
+@require_auth
+def api_splash_settings():
+    """Save splash bg_color and show_overlay."""
+    data = request.get_json()
+    cfg  = load_config()
+    if "bg_color" in data:
+        cfg["splash"]["bg_color"]    = data["bg_color"]
+    if "show_overlay" in data:
+        cfg["splash"]["show_overlay"] = bool(data["show_overlay"])
+    save_config(cfg)
+    _refresh_idle_splashes(cfg)
+    return jsonify({"ok": True})
+
+def _refresh_idle_splashes(cfg=None):
+    """Regenerate and display splash on all idle displays."""
+    if cfg is None:
+        cfg = load_config()
     for d in pipeline_mgr.displays:
         with pipeline_mgr.lock:
             active = d["name"] in pipeline_mgr.pipelines
         if not active:
-            pipeline_mgr.show_splash(d["name"])
-    return jsonify({"ok": True, "path": str(outpath)})
+            pipeline_mgr.show_splash(d["name"], cfg)
 
 @app.route("/api/network/apply", methods=["POST"])
 @require_auth
