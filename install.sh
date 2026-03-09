@@ -179,7 +179,7 @@ if [[ "$BOARD" == "rk3588" || "$BOARD" == "rk3399" ]]; then
         apt-get install -y --no-install-recommends curl gnupg
         # Fetch keyring
         KEYRING_URL="https://apt.radxa.com/bookworm-stable/public.key"
-        curl -fsSL "$KEYRING_URL" | gpg --dearmor -o /usr/share/keyrings/radxa-archive-keyring.gpg \
+        curl -fsSL "$KEYRING_URL" | gpg --batch --yes --dearmor -o /usr/share/keyrings/radxa-archive-keyring.gpg \
             || warn "Could not fetch Radxa keyring — skipping MPP install"
         if [[ -f /usr/share/keyrings/radxa-archive-keyring.gpg ]]; then
             # Try bookworm-stable; fall back to trixie-stable for Debian 13 hosts
@@ -250,7 +250,9 @@ fi
 ###############################################################################
 section "Setting up Python environment"
 
-if [[ ! -d "$INSTALL_DIR/venv" ]]; then
+if [[ ! -x "$INSTALL_DIR/venv/bin/pip" ]]; then
+    info "Creating Python virtualenv..."
+    rm -rf "$INSTALL_DIR/venv"
     python3 -m venv "$INSTALL_DIR/venv"
 fi
 
