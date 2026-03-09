@@ -14,19 +14,16 @@
   },
   "displays": {
     "HDMI-A-1": {
-      "chroma": "NV12",
-      "resolution": "auto",
+      "source": "",
       "scaling": "letterbox",
-      "source": "RAWRZILLA (VLC)"
+      "chroma": "NV12",
+      "resolution": "auto"
     },
     "HDMI-A-2": {
+      "source": "",
+      "scaling": "crop",
       "chroma": "RGB",
-      "resolution": "auto",
-      "scaling": "letterbox",
-      "source": "RAWRZILLA (VLC)",
-      "framerate": "auto",
-      "backup_source": "",
-      "enabled": true
+      "resolution": "auto"
     }
   },
   "multiview": {
@@ -40,11 +37,9 @@
     ]
   },
   "ndi": {
-    "alias": "NDI Monitor",
+    "alias": "",
     "bandwidth": "highest",
-    "discovery_servers": [
-      "10.25.0.49"
-    ],
+    "discovery_servers": [],
     "groups": [
       "Public"
     ]
