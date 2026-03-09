@@ -625,9 +625,20 @@ class PipelineManager:
 pipeline_mgr = PipelineManager()
 
 # ── Auto-Recovery Thread ──────────────────────────────────────────────────────
-_pipeline_failures = {}  # disp_name -> (fail_count, last_start_time)
-MAX_FAST_FAILURES   = 3  # pause after this many crashes within FAST_FAIL_WINDOW seconds
-FAST_FAIL_WINDOW    = 30 # seconds
+_pipeline_failures  = {}  # disp_name -> (fail_count, last_start_time)
+_display_connected  = {}  # disp_name -> bool (last known state for hotplug detection)
+MAX_FAST_FAILURES   = 3   # pause after this many crashes within FAST_FAIL_WINDOW seconds
+FAST_FAIL_WINDOW    = 30  # seconds
+
+def _sysfs_connected(disp_name):
+    """Read display connected state from sysfs (reliable, no subprocess)."""
+    import glob as _glob
+    for path in _glob.glob(f"/sys/class/drm/card*-{disp_name}/status"):
+        try:
+            return open(path).read().strip() == "connected"
+        except Exception:
+            pass
+    return False
 
 def auto_recovery_thread():
     """Every 8s: check active streams, restart dead ones, auto-connect when source appears."""
@@ -678,6 +689,14 @@ def auto_recovery_thread():
                     elif backup_source and backup_source in available:
                         log.info(f"Failover: {backup_source} → {disp_name}")
                         pipeline_mgr.start_stream(disp_name, backup_source)
+                    else:
+                        # Hotplug: refresh splash if display just reconnected
+                        now_connected = _sysfs_connected(disp_name)
+                        was_connected = _display_connected.get(disp_name, True)
+                        if now_connected and not was_connected:
+                            log.info(f"Display {disp_name} reconnected — refreshing splash")
+                            pipeline_mgr.show_splash(disp_name)
+                        _display_connected[disp_name] = now_connected
         except Exception as e:
             log.error(f"Auto-recovery error: {e}")
         time.sleep(8)
