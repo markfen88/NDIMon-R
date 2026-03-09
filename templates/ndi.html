@@ -163,6 +163,15 @@
               <i class="bi bi-exclamation-triangle me-1"></i>RGA not detected — will fall back to software
             </div>
           </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Rotation</label>
+            <select class="form-select form-select-sm" id="v-rotation-{{ d.name|replace('-','_') }}">
+              <option value="0"   {{ 'selected' if dc.get('rotation', 0)|int == 0   }}>0° (Normal)</option>
+              <option value="90"  {{ 'selected' if dc.get('rotation', 0)|int == 90  }}>90° Clockwise</option>
+              <option value="180" {{ 'selected' if dc.get('rotation', 0)|int == 180 }}>180°</option>
+              <option value="270" {{ 'selected' if dc.get('rotation', 0)|int == 270 }}>270° Clockwise</option>
+            </select>
+          </div>
           <div class="col-12 col-md-6">
             <label class="form-label">Backup / Failover Source</label>
             <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}">
@@ -197,7 +206,7 @@
           <div class="section-title">Identity</div>
           <div class="mb-3">
             <label class="form-label">NDI Alias (Display Name)</label>
-            <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}">
+            <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}" placeholder="NDIMON-XXXX">
           </div>
           <div class="mb-3">
             <label class="form-label">Bandwidth</label>
@@ -710,6 +719,7 @@ async function applySourceValue(display, source) {
   cfg.displays[display].chroma       = document.getElementById('v-chroma-'+key)?.value || 'NV12';
   cfg.displays[display].scaling      = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].scaler       = document.getElementById('v-scaler-'+key)?.value || 'auto';
+  cfg.displays[display].rotation     = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
   cfg.displays[display].backup_source= document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled      = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
@@ -733,6 +743,7 @@ async function saveDisplayVideo(display) {
   cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
   cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
+  cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
   cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);

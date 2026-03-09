@@ -25,6 +25,10 @@
   .ptz-pad{display:grid;grid-template-columns:repeat(3,60px);gap:4px;justify-content:center}
   .ptz-btn{width:60px;height:60px;font-size:1.3rem}
   .rec-row{background:#0d0f14;border:1px solid #2a2d35;border-radius:6px;padding:.75rem 1rem}
+  /* Inner tab-pane cards are decorative sections inside the outer card */
+  .tab-content>.tab-pane>.card{background:transparent!important;border:none!important;box-shadow:none}
+  .tab-content>.tab-pane>.card>.card-header{background:transparent;border-bottom:1px solid #2a2d35;padding-left:0;margin-bottom:1rem}
+  .tab-content>.tab-pane>.card>.card-body{padding-left:0;padding-right:0;padding-bottom:0}
 </style>
 </head>
 <body>
@@ -39,10 +43,12 @@
 </nav>
 
 <div class="container-fluid py-3 px-4">
-  <div class="row g-3 align-items-start">
+  <div class="card">
+    <div class="row g-0">
+
     <!-- Sidebar Tabs -->
-    <div class="col-12 col-md-2">
-      <div class="nav flex-column nav-pills" id="settingsTabs" role="tablist">
+    <div class="col-12 col-md-auto" style="border-right:1px solid #2a2d35;min-width:170px">
+      <div class="nav flex-column nav-pills p-3" id="settingsTabs" role="tablist">
         <button class="nav-link active mb-1" data-bs-toggle="pill" data-bs-target="#tab-multiview"><i class="bi bi-grid me-2"></i>Multi-View</button>
         <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-splash"><i class="bi bi-image me-2"></i>Splash</button>
         <button class="nav-link mb-1"        data-bs-toggle="pill" data-bs-target="#tab-rec"><i class="bi bi-record-circle me-2"></i>Recording</button>
@@ -52,8 +58,8 @@
     </div>
 
     <!-- Tab Content -->
-    <div class="col-12 col-md-10">
-      <div class="tab-content" id="settingsContent">
+    <div class="col">
+      <div class="tab-content p-3" id="settingsContent">
 
         <!-- Multi-View Tab -->
         <div class="tab-pane fade show active" id="tab-multiview">
@@ -341,7 +347,8 @@
 
       </div><!-- /tab-content -->
     </div>
-  </div>
+    </div><!-- /row -->
+  </div><!-- /card -->
 </div>
 
 <div class="toast-container" id="toast-container"></div>

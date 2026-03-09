@@ -50,14 +50,25 @@ def save_config(cfg):
     _write_ndi_sdk_config(cfg)
 
 def _write_ndi_sdk_config(cfg):
-    """Write ~/.ndi/ndi-config.v1.json so the NDI SDK library uses our discovery server."""
+    """Write ~/.ndi/ndi-config.v1.json so the NDI SDK library uses our discovery servers/IPs.
+    NDI v6 config requires a top-level 'ndi' key.
+    networks.ips   = comma-separated machine IPs to query directly via port 5960
+    networks.discovery = NDI Discovery Server address (port 5959 default)
+    Both point to the same user-configured list since many setups run both services."""
     try:
         servers = [s.strip() for s in cfg["ndi"].get("discovery_servers", []) if s.strip()]
         groups  = cfg["ndi"].get("groups", ["Public"])
         group_str = ",".join(g.strip() for g in groups if g.strip()) or "Public"
+        networks = {}
+        if servers:
+            ip_str = ",".join(servers)
+            networks["ips"]       = ip_str   # direct per-machine source query (port 5960)
+            networks["discovery"] = ip_str   # NDI discovery server (port 5959)
         ndi_cfg = {
-            "networks": {"discovery": ",".join(servers)} if servers else {},
-            "groups":   {"send": group_str, "recv": group_str},
+            "ndi": {
+                "networks": networks,
+                "groups":   {"send": group_str, "recv": group_str},
+            }
         }
         for home in ["/root", "/home/radxa"]:
             ndi_dir = Path(home) / ".ndi"
@@ -65,8 +76,8 @@ def _write_ndi_sdk_config(cfg):
                 ndi_dir.mkdir(parents=True, exist_ok=True)
                 with open(ndi_dir / "ndi-config.v1.json", "w") as f:
                     json.dump(ndi_cfg, f, indent=2)
-            except Exception:
-                pass
+            except Exception as dir_err:
+                log.warning(f"Could not write NDI config to {ndi_dir}: {dir_err}")
     except Exception as e:
         log.warning(f"Could not write NDI SDK config: {e}")
 
@@ -77,6 +88,32 @@ def get_ip():
         ip = s.getsockname()[0]; s.close(); return ip
     except Exception:
         return "0.0.0.0"
+
+def get_mac_suffix():
+    """Return last 4 hex digits of the primary network interface MAC (upper-case, no colons)."""
+    try:
+        for iface_path in sorted(Path("/sys/class/net").iterdir()):
+            if iface_path.name == "lo":
+                continue
+            addr_file = iface_path / "address"
+            if addr_file.exists():
+                mac = addr_file.read_text().strip().replace(":", "")
+                if mac and mac != "000000000000":
+                    return mac[-4:].upper()
+    except Exception:
+        pass
+    return "0000"
+
+def _migrate_alias():
+    """One-time migration: replace old default 'NDI Monitor' alias with 'NDIMON-XXXX'."""
+    try:
+        cfg = load_config()
+        if cfg.get("ndi", {}).get("alias") in ("NDI Monitor", "", None):
+            cfg.setdefault("ndi", {})["alias"] = f"NDIMON-{get_mac_suffix()}"
+            save_config(cfg)
+            log.info(f"Migrated NDI alias to {cfg['ndi']['alias']}")
+    except Exception as e:
+        log.warning(f"Could not migrate alias: {e}")
 
 def require_auth(f):
     @wraps(f)
@@ -371,25 +408,55 @@ class PipelineManager:
             log.warning("ndisrc probe: libgstndi*.so not found, ndi-app-name assumed no")
 
     def _probe_rga(self):
-        """Detect Rockchip RGA hardware scaler/converter via sysfs V4L2 device names."""
+        """Detect Rockchip RGA hardware scaler/converter via sysfs + GStreamer registry."""
         self.rga_avail = False
         self.rga_dev   = None
         self.rga_el    = None
+
+        # Step 1: find RGA device numbers from sysfs
+        rga_nums = set()
         for name_path in sorted(glob.glob("/sys/class/video4linux/video*/name")):
             try:
                 dev_name = Path(name_path).read_text().strip().lower()
                 if "rga" in dev_name:
                     m = re.search(r'video(\d+)', name_path)
                     if m:
-                        n = m.group(1)
-                        self.rga_dev   = f"/dev/video{n}"
-                        self.rga_el    = f"v4l2video{n}convert"
-                        self.rga_avail = True
-                        log.info(f"RGA hardware scaler: {self.rga_dev} ({dev_name})")
-                        return
+                        rga_nums.add(m.group(1))
             except Exception:
                 pass
-        log.info("No RGA hardware scaler detected")
+
+        if not rga_nums:
+            log.info("No RGA hardware scaler detected")
+            return
+
+        # Step 2: find v4l2videoXconvert elements that exist in the GStreamer registry.
+        # The element number may differ from the /dev/videoN number (depends on driver load order).
+        registry_elements = set()
+        for reg_path in glob.glob("/root/.cache/gstreamer-1.0/registry.*.bin") +                         glob.glob("/home/*/.cache/gstreamer-1.0/registry.*.bin"):
+            try:
+                data = Path(reg_path).read_bytes()
+                for m in re.finditer(rb'v4l2video(\d+)convert', data):
+                    registry_elements.add(m.group(1).decode())
+            except Exception:
+                pass
+
+        # Step 3: prefer element whose number matches RGA device, else take first registry match
+        candidate = None
+        for n in rga_nums:
+            if n in registry_elements:
+                candidate = n
+                break
+        if candidate is None and registry_elements:
+            candidate = sorted(registry_elements)[0]
+
+        if candidate is not None:
+            rga_n = sorted(rga_nums)[0]
+            self.rga_dev   = f"/dev/video{rga_n}"
+            self.rga_el    = f"v4l2video{candidate}convert"
+            self.rga_avail = True
+            log.info(f"RGA hardware scaler: {self.rga_dev} → element {self.rga_el}")
+        else:
+            log.info("No RGA hardware scaler detected")
 
     @staticmethod
     def _parse_gst_caps(line):
@@ -505,12 +572,23 @@ class PipelineManager:
     def _build_pipeline(self, source, display, cfg_disp, chroma, scaling, resolution, framerate, osd=False, banner_text=None):
         """Build gst-launch-1.0 command for NDI → HDMI."""
         connector = display["id"]
-        scale_w, scale_h = 1920, 1080
+
+        # Rotation: 90°/270° swap the content dimensions before scaling so that
+        # after videoflip the output fills the display correctly.
+        rotation  = int(cfg_disp.get("rotation", 0))
+        flip_90   = rotation in (90, 270)
+        flip_map  = {90: "clockwise", 180: "rotate-180", 270: "counterclockwise"}
+        flip_method = flip_map.get(rotation)
+
+        out_w, out_h = 1920, 1080
         if resolution and resolution != "auto":
             try:
-                scale_w, scale_h = map(int, resolution.split("x"))
+                out_w, out_h = map(int, resolution.split("x"))
             except Exception:
                 pass
+        # Content is scaled to portrait dimensions for 90/270, then rotated to landscape
+        scale_w = out_h if flip_90 else out_w
+        scale_h = out_w if flip_90 else out_h
 
         # NDI source element — include url-address for direct connection (bypasses discovery delay)
         with _ndi_sources_lock:
@@ -528,65 +606,39 @@ class PipelineManager:
         else:
             final_fmt = "video/x-raw,format=NV12"
 
-        # IMPORTANT: force pixel-aspect-ratio=1/1 in all caps so GStreamer adds real border
-        # pixels instead of encoding AR correction via PAR metadata (makes modes look identical).
-        par = "pixel-aspect-ratio=1/1"
+        par  = "pixel-aspect-ratio=1/1"
         size = f"width={scale_w},height={scale_h}"
 
-        # Scaler quality/speed setting.
-        # Scaler selection.
-        # Hardware (RGA): UYVY→NV12 SW conversion first (at source res), then RGA scales
-        # NV12→NV12 in hardware (cheap), then final colorspace convert at output res.
-        # On RK3588, RGA3 supports NV12 input — much more capable than RK3399 RGA2.
-        # Software paths: n-threads=6 uses all cores. Skip pre-scale videoconvert since
-        # videoscale handles UYVY natively, saving ~12 MB/frame format conversion.
+        # Scaler selection. RGA (v4l2videoXconvert) only accepts NV12/RGB, not UYVY.
+        # For raw UYVY NDI, hardware mode falls back to fast (method=0).
         scaler = cfg_disp.get("scaler", "auto")
-        if scaler == "hardware" and self.rga_avail:
-            # Hardware RGA path: SW convert UYVY→NV12, RGA scales, SW convert to final fmt
-            rga = self.rga_el
-            if scaling == "stretch":
-                scale_pipe = (
-                    f"videoconvert ! video/x-raw,format=NV12 ! "
-                    f"{rga} ! video/x-raw,{size},format=NV12,{par}"
-                )
-            elif scaling == "crop":
-                scale_pipe = (
-                    f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
-                    f"videoconvert ! video/x-raw,format=NV12 ! "
-                    f"{rga} ! video/x-raw,{size},format=NV12,{par}"
-                )
-            else:  # letterbox / fit
-                scale_pipe = (
-                    f"videoconvert ! video/x-raw,format=NV12 ! "
-                    f"{rga} add-borders=true ! video/x-raw,{size},format=NV12,{par}"
-                )
-            video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
-            log.info(f"Using hardware RGA scaler ({self.rga_el})")
+        if scaler in ("hardware", "fast"):
+            vs = "videoscale method=0 n-threads=6"
+            if scaler == "hardware" and not self.rga_avail:
+                log.warning("Hardware scaler requested but RGA not available — using fast SW")
+        elif scaler == "quality":
+            vs = "videoscale method=3 n-threads=4"
         else:
-            if scaler == "hardware":
-                log.warning("Hardware scaler requested but RGA not available — falling back to software")
-            if scaler == "fast":
-                vs = "videoscale method=0 n-threads=6"
-            elif scaler == "quality":
-                vs = "videoscale method=3 n-threads=4"
-            else:  # auto / balanced / hardware fallback
-                vs = "videoscale method=1 n-threads=6"
+            vs = "videoscale method=1 n-threads=6"
 
-            if scaling == "stretch":
-                scale_pipe = f"{vs} ! video/x-raw,{size},{par}"
-            elif scaling == "crop":
-                scale_pipe = (f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
-                              f"{vs} ! video/x-raw,{size},{par}")
-            else:  # letterbox / fit
-                scale_pipe = f"{vs} add-borders=true ! video/x-raw,{size},{par}"
+        # aspectratiocrop can fail to link directly to videoscale for packed YUV (UYVY)
+        # on some GStreamer builds. Insert videoconvert to normalise format first.
+        if scaling == "stretch":
+            scale_pipe = f"{vs} ! video/x-raw,{size},{par}"
+        elif scaling == "crop":
+            scale_pipe = (f"videoconvert ! "
+                          f"aspectratiocrop aspect-ratio={scale_w}/{scale_h} ! "
+                          f"{vs} ! video/x-raw,{size},{par}")
+        else:  # letterbox / fit
+            scale_pipe = f"{vs} add-borders=true ! video/x-raw,{size},{par}"
 
-            video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
+        flip_part = f"videoflip method={flip_method} ! " if flip_method else ""
+        video_pipe = f"{scale_pipe} ! videoconvert ! {final_fmt}"
 
         # OSD / channel banner overlay
         osd_pipe = ""
         if banner_text:
-            # Channel info banner: shown briefly on source switch, dismissed by restart
-            safe = banner_text.replace('"', "'")
+            safe = banner_text.replace('"', "\'")
             osd_pipe = (f'textoverlay text="{safe}" valignment=center halignment=center '
                         f'font-desc="Sans Bold 52" shaded-background=true ! ')
         elif osd:
@@ -599,14 +651,8 @@ class PipelineManager:
 
         bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
         sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
-
-        # Audio branch: hardware audio sinks conflict with kmssink on RK3399.
-        # Use fakesink with audioconvert to properly drain the audio pad.
         audio_branch = "demux.audio ! queue ! audioconvert ! fakesink sync=false"
 
-        # Video queue: unlimited bytes (single 4K UYVY frame is ~12 MB, exceeds 10 MB default
-        # causing deadlock). leaky=downstream drops oldest queued frame when full so the
-        # pipeline never backs up — always shows the most recent live frame.
         pipeline = (
             f"nice -n -10 gst-launch-1.0 -e -v "
             f"{ndi_src}! queue ! "
@@ -614,10 +660,12 @@ class PipelineManager:
             f"demux.video ! queue max-size-bytes=0 max-size-buffers=2 max-size-time=0 leaky=downstream ! "
             f"{video_pipe} ! "
             f"{osd_pipe}"
+            f"{flip_part}"
             f"{sink} "
             f"{audio_branch}"
         )
         return pipeline
+
 
     def _build_splash(self, display, cfg=None):
         """Build splash pipeline: PIL-generated PNG (logo + bg color) + small top-right overlay."""
@@ -737,6 +785,7 @@ class PipelineManager:
             save_config(cfg)
             ok_msg = f"Stream started: {source} → {display_name}"
             log.info(ok_msg)
+            ptz_mgr.advertise_receiver(source, display_name)
             return True
         except Exception as e:
             log.error(f"Failed to start stream: {e}")
@@ -837,10 +886,16 @@ class _NDIRecvCreate(ctypes.Structure):
         ("p_ndi_recv_name",      ctypes.c_char_p),
     ]
 
+class _NDIRecvAdvertiserCreate(ctypes.Structure):
+    _fields_ = [("p_url_address", ctypes.c_char_p)]
+
 class PTZManager:
     def __init__(self):
-        self._recvs = {}   # source_name -> recv handle (c_void_p value)
+        self._recvs      = {}   # source_name -> recv handle (c_void_p value)
+        self._adv_recvs  = {}   # source_name -> recv handle advertised for discovery
+        self._advertiser = None # NDIlib_recv_advertiser_instance_t
         self._lock  = threading.Lock()
+        self._watch_stop = {}   # disp_name -> threading.Event (signals watch thread to exit)
         try:
             self._lib = ctypes.CDLL("/usr/local/lib/libndi.so")
             # Ensure NDI is initialised (idempotent call)
@@ -848,14 +903,168 @@ class PTZManager:
             self._lib.NDIlib_initialize()
             self._available = True
             log.info("PTZManager: libndi.so loaded successfully")
+            self._init_advertiser()
         except Exception as e:
             self._lib = None
             self._available = False
             log.warning(f"PTZManager: could not load libndi.so: {e}")
 
+    def _init_advertiser(self):
+        """Create an NDI receiver advertiser so this device appears on the discovery server."""
+        try:
+            cfg = load_config()
+            servers = [s.strip() for s in cfg["ndi"].get("discovery_servers", []) if s.strip()]
+            url = ",".join(servers).encode() if servers else None
+            self._lib.NDIlib_recv_advertiser_create.restype  = ctypes.c_void_p
+            self._lib.NDIlib_recv_advertiser_create.argtypes = [ctypes.c_void_p]
+            adv_cfg = _NDIRecvAdvertiserCreate(p_url_address=url)
+            adv = self._lib.NDIlib_recv_advertiser_create(ctypes.byref(adv_cfg))
+            if adv:
+                self._advertiser = adv
+                log.info(f"PTZManager: recv advertiser created (server={url})")
+            else:
+                log.warning("PTZManager: recv advertiser returned NULL (no discovery server?)")
+        except Exception as e:
+            log.warning(f"PTZManager: could not create recv advertiser: {e}")
+
+    def advertise_receiver(self, source_name, disp_name):
+        """Create/update a metadata-only receiver for disp_name and advertise it.
+        Keyed by display name so the receiver identity stays stable across source changes."""
+        if not self._lib or not self._advertiser:
+            return
+        with self._lock:
+            if disp_name in self._adv_recvs:
+                return  # already advertised for this display
+        try:
+            lib = self._lib
+            lib.NDIlib_recv_create_v3.restype  = ctypes.c_void_p
+            lib.NDIlib_recv_create_v3.argtypes = [ctypes.c_void_p]
+            enc_name = source_name.encode("utf-8")
+            with _ndi_sources_lock:
+                url = _ndi_url_cache.get(source_name, "")
+            enc_url = url.encode("utf-8") if url else None
+            src = _NDISource(p_ndi_name=enc_name, p_url_address=enc_url)
+            cfg_s = _NDIRecvCreate(
+                source_to_connect_to=src,
+                color_format=0,
+                bandwidth=-10,
+                allow_video_fields=False,
+                p_ndi_recv_name=disp_name.encode("utf-8"),
+            )
+            recv = lib.NDIlib_recv_create_v3(ctypes.byref(cfg_s))
+            if recv:
+                lib.NDIlib_recv_advertiser_add_receiver.restype  = ctypes.c_bool
+                lib.NDIlib_recv_advertiser_add_receiver.argtypes = [
+                    ctypes.c_void_p, ctypes.c_void_p,
+                    ctypes.c_bool, ctypes.c_bool, ctypes.c_char_p
+                ]
+                ok = lib.NDIlib_recv_advertiser_add_receiver(
+                    self._advertiser, recv, True, True, None
+                )
+                with self._lock:
+                    self._adv_recvs[disp_name] = recv
+                log.info(f"NDI advertiser registered receiver '{disp_name}': ok={ok}")
+                self.start_source_watch(disp_name, recv)
+        except Exception as e:
+            log.warning(f"PTZManager: advertise_receiver error for {disp_name}: {e}")
+
+    def unadvertise_receiver(self, source_name, disp_name):
+        """Remove receiver advertisement for disp_name and destroy the receiver."""
+        if not self._lib or not self._advertiser:
+            return
+        with self._lock:
+            recv = self._adv_recvs.pop(disp_name, None)
+        if not recv:
+            return
+        try:
+            lib = self._lib
+            lib.NDIlib_recv_advertiser_del_receiver.restype  = ctypes.c_bool
+            lib.NDIlib_recv_advertiser_del_receiver.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            self.stop_source_watch(disp_name)
+            lib.NDIlib_recv_advertiser_del_receiver(self._advertiser, recv)
+            lib.NDIlib_recv_destroy.argtypes = [ctypes.c_void_p]
+            lib.NDIlib_recv_destroy(recv)
+            log.info(f"NDI advertiser unregistered receiver '{disp_name}'")
+        except Exception as e:
+            log.warning(f"PTZManager: unadvertise_receiver error for {disp_name}: {e}")
+
     @property
     def available(self):
         return self._available
+
+
+    def start_source_watch(self, disp_name, recv):
+        """Spawn a daemon thread that blocks on NDIlib_recv_get_source_name waiting for a
+        management-tool connect command, then switches the display to the assigned source."""
+        if not self._lib:
+            return
+        # Stop any existing watch for this display
+        self.stop_source_watch(disp_name)
+        stop_evt = threading.Event()
+        with self._lock:
+            self._watch_stop[disp_name] = stop_evt
+
+        lib = self._lib
+        try:
+            lib.NDIlib_recv_get_source_name.restype  = ctypes.c_bool
+            lib.NDIlib_recv_get_source_name.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_char_p),
+                ctypes.c_uint32,
+            ]
+            lib.NDIlib_recv_free_string.restype  = None
+            lib.NDIlib_recv_free_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        except Exception as e:
+            log.warning(f"NDI source-watch: could not bind SDK functions: {e}")
+            return
+
+        def _watch():
+            log.info(f"NDI source-watch started for {disp_name}")
+            name_ptr = ctypes.c_char_p(None)
+            while not stop_evt.is_set():
+                try:
+                    changed = lib.NDIlib_recv_get_source_name(
+                        ctypes.c_void_p(recv),
+                        ctypes.byref(name_ptr),
+                        ctypes.c_uint32(2000),   # 2 s block
+                    )
+                    if changed:
+                        if name_ptr.value:
+                            source_name = name_ptr.value.decode("utf-8", errors="replace")
+                            lib.NDIlib_recv_free_string(ctypes.c_void_p(recv), name_ptr)
+                            name_ptr = ctypes.c_char_p(None)
+                            log.info(f"NDI remote: assign '{source_name}' -> {disp_name}")
+                            cfg = load_config()
+                            disp = cfg["displays"].setdefault(disp_name, {})
+                            disp["source"] = source_name
+                            disp.pop("paused", None)
+                            save_config(cfg)
+                            _pipeline_backoff.pop(disp_name, None)
+                            _pipeline_failures.pop(disp_name, None)
+                            pipeline_mgr.start_stream(disp_name, source_name, show_banner=True)
+                        else:
+                            # Discovery server assigned no source — stop stream
+                            log.info(f"NDI remote: clear source -> {disp_name}")
+                            cfg = load_config()
+                            disp = cfg["displays"].setdefault(disp_name, {})
+                            disp["source"] = ""
+                            disp["paused"] = True
+                            save_config(cfg)
+                            pipeline_mgr.stop_stream(disp_name)
+                except Exception as exc:
+                    log.warning(f"NDI source-watch error on {disp_name}: {exc}")
+                    stop_evt.wait(2)
+            log.info(f"NDI source-watch stopped for {disp_name}")
+
+        t = threading.Thread(target=_watch, daemon=True, name=f"ndi-watch-{disp_name}")
+        t.start()
+
+    def stop_source_watch(self, disp_name):
+        """Signal the source-watch thread for disp_name to exit."""
+        with self._lock:
+            evt = self._watch_stop.pop(disp_name, None)
+        if evt:
+            evt.set()
 
     def _get_recv(self, source_name):
         """Return (or create) a metadata-only NDI receiver for the given source."""
@@ -989,6 +1198,8 @@ class PTZManager:
             log.warning(f"PTZ white_balance error for {source}: {e}")
             return False
 
+# Write NDI SDK config before NDIlib_initialize() is called by PTZManager
+_write_ndi_sdk_config(load_config())
 ptz_mgr = PTZManager()
 pipeline_mgr = PipelineManager()
 
@@ -1078,6 +1289,12 @@ def auto_recovery_thread():
                             log.info(f"Display {disp_name} reconnected — refreshing splash")
                             pipeline_mgr.show_splash(disp_name)
                         _display_connected[disp_name] = now_connected
+                        # Splash watchdog: restart splash if it has died (prevents blank screen)
+                        with pipeline_mgr.lock:
+                            splash_proc = pipeline_mgr.splash_procs.get(disp_name)
+                        if now_connected and (splash_proc is None or splash_proc.poll() is not None):
+                            log.info(f"Splash died on {disp_name} — restarting to prevent blank screen")
+                            pipeline_mgr.show_splash(disp_name)
         except Exception as e:
             log.error(f"Auto-recovery error: {e}")
         time.sleep(8)
@@ -1274,8 +1491,25 @@ def api_config_get():
 @require_auth
 def api_config_set():
     new_cfg = request.get_json()
+    old_cfg = load_config()
     save_config(new_cfg)
+    _restart_changed_streams(old_cfg, new_cfg)
     return jsonify({"ok": True})
+
+def _restart_changed_streams(old_cfg, new_cfg):
+    """Restart active streams whose pipeline-affecting display settings changed."""
+    pipeline_keys = {"scaler", "scaling", "resolution", "framerate", "chroma", "osd", "rotation"}
+    for disp_name, new_disp in new_cfg.get("displays", {}).items():
+        old_disp = old_cfg.get("displays", {}).get(disp_name, {})
+        if not any(new_disp.get(k) != old_disp.get(k) for k in pipeline_keys):
+            continue
+        with pipeline_mgr.lock:
+            pipe_info = pipeline_mgr.pipelines.get(disp_name)
+        if pipe_info and pipe_info["proc"].poll() is None:
+            source = new_disp.get("source", "")
+            if source:
+                log.info(f"Display settings changed for {disp_name} — restarting stream")
+                pipeline_mgr.start_stream(disp_name, source)
 
 @app.route("/api/config/section", methods=["POST"])
 @require_auth
@@ -1525,8 +1759,33 @@ def startup():
         raise SystemExit(1)
 
     log.info(f"PID {os.getpid()}: pipeline manager active")
-    # Write NDI SDK config so gst-launch ndisrc uses the discovery server at startup.
+    # Migrate old alias default and write NDI SDK config at startup.
+    _migrate_alias()
     _write_ndi_sdk_config(load_config())
+    # Wake up displays: set DPMS On via modetest before kmssink takes DRM master.
+    # This ensures monitors don't sleep between service restarts.
+    try:
+        result = subprocess.run(
+            ["modetest", "-M", "rockchip", "-c"],
+            capture_output=True, text=True, timeout=5
+        )
+        connector_ids = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[2] in ("connected", "disconnected"):
+                try:
+                    connector_ids.append(int(parts[0]))
+                except ValueError:
+                    pass
+        for cid in connector_ids:
+            subprocess.run(
+                ["modetest", "-M", "rockchip", "-w", f"{cid}:DPMS:0"],
+                capture_output=True, timeout=3
+            )
+        if connector_ids:
+            log.info(f"DPMS On set for connectors: {connector_ids}")
+    except Exception as e:
+        log.debug(f"DPMS pre-enable skipped: {e}")
     # Set CPU governor to performance — eliminates frequency-scaling latency during 4K decode.
     try:
         gov_path = "/sys/devices/system/cpu/cpu{}/cpufreq/scaling_governor"
@@ -1540,6 +1799,11 @@ def startup():
     for d in pipeline_mgr.displays:
         if d.get("connected"):
             pipeline_mgr.show_splash(d["name"])
+    # Pre-advertise receivers for ALL connected displays on the NDI discovery server.
+    # This makes them visible immediately at boot, even if no source is configured.
+    for d in pipeline_mgr.displays:
+        if d.get("connected"):
+            ptz_mgr.advertise_receiver("", d["name"])
     # Background threads (only in the lock-holding worker)
     threading.Thread(target=background_ndi_discovery, daemon=True).start()
     threading.Thread(target=auto_recovery_thread,     daemon=True).start()
