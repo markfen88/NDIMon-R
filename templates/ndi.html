@@ -141,7 +141,7 @@
                 <label class="form-label">Backup / Failover Source</label>
                 <div class="d-flex gap-2">
                   <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}" style="max-width:340px">
-                    <option value="">— None —</option>
+                    <option value="">— No Source —</option>
                     {% for s in sources %}
                     <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
                     {% endfor %}
@@ -395,7 +395,7 @@ async function refreshSources() {
     });
     document.querySelectorAll('[id^="v-backup-"]').forEach(sel => {
       const cur = sel.value;
-      sel.innerHTML = '<option value="">— None —</option>' +
+      sel.innerHTML = '<option value="">— No Source —</option>' +
         d.sources.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
     });
   } catch(e) {}
@@ -405,12 +405,14 @@ async function refreshSources() {
 async function applyDisplay(display) {
   const key    = display.replace(/-/g,'_');
   const alias         = document.getElementById('alias-'+key)?.value.trim() || '';
-  const manual        = document.getElementById('manual-'+key)?.value.trim() || '';
   const select        = document.getElementById('src-'+key)?.value || '';
-  const source        = manual || select;
-  const manualBackup  = document.getElementById('manual-backup-'+key)?.value.trim() || '';
+  const manual        = document.getElementById('manual-'+key)?.value.trim() || '';
+  // Dropdown takes priority — if user picked a discovered source or "No Source", honour it.
+  // Manual field is only used when the dropdown is set to "No Source" (empty).
+  const source        = select || manual;
   const selectBackup  = document.getElementById('v-backup-'+key)?.value || '';
-  const backup_source = manualBackup || selectBackup;
+  const manualBackup  = document.getElementById('manual-backup-'+key)?.value.trim() || '';
+  const backup_source = selectBackup || manualBackup;
 
   // Save alias
   await post('/api/display/alias', {display, alias});

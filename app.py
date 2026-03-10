@@ -165,6 +165,11 @@ def _generate_splash_image(cfg, display_w=1920, display_h=1080):
     img = Image.new("RGB", (display_w, display_h), bg_color)
 
     logo_path = splash_cfg.get("logo", "")
+    # Migrate old install-dir path transparently if the file moved
+    if logo_path and not Path(logo_path).exists():
+        fallback = str(BASE_DIR / "static" / "img" / "logo.png")
+        if Path(fallback).exists():
+            logo_path = fallback
     if logo_path and Path(logo_path).exists():
         try:
             logo = Image.open(logo_path).convert("RGBA")
@@ -748,15 +753,21 @@ class PipelineManager:
         alias       = cfg["ndi"]["alias"]
         ip          = get_ip()
 
-        # Query preferred resolution from EDID — first mode listed by modetest is preferred
+        # Query preferred resolution from EDID — first mode listed by modetest is preferred.
+        # Retry up to 3× with a short delay because DRM mode enumeration can lag behind
+        # sysfs hotplug detection by a second or two.
         splash_w, splash_h = 1920, 1080
-        try:
-            modes = self.get_supported_modes(display["name"])
-            if modes:
-                wh = modes[0].split("@")[0]
-                splash_w, splash_h = map(int, wh.split("x"))
-        except Exception:
-            pass
+        for _attempt in range(3):
+            try:
+                modes = self.get_supported_modes(display["name"])
+                if modes:
+                    wh = modes[0].split("@")[0]
+                    splash_w, splash_h = map(int, wh.split("x"))
+                    break
+            except Exception:
+                pass
+            if _attempt < 2:
+                time.sleep(1)
 
         splash_img  = _generate_splash_image(cfg, display_w=splash_w, display_h=splash_h)
         # imagefreeze holds the single decoded PNG frame as a live infinite stream
