@@ -844,6 +844,14 @@ class PipelineManager:
     def _start_stream_locked(self, display_name, source, display, cfg_disp, chroma,
                               scaling, resolution, framerate, osd, cfg, show_banner=False):
         """Inner start_stream — called only while the per-display start lock is held."""
+        # Guard: auto_recovery may pass a stale source that the user cleared while
+        # the thread was iterating. Do a fresh config read and abort if source is gone.
+        if source:
+            _guard = load_config()
+            if not _guard["displays"].get(display_name, {}).get("source", ""):
+                log.info(f"Source for {display_name} was cleared — not starting pipeline")
+                self.show_splash(display_name)
+                return False
         # Kill existing stream, splash, and any orphaned NDI gst-launch processes.
         with self.lock:
             p = self.pipelines.pop(display_name, None)
