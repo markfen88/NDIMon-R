@@ -121,34 +121,35 @@
                        value="{{ dc.get('alias', '') }}" placeholder="{{ d.name }}">
               </div>
 
-              <!-- Primary Source -->
+              <!-- NDI Source Settings -->
+              <div class="section-title">NDI Source Settings</div>
               <div class="mb-2">
                 <label class="form-label">Primary Source</label>
-                <select class="form-select form-select-sm" id="src-{{ d.name|replace('-','_') }}">
-                  <option value="">— No Source —</option>
-                  {% for s in sources %}
-                  <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}</option>
-                  {% endfor %}
-                </select>
+                <div class="d-flex gap-2">
+                  <select class="form-select form-select-sm" id="src-{{ d.name|replace('-','_') }}" style="max-width:340px">
+                    <option value="">— No Source —</option>
+                    {% for s in sources %}
+                    <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}</option>
+                    {% endfor %}
+                  </select>
+                  <input type="text" class="form-control form-control-sm" id="manual-{{ d.name|replace('-','_') }}"
+                         placeholder="Manual source name…"
+                         value="{{ dc.get('source','') if dc.get('source','') not in sources else '' }}">
+                </div>
               </div>
-
-              <!-- Backup Source (directly below primary) -->
-              <div class="mb-2">
-                <label class="form-label">Backup / Failover Source</label>
-                <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}">
-                  <option value="">— None —</option>
-                  {% for s in sources %}
-                  <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-
-              <!-- Manual Source -->
               <div class="mb-3">
-                <label class="form-label">Manual Source Name <span class="text-secondary" style="font-size:.75rem">(use if source is not in the list above)</span></label>
-                <input type="text" class="form-control form-control-sm" id="manual-{{ d.name|replace('-','_') }}"
-                       placeholder="e.g. CAMERA (192.168.1.100)"
-                       value="{{ dc.get('source','') if dc.get('source','') not in sources else '' }}">
+                <label class="form-label">Backup / Failover Source</label>
+                <div class="d-flex gap-2">
+                  <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}" style="max-width:340px">
+                    <option value="">— None —</option>
+                    {% for s in sources %}
+                    <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
+                    {% endfor %}
+                  </select>
+                  <input type="text" class="form-control form-control-sm" id="manual-backup-{{ d.name|replace('-','_') }}"
+                         placeholder="Manual backup name…"
+                         value="{{ dc.get('backup_source','') if dc.get('backup_source','') not in sources else '' }}">
+                </div>
               </div>
 
               <!-- Apply button -->
@@ -403,10 +404,13 @@ async function refreshSources() {
 // ── Apply display (alias + source + video + stream) ───────────────────────────
 async function applyDisplay(display) {
   const key    = display.replace(/-/g,'_');
-  const alias  = document.getElementById('alias-'+key)?.value.trim() || '';
-  const manual = document.getElementById('manual-'+key)?.value.trim() || '';
-  const select = document.getElementById('src-'+key)?.value || '';
-  const source = manual || select;
+  const alias         = document.getElementById('alias-'+key)?.value.trim() || '';
+  const manual        = document.getElementById('manual-'+key)?.value.trim() || '';
+  const select        = document.getElementById('src-'+key)?.value || '';
+  const source        = manual || select;
+  const manualBackup  = document.getElementById('manual-backup-'+key)?.value.trim() || '';
+  const selectBackup  = document.getElementById('v-backup-'+key)?.value || '';
+  const backup_source = manualBackup || selectBackup;
 
   // Save alias
   await post('/api/display/alias', {display, alias});
@@ -415,7 +419,7 @@ async function applyDisplay(display) {
   const cfg = await (await fetch('/api/config')).json();
   if (!cfg.displays[display]) cfg.displays[display] = {};
   cfg.displays[display].source        = source;
-  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
+  cfg.displays[display].backup_source = backup_source;
   cfg.displays[display].resolution    = document.getElementById('v-res-'+key)?.value || 'auto';
   cfg.displays[display].framerate     = document.getElementById('v-fps-'+key)?.value || 'auto';
   cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
@@ -447,7 +451,8 @@ async function saveDisplayVideo(display) {
   cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
   cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
-  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
+  const manualBk = document.getElementById('manual-backup-'+key)?.value.trim() || '';
+  cfg.displays[display].backup_source = manualBk || document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
   const source = cfg.displays[display]?.source || '';
