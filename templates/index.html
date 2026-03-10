@@ -104,7 +104,10 @@
           <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name|replace('-','_') }}"></span>
           <span class="display-name"><i class="bi bi-display me-1"></i>{{ d.name }}</span>
           {% if ds.get('active') %}<span class="badge-live live-pulse ms-1">LIVE</span>{% endif %}
-          <span class="ms-auto text-secondary" style="font-size:.72rem">Conn {{ d.id }}</span>
+          <span class="ms-auto d-flex align-items-center gap-2">
+            <span id="conn-{{ d.name|replace('-','_') }}" class="badge rounded-pill" style="font-size:.6rem;padding:.2em .5em;background:{{ '#00e676' if d.connected else '#444' }};color:{{ '#000' if d.connected else '#aaa' }}">{{ 'CONNECTED' if d.connected else 'NO SIGNAL' }}</span>
+            <span class="text-secondary" style="font-size:.72rem">{{ d.id }}</span>
+          </span>
         </div>
         <div class="source-name mb-1" id="src-{{ d.name|replace('-','_') }}">
           {% if ds.get('active') %}
@@ -189,6 +192,13 @@ async function updateStatus() {
       const src = document.getElementById('src-'+key);
       const up  = document.getElementById('up-'+key);
       if (dot) dot.className = 'status-dot ' + (info.active?'live':'idle');
+      const connEl = document.getElementById('conn-'+key);
+      if (connEl) {
+        const conn = info.connected !== false;
+        connEl.textContent = conn ? 'CONNECTED' : 'NO SIGNAL';
+        connEl.style.background = conn ? '#00e676' : '#444';
+        connEl.style.color = conn ? '#000' : '#aaa';
+      }
       if (src) src.innerHTML = info.active
         ? `<span style="color:var(--accent)">${info.source}</span>`
         : (info.source

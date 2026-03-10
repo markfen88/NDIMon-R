@@ -748,11 +748,21 @@ class PipelineManager:
         alias       = cfg["ndi"]["alias"]
         ip          = get_ip()
 
-        splash_img  = _generate_splash_image(cfg)
+        # Query preferred resolution from EDID — first mode listed by modetest is preferred
+        splash_w, splash_h = 1920, 1080
+        try:
+            modes = self.get_supported_modes(display["name"])
+            if modes:
+                wh = modes[0].split("@")[0]
+                splash_w, splash_h = map(int, wh.split("x"))
+        except Exception:
+            pass
+
+        splash_img  = _generate_splash_image(cfg, display_w=splash_w, display_h=splash_h)
         # imagefreeze holds the single decoded PNG frame as a live infinite stream
         src         = f'filesrc location="{splash_img}" ! pngdec ! imagefreeze ! videoconvert'
-        fmt_part    = "video/x-raw,format=BGRx,width=1920,height=1080" if self.board == "rk3588" \
-                      else "video/x-raw,width=1920,height=1080"
+        fmt_part    = f"video/x-raw,format=BGRx,width={splash_w},height={splash_h}" if self.board == "rk3588" \
+                      else f"video/x-raw,width={splash_w},height={splash_h}"
         sink        = f"kmssink {bus_id_part}connector-id={connector} sync=false"
 
         overlay_pipe = ""
@@ -922,8 +932,12 @@ class PipelineManager:
                     "in_caps":  info.get("in_caps"),
                 }
         for d in self.displays:
-            if d["name"] not in status:
-                status[d["name"]] = {"active": False, "source": "", "uptime": "0:00:00"}
+            name = d["name"]
+            connected = _sysfs_connected(name)
+            d["connected"] = connected  # keep cache in sync
+            if name not in status:
+                status[name] = {"active": False, "source": "", "uptime": "0:00:00"}
+            status[name]["connected"] = connected
         return status
 
     def start_recording(self, display_name):
@@ -1508,10 +1522,13 @@ def api_status():
             "cpu": cpu, "mem_used": mem.used, "mem_total": mem.total,
             "mem_pct": mem.percent, "temps": temps,
             "uptime": get_system_uptime(), "ip": get_ip(),
-            "board": pipeline_mgr.board,
-            "cec": _cec_status,
-            "rga_avail": pipeline_mgr.rga_avail,
-            "rga_dev":   pipeline_mgr.rga_dev,
+            "board":         pipeline_mgr.board,
+            "hw_dec":        pipeline_mgr.hw_dec,
+            "hw_available":  pipeline_mgr.mpp_avail,
+            "decoder_chain": getattr(pipeline_mgr, "decoder_chain", [pipeline_mgr.hw_dec]),
+            "cec":           _cec_status,
+            "rga_avail":     pipeline_mgr.rga_avail,
+            "rga_dev":       pipeline_mgr.rga_dev,
         }
     })
 

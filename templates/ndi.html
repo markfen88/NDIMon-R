@@ -81,6 +81,10 @@
           <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name|replace('-','_') }}"></span>
           <strong><i class="bi bi-display me-1"></i>{{ d.name }}</strong>
           {% if ds.get('active') %}<span class="badge bg-success live-pulse" style="font-size:.65rem">LIVE</span>{% endif %}
+          <span class="badge rounded-pill ms-1" id="conn-{{ d.name|replace('-','_') }}"
+                style="font-size:.6rem;padding:.2em .5em;background:{{ '#00e676' if d.connected else '#444' }};color:{{ '#000' if d.connected else '#aaa' }}">
+            {{ 'CONNECTED' if d.connected else 'NO SIGNAL' }}
+          </span>
           <span class="ms-auto text-secondary small" id="info-{{ d.name|replace('-','_') }}">
             {% if ds.get('active') %}{{ ds.get('source','') }} — {{ ds.get('uptime','') }}{% endif %}
           </span>
@@ -840,6 +844,13 @@ async function updateStatus() {
       const dot  = document.getElementById('dot-'+key);
       const info_el = document.getElementById('info-'+key);
       if (dot) dot.className = 'status-dot ' + (info.active?'live':'idle');
+      const connBadge = document.getElementById('conn-'+key);
+      if (connBadge) {
+        const conn = info.connected !== false;
+        connBadge.textContent = conn ? 'CONNECTED' : 'NO SIGNAL';
+        connBadge.style.background = conn ? '#00e676' : '#444';
+        connBadge.style.color = conn ? '#000' : '#aaa';
+      }
       if (info_el) {
         if (info.active) {
           const c = info.in_caps;
