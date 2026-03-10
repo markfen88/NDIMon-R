@@ -342,35 +342,106 @@ class PipelineManager:
         except Exception:
             pass
         if "rk3588" in compatible:
-            self.board      = "rk3588"
-            self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
+            self.board = "rk3588"
         elif "rk3399" in compatible:
-            self.board      = "rk3399"
-            self.hw_dec, self.mpp_avail = self._probe_mpp_decoder()
+            self.board = "rk3399"
         elif "bcm2712" in compatible or "Raspberry Pi 5" in Path("/proc/cpuinfo").read_text(errors="ignore"):
-            self.board      = "rpi5"
-            self.hw_dec     = "v4l2h264dec"
-            self.mpp_avail  = False
+            self.board = "rpi5"
+        elif "bcm2711" in compatible:
+            self.board = "rpi4"
         else:
-            self.board      = "generic"
-            self.hw_dec     = "avdec_h264"
-            self.mpp_avail  = False
+            self.board = "generic"
+
+        # Probe all available decoders — board-agnostic, works on any Linux SBC or x86
+        self.hw_dec, self.mpp_avail, self.decoder_chain = self._probe_hw_decoder()
         log.info(f"Board: {self.board}, HW decoder: {self.hw_dec}")
 
-    def _probe_mpp_decoder(self):
-        """Return (element_name, available) for whichever Rockchip MPP decoder plugin is installed."""
+    def _probe_hw_decoder(self):
+        """Probe for the best available hardware video decoder by scanning GStreamer plugin .so files.
+        Returns (primary_element, hw_available, decoder_chain) where decoder_chain is an ordered
+        list of all discovered decoders (best first) for future HX/compressed-NDI support.
+
+        Priority order:
+          1. Rockchip MPP  — RK3399/RK3588 (mppvideodec / rkmppdec)
+          2. gst-va        — VA-API via libva (Intel, AMD, Qualcomm Adreno, some Mali)
+          3. gst-vaapi     — Legacy VA-API plugin (older distros / Mesa)
+          4. V4L2 stateless— RPi 5, MediaTek, Allwinner H6+, modern Qualcomm (v4l2slh264dec)
+          5. V4L2 M2M      — RPi 4/3, older SoCs (v4l2h264dec)
+          6. avdec_h264    — Software fallback (libav/ffmpeg, always available)
+        """
         plugin_dirs = [
             "/usr/lib/aarch64-linux-gnu/gstreamer-1.0",
+            "/usr/lib/arm-linux-gnueabihf/gstreamer-1.0",
+            "/usr/lib/x86_64-linux-gnu/gstreamer-1.0",
             "/usr/lib/gstreamer-1.0",
+            "/lib/aarch64-linux-gnu/gstreamer-1.0",
         ]
+
+        chain = []
+
+        # 1. Rockchip MPP
         for d in plugin_dirs:
-            # gstreamer1.0-rockchip1 ships libgstrockchipmpp.so (mppvideodec)
             if glob.glob(f"{d}/libgstrockchipmpp.so"):
-                return "mppvideodec", True
-            # Older Radxa packages ship libgstrkmppdec.so (rkmppdec)
+                chain.append(("mppvideodec", "Rockchip MPP (mppvideodec)"))
+                break
             if glob.glob(f"{d}/libgstrkmppdec.so") or glob.glob(f"{d}/libgstmpp.so"):
-                return "rkmppdec", True
-        return "avdec_h264", False
+                chain.append(("rkmppdec", "Rockchip MPP (rkmppdec)"))
+                break
+
+        # 2. gst-va (new VA-API, GStreamer ≥1.20, libva2)
+        va_device = glob.glob("/dev/dri/renderD1*")
+        if va_device:
+            for d in plugin_dirs:
+                if glob.glob(f"{d}/libgstva.so"):
+                    chain.append(("vah264dec", "VA-API/libva (gst-va)"))
+                    break
+
+        # 3. Legacy gst-vaapi plugin
+        if va_device:
+            for d in plugin_dirs:
+                if glob.glob(f"{d}/libgstvaapi.so"):
+                    chain.append(("vaapih264dec", "VA-API (gst-vaapi)"))
+                    break
+
+        # 4. V4L2 stateless codecs (RPi 5 / modern SoCs via libgstv4l2codecs.so)
+        for d in plugin_dirs:
+            if glob.glob(f"{d}/libgstv4l2codecs.so"):
+                chain.append(("v4l2slh264dec", "V4L2 stateless (v4l2slh264dec)"))
+                break
+
+        # 5. V4L2 M2M stateful (RPi 4/3, older SoCs — present in libgstv4l2.so when M2M device found)
+        v4l2_decoders = []
+        for name_path in sorted(glob.glob("/sys/class/video4linux/video*/name")):
+            try:
+                dev_name = Path(name_path).read_text().strip().lower()
+                if any(kw in dev_name for kw in ("h264", "h265", "hevc", "decoder", "codec", "m2m")):
+                    v4l2_decoders.append(dev_name)
+            except Exception:
+                pass
+        if v4l2_decoders:
+            for d in plugin_dirs:
+                if glob.glob(f"{d}/libgstv4l2.so"):
+                    chain.append(("v4l2h264dec", f"V4L2 M2M ({', '.join(v4l2_decoders[:2])})"))
+                    break
+
+        # 6. Software fallback — avdec_h264 from gstreamer1.0-plugins-good (libav/ffmpeg)
+        for d in plugin_dirs:
+            if glob.glob(f"{d}/libgstlibav.so") or glob.glob(f"{d}/libgstavcodec.so"):
+                chain.append(("avdec_h264", "Software/libav (avdec_h264)"))
+                break
+        if not any(el == "avdec_h264" for el, _ in chain):
+            chain.append(("avdec_h264", "Software/libav (avdec_h264)"))  # always add as final fallback
+
+        hw_available = len(chain) > 1 or (chain and chain[0][0] not in ("avdec_h264",))
+        primary = chain[0][0] if chain else "avdec_h264"
+
+        log.info(f"Decoder chain: {[desc for _, desc in chain]}")
+        return primary, hw_available, [el for el, _ in chain]
+
+    # Keep old name as alias for call sites that pass board-specific context
+    def _probe_mpp_decoder(self):
+        primary, avail, _ = self._probe_hw_decoder()
+        return primary, avail
 
     def _probe_kmssink_bus_id(self):
         """Determine whether kmssink needs bus-id=card0.
@@ -642,12 +713,13 @@ class PipelineManager:
             osd_pipe = (f'textoverlay text="{safe}" valignment=center halignment=center '
                         f'font-desc="Sans Bold 52" shaded-background=true ! ')
         elif osd:
-            ip       = get_ip()
-            cfg_full = load_config()
-            osd_text = f"{source}  |  {ip}:8080"
-            ov_props = _overlay_props(cfg_full)
-            osd_pipe = (f'textoverlay text="{osd_text}" valignment=top halignment=right '
-                        f'font-desc="Sans Bold 11" {ov_props} ! ')
+            cfg_full  = load_config()
+            res_str   = f"{out_w}×{out_h}"
+            fps_str   = framerate if framerate and framerate != "auto" else "auto"
+            osd_text  = f"{res_str}  {fps_str}"
+            ov_props  = _overlay_props(cfg_full)
+            osd_pipe  = (f'textoverlay text="{osd_text}" valignment=top halignment=right '
+                         f'font-desc="Sans Bold 11" {ov_props} ! ')
 
         bus_id_part = f"bus-id={self.kmssink_bus_id} " if self.kmssink_bus_id else ""
         sink = f"kmssink {bus_id_part}connector-id={connector} sync=false"
@@ -1226,6 +1298,30 @@ def auto_recovery_thread():
     time.sleep(15)  # startup grace period before first cycle
     while True:
         try:
+            # ── Phase 1: Hotplug scan across ALL DRM connectors ──────────────
+            # Iterates pipeline_mgr.displays (all connectors, set at startup via modetest)
+            # so newly connected displays are caught even if cfg["displays"] is empty.
+            for _d in list(pipeline_mgr.displays):
+                _name = _d["name"]
+                _now  = _sysfs_connected(_name)
+                _was  = _display_connected.get(_name, _now)
+                _display_connected[_name] = _now
+                _d["connected"] = _now
+                if _now and not _was:
+                    log.info(f"Display {_name} hotplugged — starting splash and advertising receiver")
+                    _hcfg = load_config()
+                    if _name not in _hcfg["displays"]:
+                        _hcfg["displays"][_name] = {
+                            "enabled": True, "source": "", "resolution": "auto",
+                            "framerate": "auto", "chroma": "NV12", "scaling": "letterbox",
+                            "scaler": "auto", "rotation": 0, "backup_source": "",
+                            "ndi_lock": False,
+                        }
+                        save_config(_hcfg)
+                    ptz_mgr.advertise_receiver("", _name)
+                    pipeline_mgr.show_splash(_name)
+
+            # ── Phase 2: Per-display recovery and auto-connect ────────────────
             cfg = load_config()
             with _ndi_sources_lock:
                 available = set(_ndi_sources_cache)
@@ -1234,20 +1330,9 @@ def auto_recovery_thread():
                     continue
                 source        = d_cfg.get("source", "")
                 backup_source = d_cfg.get("backup_source", "")
-
-                # Always check live sysfs state — drives hotplug detection for all paths below
-                now_connected = _sysfs_connected(disp_name)
-                was_connected = _display_connected.get(disp_name, now_connected)
-                _display_connected[disp_name] = now_connected
-                # Keep pipeline_mgr.displays cache in sync
-                for _d in pipeline_mgr.displays:
-                    if _d["name"] == disp_name:
-                        _d["connected"] = now_connected
-                        break
-                # On reconnect: re-advertise NDI receiver so discovery server sees it again
-                if now_connected and not was_connected:
-                    log.info(f"Display {disp_name} reconnected")
-                    ptz_mgr.advertise_receiver("", disp_name)
+                now_connected = _display_connected.get(disp_name, False)
+                if not now_connected:
+                    continue  # skip — Phase 1 will handle reconnect when it happens
 
                 with pipeline_mgr.lock:
                     pipe_info = pipeline_mgr.pipelines.get(disp_name)
@@ -1298,16 +1383,12 @@ def auto_recovery_thread():
                         log.info(f"Auto-connecting {active_src} → {disp_name}")
                         pipeline_mgr.start_stream(disp_name, active_src)
                     else:
-                        # Splash: show on reconnect or restart if watchdog detects it died
-                        if now_connected and not was_connected:
-                            log.info(f"Display {disp_name} reconnected — refreshing splash")
+                        # Splash watchdog: restart if it died (prevents blank screen)
+                        with pipeline_mgr.lock:
+                            splash_proc = pipeline_mgr.splash_procs.get(disp_name)
+                        if splash_proc is None or splash_proc.poll() is not None:
+                            log.info(f"Splash died on {disp_name} — restarting to prevent blank screen")
                             pipeline_mgr.show_splash(disp_name)
-                        else:
-                            with pipeline_mgr.lock:
-                                splash_proc = pipeline_mgr.splash_procs.get(disp_name)
-                            if now_connected and (splash_proc is None or splash_proc.poll() is not None):
-                                log.info(f"Splash died on {disp_name} — restarting to prevent blank screen")
-                                pipeline_mgr.show_splash(disp_name)
         except Exception as e:
             log.error(f"Auto-recovery error: {e}")
         time.sleep(8)
