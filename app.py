@@ -322,17 +322,19 @@ def background_ndi_discovery():
             with _ndi_sources_lock:
                 _ndi_sources_cache = found
                 _ndi_url_cache.update(urls)
-            # Persist newly discovered URLs to config so they survive reboots
+            # Persist newly discovered URLs to config so they survive reboots.
+            # Load config fresh here (after the ~5s discovery wait) to avoid
+            # overwriting paused/source fields that may have changed during discovery.
             if urls:
-                cfg = load_config()
-                stored = cfg.setdefault("ndi_source_urls", {})
                 changed = False
+                _fresh_cfg = load_config()
+                stored = _fresh_cfg.setdefault("ndi_source_urls", {})
                 for name, url in urls.items():
                     if stored.get(name) != url:
                         stored[name] = url
                         changed = True
                 if changed:
-                    save_config(cfg)
+                    save_config(_fresh_cfg)
         except Exception as e:
             log.error(f"Discovery thread error: {e}")
         time.sleep(5)
@@ -924,11 +926,10 @@ class PipelineManager:
         with self.lock:
             p = self.pipelines.pop(display_name, None)
         self._kill_pipeline_proc(p)
-        # Remove and re-add the NDI receiver advertisement with empty source so the
-        # discovery server reflects the cleared state (advertise_receiver skips if already
-        # registered, so unadvertise must come first).
-        ptz_mgr.unadvertise_receiver("", display_name)
-        ptz_mgr.advertise_receiver("", display_name)
+        # Do NOT unadvertise/re-advertise here. Re-advertising with "" causes the
+        # NDI discovery server to echo back the stored assignment ("assign RAWRZILLA"),
+        # which fights against the user's explicit None selection regardless of paused flag.
+        # The _watch thread keeps running and respects the paused flag already.
         if show_splash_after:
             self.show_splash(display_name)
 
