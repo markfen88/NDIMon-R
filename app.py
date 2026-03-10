@@ -1014,14 +1014,22 @@ class PTZManager:
         except Exception as e:
             log.warning(f"PTZManager: could not create recv advertiser: {e}")
 
-    def advertise_receiver(self, source_name, disp_name):
+    def advertise_receiver(self, source_name, disp_name, alias=None):
         """Create/update a metadata-only receiver for disp_name and advertise it.
-        Keyed by display name so the receiver identity stays stable across source changes."""
+        Keyed by display name so the receiver identity stays stable across source changes.
+        alias overrides the NDI receiver name shown in discovery; falls back to config then disp_name."""
         if not self._lib or not self._advertiser:
             return
         with self._lock:
             if disp_name in self._adv_recvs:
                 return  # already advertised for this display
+        # Resolve alias: explicit arg > config > display name
+        if alias is None:
+            try:
+                alias = load_config().get("displays", {}).get(disp_name, {}).get("alias", "")
+            except Exception:
+                alias = ""
+        recv_name = (alias.strip() if alias else disp_name)
         try:
             lib = self._lib
             lib.NDIlib_recv_create_v3.restype  = ctypes.c_void_p
@@ -1036,7 +1044,7 @@ class PTZManager:
                 color_format=0,
                 bandwidth=-10,
                 allow_video_fields=False,
-                p_ndi_recv_name=disp_name.encode("utf-8"),
+                p_ndi_recv_name=recv_name.encode("utf-8"),
             )
             recv = lib.NDIlib_recv_create_v3(ctypes.byref(cfg_s))
             if recv:
@@ -1536,6 +1544,24 @@ def api_status():
 @require_auth
 def api_displays():
     return jsonify({"displays": pipeline_mgr.displays})
+
+@app.route("/api/display/alias", methods=["POST"])
+@require_auth
+def api_display_alias():
+    """Save display alias to config and re-advertise receiver with new NDI name."""
+    data = request.get_json(force=True) or {}
+    disp_name = data.get("display", "").strip()
+    alias     = data.get("alias", "").strip()
+    if not disp_name:
+        return jsonify({"ok": False, "error": "missing display"})
+    cfg = load_config()
+    cfg.setdefault("displays", {}).setdefault(disp_name, {})["alias"] = alias
+    save_config(cfg)
+    # Re-advertise receiver with updated alias
+    source = cfg["displays"][disp_name].get("source", "")
+    ptz_mgr.unadvertise_receiver(source, disp_name)
+    ptz_mgr.advertise_receiver(source, disp_name, alias=alias or None)
+    return jsonify({"ok": True})
 
 @app.route("/api/modes/<display_name>")
 @require_auth

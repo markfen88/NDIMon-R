@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NDI — NDIMon-R</title>
+<title>NDI — NDI Monitor</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
@@ -15,14 +15,15 @@
   .nav-link-page:hover{color:#fff}
   .nav-link-page.active{color:var(--accent);font-weight:600}
   .card{background:var(--bg-card);border:1px solid #2a2d35}
-  .card-header{background:#14171f;border-bottom:1px solid #2a2d35;font-weight:600}
+  .nav-pills .nav-link{color:#aaa}
+  .nav-pills .nav-link.active{background:var(--accent);color:#000;font-weight:600}
   .form-control,.form-select{background:#0d0f14;border:1px solid #2a2d35;color:#fff}
   .form-control:focus,.form-select:focus{border-color:var(--accent);box-shadow:0 0 0 .2rem rgba(0,180,216,.2)}
   .form-label{color:#aaa;font-size:.85rem}
   .section-title{color:var(--accent);font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;
-                 margin-bottom:.75rem;margin-top:1.25rem;border-bottom:1px solid #2a2d35;padding-bottom:.3rem}
+                 margin-bottom:.75rem;border-bottom:1px solid #2a2d35;padding-bottom:.3rem;margin-top:.25rem}
   .section-title:first-child{margin-top:0}
-  .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
   .status-dot.live{background:#00e676;box-shadow:0 0 6px #00e676}
   .status-dot.idle{background:#333}
   .source-badge{cursor:pointer;font-size:.72rem;padding:.2em .5em}
@@ -31,11 +32,12 @@
   .toast-container{position:fixed;bottom:1rem;right:1rem;z-index:9999}
   .display-section{border:1px solid #2a2d35;border-radius:8px;padding:1.25rem;background:#0d0f14;margin-bottom:1rem}
   .display-section-header{display:flex;align-items:center;gap:.6rem;margin-bottom:1rem;padding-bottom:.75rem;border-bottom:1px solid #1e2128}
+  .tab-pane:not(.show){display:none!important}
 </style>
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark px-3">
-  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDIMon-R</a>
+  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDI Monitor</a>
   <div class="d-flex align-items-center gap-3 ms-3">
     <a href="/" class="nav-link-page">Dashboard</a>
     <a href="/ndi" class="nav-link-page active">NDI</a>
@@ -48,268 +50,292 @@
 </nav>
 
 <div class="container-fluid py-3 px-4">
-  <div class="row g-3">
+  <div class="card">
+    <div class="row g-0">
 
-    <!-- Left column: per-display source + video -->
-    <div class="col-12 col-xl-8">
-
-      <!-- Discovered Sources strip -->
-      <div class="card mb-3">
-        <div class="card-header d-flex align-items-center justify-content-between">
-          <span><i class="bi bi-broadcast me-2"></i>Discovered NDI Sources</span>
-          <button class="btn btn-sm btn-outline-secondary" onclick="refreshSources()"><i class="bi bi-arrow-clockwise"></i></button>
-        </div>
-        <div class="card-body py-2">
-          <div class="d-flex flex-wrap gap-2" id="source-list">
-            {% for s in sources %}
-            <span class="badge bg-secondary source-badge" onclick="fillAllSelects('{{ s }}')">
-              <i class="bi bi-broadcast-pin me-1"></i>{{ s }}
-            </span>
-            {% else %}
-            <span class="text-secondary small">Scanning for NDI sources…</span>
-            {% endfor %}
-          </div>
-        </div>
-      </div>
-
-      <!-- Per-display sections -->
-      {% for d in displays %}
-      {% set ds = status.get(d.name, {}) %}
-      {% set dc = cfg.displays.get(d.name, {}) %}
-      <div class="display-section">
-        <div class="display-section-header">
-          <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name|replace('-','_') }}"></span>
-          <strong><i class="bi bi-display me-1"></i>{{ d.name }}</strong>
-          {% if ds.get('active') %}<span class="badge bg-success live-pulse" style="font-size:.65rem">LIVE</span>{% endif %}
-          <span class="badge rounded-pill ms-1" id="conn-{{ d.name|replace('-','_') }}"
-                style="font-size:.6rem;padding:.2em .5em;background:{{ '#00e676' if d.connected else '#444' }};color:{{ '#000' if d.connected else '#aaa' }}">
-            {{ 'CONNECTED' if d.connected else 'NO SIGNAL' }}
-          </span>
-          <span class="ms-auto text-secondary small" id="info-{{ d.name|replace('-','_') }}">
-            {% if ds.get('active') %}{{ ds.get('source','') }} — {{ ds.get('uptime','') }}{% endif %}
-          </span>
-        </div>
-
-        <!-- Source selector -->
-        <div class="mb-3">
-          <label class="form-label">NDI Source</label>
-          <div class="d-flex gap-2 flex-wrap">
-            <select class="form-select" id="src-{{ d.name|replace('-','_') }}"
-                    onchange="selectSource('{{ d.name }}')" style="max-width:380px">
-              <option value="">— No Source —</option>
-              {% for s in sources %}
-              <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}</option>
-              {% endfor %}
-            </select>
-            <input type="text" class="form-control" id="manual-{{ d.name|replace('-','_') }}"
-                   placeholder="Manual source name…" style="max-width:220px"
-                   value="{{ dc.get('source','') if dc.get('source','') not in sources else '' }}">
-            <button class="btn btn-outline-info btn-sm" onclick="applySource('{{ d.name }}')">
-              <i class="bi bi-play-fill me-1"></i>Apply
-            </button>
-          </div>
-          <div class="form-text text-secondary">Selecting a source auto-connects and keeps reconnecting. Choose "No Source" to stop.</div>
-        </div>
-
-        <!-- Video output settings -->
-        <div class="row g-2">
-          <div class="col-6 col-md-3">
-            <label class="form-label">Resolution</label>
-            <select class="form-select form-select-sm" id="v-res-{{ d.name|replace('-','_') }}">
-              <option value="auto"      {{ 'selected' if dc.get('resolution')=='auto' }}>Auto</option>
-              <option value="3840x2160" {{ 'selected' if dc.get('resolution')=='3840x2160' }}>4K 2160p</option>
-              <option value="1920x1080" {{ 'selected' if dc.get('resolution')=='1920x1080' }}>1080p</option>
-              <option value="1280x720"  {{ 'selected' if dc.get('resolution')=='1280x720' }}>720p</option>
-              {% for m in modes.get(d.name, []) %}
-              <option value="{{ m.split('@')[0] }}">{{ m }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Framerate</label>
-            <select class="form-select form-select-sm" id="v-fps-{{ d.name|replace('-','_') }}">
-              <option value="auto"  {{ 'selected' if dc.get('framerate','auto')=='auto' }}>Auto</option>
-              <option value="60"    {{ 'selected' if dc.get('framerate')=='60' }}>60 fps</option>
-              <option value="59.94" {{ 'selected' if dc.get('framerate')=='59.94' }}>59.94 fps</option>
-              <option value="50"    {{ 'selected' if dc.get('framerate')=='50' }}>50 fps</option>
-              <option value="30"    {{ 'selected' if dc.get('framerate')=='30' }}>30 fps</option>
-              <option value="29.97" {{ 'selected' if dc.get('framerate')=='29.97' }}>29.97 fps</option>
-              <option value="25"    {{ 'selected' if dc.get('framerate')=='25' }}>25 fps</option>
-            </select>
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Chroma</label>
-            <select class="form-select form-select-sm" id="v-chroma-{{ d.name|replace('-','_') }}">
-              <option value="NV12" {{ 'selected' if dc.get('chroma','NV12')=='NV12' }}>NV12 4:2:0</option>
-              <option value="YUY2" {{ 'selected' if dc.get('chroma')=='YUY2' }}>YUY2 4:2:2</option>
-              <option value="RGB"  {{ 'selected' if dc.get('chroma')=='RGB' }}>RGB 4:4:4</option>
-              <option value="BGR"  {{ 'selected' if dc.get('chroma')=='BGR' }}>BGR</option>
-            </select>
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Scaling</label>
-            <select class="form-select form-select-sm" id="v-scale-{{ d.name|replace('-','_') }}">
-              <option value="letterbox" {{ 'selected' if dc.get('scaling','letterbox')=='letterbox' }}>Letterbox</option>
-              <option value="stretch"   {{ 'selected' if dc.get('scaling')=='stretch' }}>Stretch</option>
-              <option value="crop"      {{ 'selected' if dc.get('scaling')=='crop' }}>Crop</option>
-              <option value="fit"       {{ 'selected' if dc.get('scaling')=='fit' }}>Fit</option>
-            </select>
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Scaler</label>
-            <select class="form-select form-select-sm" id="v-scaler-{{ d.name|replace('-','_') }}">
-              <option value="hardware" {{ 'selected' if dc.get('scaler')=='hardware' }} id="opt-rga-{{ d.name|replace('-','_') }}">Hardware (RGA)</option>
-              <option value="auto"     {{ 'selected' if dc.get('scaler','auto') not in ('fast','quality','hardware') }}>Balanced (bilinear, 6 threads)</option>
-              <option value="fast"     {{ 'selected' if dc.get('scaler')=='fast' }}>Fast (nearest, 6 threads)</option>
-              <option value="quality"  {{ 'selected' if dc.get('scaler')=='quality' }}>Quality (sinc, 4 threads)</option>
-            </select>
-            <div class="form-text" id="rga-hint-{{ d.name|replace('-','_') }}" style="display:none;color:#f0a030;font-size:.72rem">
-              <i class="bi bi-exclamation-triangle me-1"></i>RGA not detected — will fall back to software
-            </div>
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Rotation</label>
-            <select class="form-select form-select-sm" id="v-rotation-{{ d.name|replace('-','_') }}">
-              <option value="0"   {{ 'selected' if dc.get('rotation', 0)|int == 0   }}>0° (Normal)</option>
-              <option value="90"  {{ 'selected' if dc.get('rotation', 0)|int == 90  }}>90° Clockwise</option>
-              <option value="180" {{ 'selected' if dc.get('rotation', 0)|int == 180 }}>180°</option>
-              <option value="270" {{ 'selected' if dc.get('rotation', 0)|int == 270 }}>270° Clockwise</option>
-            </select>
-          </div>
-          <div class="col-12 col-md-6">
-            <label class="form-label">Backup / Failover Source</label>
-            <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}">
-              <option value="">— None —</option>
-              {% for s in sources %}
-              <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
-              {% endfor %}
-            </select>
-          </div>
-          <div class="col-12 col-md-6 d-flex align-items-end pb-1">
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" id="v-enabled-{{ d.name|replace('-','_') }}"
-                     {{ 'checked' if dc.get('enabled', true) }}>
-              <label class="form-check-label text-secondary small">Display Enabled</label>
-            </div>
-          </div>
-        </div>
-        <div class="mt-2">
-          <button class="btn btn-sm btn-outline-info" onclick="saveDisplayVideo('{{ d.name }}')">
-            <i class="bi bi-save me-1"></i>Save Video Settings
+      <!-- Sidebar Tabs -->
+      <div class="col-12 col-md-auto" style="border-right:1px solid #2a2d35;min-width:170px">
+        <div class="nav flex-column nav-pills p-3" id="ndiTabs" role="tablist">
+          <button class="nav-link active mb-1" data-bs-toggle="pill" data-bs-target="#tab-source">
+            <i class="bi bi-display me-2"></i>Source / Output
+          </button>
+          <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-ndi">
+            <i class="bi bi-broadcast me-2"></i>NDI Settings
+          </button>
+          <button class="nav-link mb-1" data-bs-toggle="pill" data-bs-target="#tab-ptz">
+            <i class="bi bi-joystick me-2"></i>Camera / PTZ
           </button>
         </div>
       </div>
-      {% endfor %}
-    </div>
 
-    <!-- Right column: NDI global settings -->
-    <div class="col-12 col-xl-4">
-      <div class="card">
-        <div class="card-header"><i class="bi bi-broadcast me-2"></i>NDI Settings</div>
-        <div class="card-body">
-          <div class="section-title">Identity</div>
-          <div class="mb-3">
-            <label class="form-label">NDI Alias (Display Name)</label>
-            <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}" placeholder="NDIMON-XXXX">
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Bandwidth</label>
-            <select class="form-select" id="ndi-bandwidth">
-              <option value="highest"    {{ 'selected' if cfg.ndi.bandwidth=='highest' }}>Highest</option>
-              <option value="lowest"     {{ 'selected' if cfg.ndi.bandwidth=='lowest' }}>Lowest (Proxy)</option>
-              <option value="audio_only" {{ 'selected' if cfg.ndi.bandwidth=='audio_only' }}>Audio Only</option>
-            </select>
-          </div>
-          <div class="section-title">Discovery</div>
-          <div class="mb-3">
-            <label class="form-label">Discovery Servers / Source IPs (comma-separated)</label>
-            <input type="text" class="form-control" id="ndi-discovery"
-                   value="{{ cfg.ndi.discovery_servers | join(', ') }}" placeholder="192.168.1.100">
-            <div class="form-text">Enter NDI discovery server IPs <em>or</em> the IP address of any host running NDI sources. Either method works without needing mDNS multicast. Leave blank to rely on mDNS only.</div>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">NDI Groups (one per line)</label>
-            <textarea class="form-control" id="ndi-groups" rows="3">{{ cfg.ndi.groups | join('\n') }}</textarea>
-          </div>
-          <button class="btn btn-sm btn-outline-info" onclick="saveNDI()"><i class="bi bi-save me-1"></i>Save NDI Settings</button>
+      <!-- Tab Content -->
+      <div class="col">
+        <div class="tab-content p-3" id="ndiContent">
 
-          <div class="section-title">Audio</div>
-          <div class="form-check form-switch mb-2">
-            <input class="form-check-input" type="checkbox" id="audio-enabled" {{ 'checked' if cfg.audio.enabled }}>
-            <label class="form-check-label form-label">Enable Audio Output</label>
-          </div>
-          <div class="mb-2">
-            <label class="form-label">Audio Sink</label>
-            <select class="form-select form-select-sm" id="audio-sink">
-              <option value="auto"   {{ 'selected' if cfg.audio.sink=='auto' }}>Auto (HDMI preferred)</option>
-              <option value="hdmi0"  {{ 'selected' if cfg.audio.sink=='hdmi0' }}>HDMI 1</option>
-              <option value="hdmi1"  {{ 'selected' if cfg.audio.sink=='hdmi1' }}>HDMI 2</option>
-              <option value="analog" {{ 'selected' if cfg.audio.sink=='analog' }}>Analog / 3.5mm</option>
-            </select>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Volume: <span id="vol-val">{{ cfg.audio.volume }}</span>%</label>
-            <input type="range" class="form-range" id="audio-volume" min="0" max="100"
-                   value="{{ cfg.audio.volume }}" oninput="document.getElementById('vol-val').textContent=this.value">
-          </div>
-          <button class="btn btn-sm btn-outline-info" onclick="saveAudio()"><i class="bi bi-save me-1"></i>Save Audio</button>
-        </div>
-      </div>
-    </div>
+          <!-- Tab 1: Source / Output -->
+          <div class="tab-pane show active" id="tab-source">
 
-    <!-- PTZ full-width collapsible card -->
-    <div class="col-12">
-      <div class="card">
-        <div class="card-header d-flex align-items-center justify-content-between"
-             style="cursor:pointer" data-bs-toggle="collapse" data-bs-target="#ptz-collapse"
-             aria-expanded="false" aria-controls="ptz-collapse"
-             id="ptz-card-header">
-          <span><i class="bi bi-joystick me-2"></i>Camera / PTZ</span>
-          <i class="bi bi-chevron-down" id="ptz-chevron" style="transition:transform .2s"></i>
-        </div>
-        <div class="collapse" id="ptz-collapse">
-          <div class="card-body" id="ptz-body">
+            <!-- Discovered Sources strip -->
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <div class="section-title mb-0"><i class="bi bi-broadcast me-1"></i>Discovered NDI Sources</div>
+              <button class="btn btn-sm btn-outline-secondary" onclick="refreshSources()">
+                <i class="bi bi-arrow-clockwise"></i>
+              </button>
+            </div>
+            <div class="d-flex flex-wrap gap-2 mb-4" id="source-list">
+              {% for s in sources %}
+              <span class="badge bg-secondary source-badge" onclick="fillSource('{{ s }}')">
+                <i class="bi bi-broadcast-pin me-1"></i>{{ s }}
+              </span>
+              {% else %}
+              <span class="text-secondary small">Scanning for NDI sources…</span>
+              {% endfor %}
+            </div>
 
-            <!-- Per-display PTZ panels (rendered by JS below) -->
+            <!-- Per-display sections -->
+            {% for d in displays %}
+            {% set ds = status.get(d.name, {}) %}
+            {% set dc = cfg.displays.get(d.name, {}) %}
+            <div class="display-section">
+
+              <!-- Header -->
+              <div class="display-section-header">
+                <span class="status-dot {{ 'live' if ds.get('active') else 'idle' }}" id="dot-{{ d.name|replace('-','_') }}"></span>
+                <strong><i class="bi bi-display me-1"></i>{{ d.name }}</strong>
+                {% if ds.get('active') %}
+                <span class="badge bg-success live-pulse" style="font-size:.65rem">LIVE</span>
+                {% endif %}
+                <span class="badge rounded-pill" id="conn-{{ d.name|replace('-','_') }}"
+                      style="font-size:.6rem;padding:.2em .5em;background:{{ '#00e676' if d.connected else '#444' }};color:{{ '#000' if d.connected else '#aaa' }}">
+                  {{ 'CONNECTED' if d.connected else 'NO SIGNAL' }}
+                </span>
+                <span class="ms-auto text-secondary small" id="info-{{ d.name|replace('-','_') }}">
+                  {% if ds.get('active') %}{{ ds.get('source','') }} — {{ ds.get('uptime','') }}{% endif %}
+                </span>
+              </div>
+
+              <!-- Display Alias -->
+              <div class="mb-3">
+                <label class="form-label">Display Alias <span class="text-secondary" style="font-size:.75rem">(NDI name visible in discovery servers)</span></label>
+                <input type="text" class="form-control form-control-sm" id="alias-{{ d.name|replace('-','_') }}"
+                       value="{{ dc.get('alias', '') }}" placeholder="{{ d.name }}">
+              </div>
+
+              <!-- Primary Source -->
+              <div class="mb-2">
+                <label class="form-label">Primary Source</label>
+                <select class="form-select form-select-sm" id="src-{{ d.name|replace('-','_') }}">
+                  <option value="">— No Source —</option>
+                  {% for s in sources %}
+                  <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <!-- Backup Source (directly below primary) -->
+              <div class="mb-2">
+                <label class="form-label">Backup / Failover Source</label>
+                <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}">
+                  <option value="">— None —</option>
+                  {% for s in sources %}
+                  <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+
+              <!-- Manual Source -->
+              <div class="mb-3">
+                <label class="form-label">Manual Source Name <span class="text-secondary" style="font-size:.75rem">(use if source is not in the list above)</span></label>
+                <input type="text" class="form-control form-control-sm" id="manual-{{ d.name|replace('-','_') }}"
+                       placeholder="e.g. CAMERA (192.168.1.100)"
+                       value="{{ dc.get('source','') if dc.get('source','') not in sources else '' }}">
+              </div>
+
+              <!-- Apply button -->
+              <button class="btn btn-sm btn-outline-info mb-4" onclick="applyDisplay('{{ d.name }}')">
+                <i class="bi bi-play-fill me-1"></i>Apply
+              </button>
+
+              <!-- Video Output Settings -->
+              <div class="section-title">Video Output Settings</div>
+              <div class="row g-2">
+                <div class="col-6 col-md-3">
+                  <label class="form-label">Resolution</label>
+                  <select class="form-select form-select-sm" id="v-res-{{ d.name|replace('-','_') }}">
+                    <option value="auto"      {{ 'selected' if dc.get('resolution','auto')=='auto' }}>Auto</option>
+                    <option value="3840x2160" {{ 'selected' if dc.get('resolution')=='3840x2160' }}>4K 2160p</option>
+                    <option value="1920x1080" {{ 'selected' if dc.get('resolution')=='1920x1080' }}>1080p</option>
+                    <option value="1280x720"  {{ 'selected' if dc.get('resolution')=='1280x720' }}>720p</option>
+                    {% for m in modes.get(d.name, []) %}
+                    <option value="{{ m.split('@')[0] }}">{{ m }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label">Framerate</label>
+                  <select class="form-select form-select-sm" id="v-fps-{{ d.name|replace('-','_') }}">
+                    <option value="auto"  {{ 'selected' if dc.get('framerate','auto')=='auto' }}>Auto</option>
+                    <option value="60"    {{ 'selected' if dc.get('framerate')=='60' }}>60 fps</option>
+                    <option value="59.94" {{ 'selected' if dc.get('framerate')=='59.94' }}>59.94 fps</option>
+                    <option value="50"    {{ 'selected' if dc.get('framerate')=='50' }}>50 fps</option>
+                    <option value="30"    {{ 'selected' if dc.get('framerate')=='30' }}>30 fps</option>
+                    <option value="29.97" {{ 'selected' if dc.get('framerate')=='29.97' }}>29.97 fps</option>
+                    <option value="25"    {{ 'selected' if dc.get('framerate')=='25' }}>25 fps</option>
+                  </select>
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label">Chroma</label>
+                  <select class="form-select form-select-sm" id="v-chroma-{{ d.name|replace('-','_') }}">
+                    <option value="NV12" {{ 'selected' if dc.get('chroma','NV12')=='NV12' }}>NV12 4:2:0</option>
+                    <option value="YUY2" {{ 'selected' if dc.get('chroma')=='YUY2' }}>YUY2 4:2:2</option>
+                    <option value="RGB"  {{ 'selected' if dc.get('chroma')=='RGB' }}>RGB 4:4:4</option>
+                    <option value="BGR"  {{ 'selected' if dc.get('chroma')=='BGR' }}>BGR</option>
+                  </select>
+                </div>
+                <div class="col-6 col-md-3">
+                  <label class="form-label">Scaling</label>
+                  <select class="form-select form-select-sm" id="v-scale-{{ d.name|replace('-','_') }}">
+                    <option value="letterbox" {{ 'selected' if dc.get('scaling','letterbox')=='letterbox' }}>Letterbox</option>
+                    <option value="stretch"   {{ 'selected' if dc.get('scaling')=='stretch' }}>Stretch</option>
+                    <option value="crop"      {{ 'selected' if dc.get('scaling')=='crop' }}>Crop</option>
+                    <option value="fit"       {{ 'selected' if dc.get('scaling')=='fit' }}>Fit</option>
+                  </select>
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label">Scaler</label>
+                  <select class="form-select form-select-sm" id="v-scaler-{{ d.name|replace('-','_') }}">
+                    <option value="hardware" {{ 'selected' if dc.get('scaler')=='hardware' }} id="opt-rga-{{ d.name|replace('-','_') }}">Hardware (RGA)</option>
+                    <option value="auto"     {{ 'selected' if dc.get('scaler','auto') not in ('fast','quality','hardware') }}>Balanced (bilinear)</option>
+                    <option value="fast"     {{ 'selected' if dc.get('scaler')=='fast' }}>Fast (nearest)</option>
+                    <option value="quality"  {{ 'selected' if dc.get('scaler')=='quality' }}>Quality (sinc)</option>
+                  </select>
+                  <div class="form-text" id="rga-hint-{{ d.name|replace('-','_') }}" style="display:none;color:#f0a030;font-size:.72rem">
+                    <i class="bi bi-exclamation-triangle me-1"></i>RGA not detected — will fall back to software
+                  </div>
+                </div>
+                <div class="col-6 col-md-4">
+                  <label class="form-label">Rotation</label>
+                  <select class="form-select form-select-sm" id="v-rotation-{{ d.name|replace('-','_') }}">
+                    <option value="0"   {{ 'selected' if dc.get('rotation',0)|int==0   }}>0° (Normal)</option>
+                    <option value="90"  {{ 'selected' if dc.get('rotation',0)|int==90  }}>90° Clockwise</option>
+                    <option value="180" {{ 'selected' if dc.get('rotation',0)|int==180 }}>180°</option>
+                    <option value="270" {{ 'selected' if dc.get('rotation',0)|int==270 }}>270° Clockwise</option>
+                  </select>
+                </div>
+                <div class="col-12 col-md-4 d-flex align-items-end pb-1">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="v-enabled-{{ d.name|replace('-','_') }}"
+                           {{ 'checked' if dc.get('enabled', true) }}>
+                    <label class="form-check-label text-secondary small">Display Enabled</label>
+                  </div>
+                </div>
+              </div>
+              <div class="mt-3">
+                <button class="btn btn-sm btn-outline-secondary" onclick="saveDisplayVideo('{{ d.name }}')">
+                  <i class="bi bi-save me-1"></i>Save Video Output Settings
+                </button>
+              </div>
+
+            </div><!-- /display-section -->
+            {% endfor %}
+
+          </div><!-- /tab-source -->
+
+          <!-- Tab 2: NDI Settings -->
+          <div class="tab-pane" id="tab-ndi">
+
+            <div class="section-title">Identity</div>
+            <div class="mb-3" style="max-width:360px">
+              <label class="form-label">NDI Alias (Device Name)</label>
+              <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}" placeholder="NDIMON-XXXX">
+            </div>
+            <div class="mb-3" style="max-width:260px">
+              <label class="form-label">Bandwidth</label>
+              <select class="form-select" id="ndi-bandwidth">
+                <option value="highest"    {{ 'selected' if cfg.ndi.bandwidth=='highest' }}>Highest</option>
+                <option value="lowest"     {{ 'selected' if cfg.ndi.bandwidth=='lowest' }}>Lowest (Proxy)</option>
+                <option value="audio_only" {{ 'selected' if cfg.ndi.bandwidth=='audio_only' }}>Audio Only</option>
+              </select>
+            </div>
+
+            <div class="section-title">Discovery</div>
+            <div class="mb-3" style="max-width:500px">
+              <label class="form-label">Discovery Servers / Source IPs <span class="text-secondary" style="font-size:.75rem">(comma-separated)</span></label>
+              <input type="text" class="form-control" id="ndi-discovery"
+                     value="{{ cfg.ndi.discovery_servers | join(', ') }}" placeholder="192.168.1.100">
+              <div class="form-text">NDI discovery server IPs or host IPs. Leave blank for mDNS only.</div>
+            </div>
+            <div class="mb-3" style="max-width:360px">
+              <label class="form-label">NDI Groups <span class="text-secondary" style="font-size:.75rem">(one per line)</span></label>
+              <textarea class="form-control" id="ndi-groups" rows="3">{{ cfg.ndi.groups | join('\n') }}</textarea>
+            </div>
+            <button class="btn btn-sm btn-outline-info mb-4" onclick="saveNDI()">
+              <i class="bi bi-save me-1"></i>Save NDI Settings
+            </button>
+
+            <div class="section-title">Audio</div>
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="audio-enabled" {{ 'checked' if cfg.audio.enabled }}>
+              <label class="form-check-label form-label">Enable Audio Output</label>
+            </div>
+            <div class="mb-2" style="max-width:260px">
+              <label class="form-label">Audio Sink</label>
+              <select class="form-select form-select-sm" id="audio-sink">
+                <option value="auto"   {{ 'selected' if cfg.audio.sink=='auto' }}>Auto (HDMI preferred)</option>
+                <option value="hdmi0"  {{ 'selected' if cfg.audio.sink=='hdmi0' }}>HDMI 1</option>
+                <option value="hdmi1"  {{ 'selected' if cfg.audio.sink=='hdmi1' }}>HDMI 2</option>
+                <option value="analog" {{ 'selected' if cfg.audio.sink=='analog' }}>Analog / 3.5mm</option>
+              </select>
+            </div>
+            <div class="mb-3" style="max-width:360px">
+              <label class="form-label">Volume: <span id="vol-val">{{ cfg.audio.volume }}</span>%</label>
+              <input type="range" class="form-range" id="audio-volume" min="0" max="100"
+                     value="{{ cfg.audio.volume }}" oninput="document.getElementById('vol-val').textContent=this.value">
+            </div>
+            <button class="btn btn-sm btn-outline-info" onclick="saveAudio()">
+              <i class="bi bi-save me-1"></i>Save Audio
+            </button>
+
+          </div><!-- /tab-ndi -->
+
+          <!-- Tab 3: Camera / PTZ -->
+          <div class="tab-pane" id="tab-ptz">
+
             <div id="ptz-panels"></div>
 
             <hr class="border-secondary mt-4">
-            <!-- Gamepad section -->
             <div class="section-title"><i class="bi bi-controller me-1"></i>Gamepad Control</div>
             <div class="row g-3 align-items-center mb-3">
               <div class="col-auto">
                 <div class="form-check form-switch m-0">
-                  <input class="form-check-input" type="checkbox" id="gamepad-enable"
-                         onchange="toggleGamepad()">
+                  <input class="form-check-input" type="checkbox" id="gamepad-enable" onchange="toggleGamepad()">
                   <label class="form-check-label">Enable Gamepad Control</label>
                 </div>
               </div>
               <div class="col-auto">
                 <label class="form-label mb-0 me-2">Active Control</label>
-                <select class="form-select form-select-sm d-inline-block" id="gamepad-target"
-                        style="max-width:260px">
+                <select class="form-select form-select-sm d-inline-block" id="gamepad-target" style="max-width:260px">
                   {% for d in displays %}
                   {% set dc = cfg.displays.get(d.name, {}) %}
-                  <option value="{{ dc.get('source','') }}"
-                          data-display="{{ d.name }}">{{ d.name }}</option>
+                  <option value="{{ dc.get('source','') }}" data-display="{{ d.name }}">{{ d.name }}</option>
                   {% endfor %}
                 </select>
               </div>
             </div>
             <div id="gamepad-status" class="text-secondary small">No gamepad detected</div>
 
-          </div>
-        </div>
-      </div>
-    </div>
+          </div><!-- /tab-ptz -->
 
-  </div>
-</div>
+        </div><!-- /tab-content -->
+      </div><!-- /col -->
+    </div><!-- /row -->
+  </div><!-- /card -->
+</div><!-- /container -->
 
 <div class="toast-container" id="toast-container"></div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// ── PTZ display data from Jinja ───────────────────────────────────────────────
+// ── PTZ display data ──────────────────────────────────────────────────────────
 const PTZ_DISPLAYS = [
   {% for d in displays %}
   {% set dc = cfg.displays.get(d.name, {}) %}
@@ -317,169 +343,290 @@ const PTZ_DISPLAYS = [
   {% endfor %}
 ];
 
-// ── Chevron rotation on collapse ──────────────────────────────────────────────
-document.getElementById('ptz-collapse').addEventListener('show.bs.collapse', () => {
-  document.getElementById('ptz-chevron').style.transform = 'rotate(180deg)';
-  renderPTZPanels();
-});
-document.getElementById('ptz-collapse').addEventListener('hide.bs.collapse', () => {
-  document.getElementById('ptz-chevron').style.transform = 'rotate(0deg)';
+// Render PTZ panels lazily when tab is first shown
+document.querySelector('[data-bs-target="#tab-ptz"]').addEventListener('shown.bs.tab', () => {
+  if (!document.getElementById('ptz-panels').children.length) renderPTZPanels();
 });
 
-// ── PTZ helpers ───────────────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function showToast(msg, type='info') {
+  const id = 'toast-' + Date.now();
+  const c = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark'};
+  document.getElementById('toast-container').insertAdjacentHTML('beforeend',
+    `<div id="${id}" class="toast align-items-center ${c[type]||'bg-info'} border-0" role="alert">
+      <div class="d-flex"><div class="toast-body fw-bold">${msg}</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+      </div></div>`);
+  const el = document.getElementById(id);
+  new bootstrap.Toast(el, {delay:4000}).show();
+  el.addEventListener('hidden.bs.toast', () => el.remove());
+}
+async function post(url, data) {
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+  return r.json();
+}
+
+// ── Source helpers ────────────────────────────────────────────────────────────
+function fillSource(name) {
+  document.querySelectorAll('[id^="src-"]').forEach(sel => {
+    for (const o of sel.options) if (o.value === name) { sel.value = name; break; }
+  });
+  document.querySelectorAll('[id^="manual-"]').forEach(el => el.value = '');
+}
+
+async function refreshSources() {
+  try {
+    const r = await fetch('/api/sources');
+    const d = await r.json();
+    const el = document.getElementById('source-list');
+    if (!d.sources.length) {
+      el.innerHTML = '<span class="text-secondary small">No NDI sources found on network</span>';
+    } else {
+      el.innerHTML = d.sources.map(s =>
+        `<span class="badge bg-secondary source-badge" onclick="fillSource(${JSON.stringify(s)})">
+          <i class="bi bi-broadcast-pin me-1"></i>${s}</span>`
+      ).join('');
+    }
+    document.querySelectorAll('[id^="src-"]').forEach(sel => {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— No Source —</option>' +
+        d.sources.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+    });
+    document.querySelectorAll('[id^="v-backup-"]').forEach(sel => {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— None —</option>' +
+        d.sources.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+    });
+  } catch(e) {}
+}
+
+// ── Apply display (alias + source + video + stream) ───────────────────────────
+async function applyDisplay(display) {
+  const key    = display.replace(/-/g,'_');
+  const alias  = document.getElementById('alias-'+key)?.value.trim() || '';
+  const manual = document.getElementById('manual-'+key)?.value.trim() || '';
+  const select = document.getElementById('src-'+key)?.value || '';
+  const source = manual || select;
+
+  // Save alias
+  await post('/api/display/alias', {display, alias});
+
+  // Save config (source + video settings)
+  const cfg = await (await fetch('/api/config')).json();
+  if (!cfg.displays[display]) cfg.displays[display] = {};
+  cfg.displays[display].source        = source;
+  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
+  cfg.displays[display].resolution    = document.getElementById('v-res-'+key)?.value || 'auto';
+  cfg.displays[display].framerate     = document.getElementById('v-fps-'+key)?.value || 'auto';
+  cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
+  cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
+  cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
+  cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
+  cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
+  await post('/api/config', cfg);
+
+  // Start/stop stream
+  const d = await post('/api/stream/select', {display, source});
+  if (source) {
+    showToast(d.ok ? `Connecting: ${source} → ${display}` : 'Failed to start stream',
+              d.ok ? 'success' : 'danger');
+  } else {
+    showToast(`${display} — No Source`, 'warning');
+  }
+  setTimeout(updateStatus, 1500);
+}
+
+// ── Save video settings only ──────────────────────────────────────────────────
+async function saveDisplayVideo(display) {
+  const key = display.replace(/-/g,'_');
+  const cfg = await (await fetch('/api/config')).json();
+  if (!cfg.displays[display]) cfg.displays[display] = {};
+  cfg.displays[display].resolution    = document.getElementById('v-res-'+key)?.value || 'auto';
+  cfg.displays[display].framerate     = document.getElementById('v-fps-'+key)?.value || 'auto';
+  cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
+  cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
+  cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
+  cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
+  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
+  cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
+  await post('/api/config', cfg);
+  const source = cfg.displays[display]?.source || '';
+  if (source) {
+    const d = await post('/api/stream/select', {display, source});
+    showToast(d.ok ? 'Video settings applied' : 'Save failed', d.ok ? 'success' : 'danger');
+  } else {
+    showToast('Video settings saved', 'success');
+  }
+}
+
+// ── NDI global settings ───────────────────────────────────────────────────────
+async function saveNDI() {
+  const cfg = await (await fetch('/api/config')).json();
+  cfg.ndi.alias     = document.getElementById('ndi-alias').value;
+  cfg.ndi.bandwidth = document.getElementById('ndi-bandwidth').value;
+  cfg.ndi.groups    = document.getElementById('ndi-groups').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  cfg.ndi.discovery_servers = document.getElementById('ndi-discovery').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'NDI settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
+}
+
+async function saveAudio() {
+  const cfg = await (await fetch('/api/config')).json();
+  cfg.audio.enabled = document.getElementById('audio-enabled').checked;
+  cfg.audio.sink    = document.getElementById('audio-sink').value;
+  cfg.audio.volume  = parseInt(document.getElementById('audio-volume').value);
+  const d = await post('/api/config', cfg);
+  showToast(d.ok ? 'Audio settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
+}
+
+// ── Live status polling ───────────────────────────────────────────────────────
+async function updateStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const rgaAvail = d.system?.rga_avail || false;
+    const rgaDev   = d.system?.rga_dev   || '';
+    document.querySelectorAll('[id^="opt-rga-"]').forEach(el => {
+      const key  = el.id.replace('opt-rga-','');
+      const hint = document.getElementById('rga-hint-'+key);
+      if (rgaAvail) {
+        el.textContent = `Hardware RGA (${rgaDev})`;
+        el.disabled = false;
+        if (hint) hint.style.display = 'none';
+      } else {
+        el.textContent = 'Hardware (RGA) — not detected';
+        el.disabled = true;
+        if (hint) {
+          const sel = document.getElementById('v-scaler-'+key);
+          if (sel && sel.value === 'hardware') hint.style.display = '';
+        }
+      }
+    });
+    for (const [name, info] of Object.entries(d.streams)) {
+      const key = name.replace(/-/g,'_');
+      const dot  = document.getElementById('dot-'+key);
+      const info_el = document.getElementById('info-'+key);
+      if (dot) dot.className = 'status-dot ' + (info.active ? 'live' : 'idle');
+      const connBadge = document.getElementById('conn-'+key);
+      if (connBadge) {
+        const conn = info.connected !== false;
+        connBadge.textContent = conn ? 'CONNECTED' : 'NO SIGNAL';
+        connBadge.style.background = conn ? '#00e676' : '#444';
+        connBadge.style.color = conn ? '#000' : '#aaa';
+      }
+      if (info_el) {
+        if (info.active) {
+          const c = info.in_caps;
+          const caps = c ? ` · ${c.width}x${c.height} ${c.format}${c.fps?' '+c.fps.toFixed(2)+'fps':''}` : '';
+          info_el.textContent = `${info.source} — ${info.uptime}${caps}`;
+        } else {
+          info_el.textContent = '';
+        }
+      }
+    }
+  } catch(e) {}
+}
+
+setInterval(updateStatus, 5000);
+setInterval(refreshSources, 15000);
+updateStatus();
+
+// ── PTZ ───────────────────────────────────────────────────────────────────────
 async function ptzPost(source, action, extra={}) {
   try {
     const r = await fetch('/api/ptz/control', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({source, action, ...extra})
     });
     return r.json();
-  } catch(e) { return {ok: false}; }
+  } catch(e) { return {ok:false}; }
+}
+function startPanTilt(s,p,t){ptzPost(s,'pan_tilt_speed',{pan_speed:p,tilt_speed:t});}
+function stopPanTilt(s){ptzPost(s,'pan_tilt_speed',{pan_speed:0,tilt_speed:0});}
+function zoomSpeed(s,v){ptzPost(s,'zoom_speed',{speed:v});}
+function focusSpeed(s,v){ptzPost(s,'focus_speed',{speed:v});}
+function autoFocus(s){ptzPost(s,'auto_focus');}
+
+function storePreset(source,key,idx){
+  const nameEl=document.getElementById(`ptz-preset-name-${key}-${idx}`);
+  const name=nameEl?nameEl.value.trim()||`Preset ${idx+1}`:`Preset ${idx+1}`;
+  ptzPost(source,'store_preset',{preset:idx,name})
+    .then(d=>showToast(d.ok?`Preset ${idx+1} stored`:'Store failed',d.ok?'success':'danger'));
+}
+function recallPreset(source,idx){
+  ptzPost(source,'recall_preset',{preset:idx,speed:1.0})
+    .then(d=>showToast(d.ok?`Preset ${idx+1} recalled`:'Recall failed',d.ok?'success':'danger'));
+}
+function loadPresets(source,key){
+  if(!source)return;
+  fetch(`/api/ptz/presets/${encodeURIComponent(source)}`).then(r=>r.json()).then(d=>{
+    const presets=d.presets||{};
+    for(let i=0;i<8;i++){
+      const el=document.getElementById(`ptz-preset-name-${key}-${i}`);
+      if(el&&presets[String(i)])el.value=presets[String(i)];
+    }
+  }).catch(()=>{});
+}
+function applyWB(source,key){
+  const mode=document.getElementById(`ptz-wb-mode-${key}`).value;
+  const red=parseFloat(document.getElementById(`ptz-wb-red-${key}`)?.value||0);
+  const blue=parseFloat(document.getElementById(`ptz-wb-blue-${key}`)?.value||0);
+  ptzPost(source,'white_balance',{mode,red,blue})
+    .then(d=>showToast(d.ok?'White balance applied':'WB failed',d.ok?'success':'danger'));
+}
+function applyExposure(source,key){
+  const auto_=document.getElementById(`ptz-exp-auto-${key}`).checked;
+  const iris=parseFloat(document.getElementById(`ptz-exp-iris-${key}`)?.value||0);
+  const gain=parseFloat(document.getElementById(`ptz-exp-gain-${key}`)?.value||0);
+  const shutter=parseFloat(document.getElementById(`ptz-exp-shutter-${key}`)?.value||0);
+  ptzPost(source,'exposure',{auto:auto_,iris,gain,shutter})
+    .then(d=>showToast(d.ok?'Exposure applied':'Exposure failed',d.ok?'success':'danger'));
 }
 
-function startPanTilt(source, panDir, tiltDir) {
-  ptzPost(source, 'pan_tilt_speed', {pan_speed: panDir, tilt_speed: tiltDir});
-}
-function stopPanTilt(source) {
-  ptzPost(source, 'pan_tilt_speed', {pan_speed: 0, tilt_speed: 0});
-}
-function zoomSpeed(source, speed) {
-  ptzPost(source, 'zoom_speed', {speed});
-}
-function focusSpeed(source, speed) {
-  ptzPost(source, 'focus_speed', {speed});
-}
-function autoFocus(source) {
-  ptzPost(source, 'auto_focus');
-}
-function storePreset(source, key, idx) {
-  const nameEl = document.getElementById(`ptz-preset-name-${key}-${idx}`);
-  const name   = nameEl ? nameEl.value.trim() || `Preset ${idx+1}` : `Preset ${idx+1}`;
-  ptzPost(source, 'store_preset', {preset: idx, name})
-    .then(d => showToast(d.ok ? `Preset ${idx+1} stored` : 'Store failed', d.ok ? 'success' : 'danger'));
-}
-function recallPreset(source, idx) {
-  ptzPost(source, 'recall_preset', {preset: idx, speed: 1.0})
-    .then(d => showToast(d.ok ? `Preset ${idx+1} recalled` : 'Recall failed', d.ok ? 'success' : 'danger'));
-}
-function loadPresets(source, key) {
-  if (!source) return;
-  fetch(`/api/ptz/presets/${encodeURIComponent(source)}`)
-    .then(r => r.json())
-    .then(d => {
-      const presets = d.presets || {};
-      for (let i = 0; i < 8; i++) {
-        const el = document.getElementById(`ptz-preset-name-${key}-${i}`);
-        if (el && presets[String(i)]) el.value = presets[String(i)];
-      }
-    }).catch(() => {});
-}
-function applyWB(source, key) {
-  const mode = document.getElementById(`ptz-wb-mode-${key}`).value;
-  const red  = parseFloat(document.getElementById(`ptz-wb-red-${key}`)?.value  || 0);
-  const blue = parseFloat(document.getElementById(`ptz-wb-blue-${key}`)?.value || 0);
-  ptzPost(source, 'white_balance', {mode, red, blue})
-    .then(d => showToast(d.ok ? 'White balance applied' : 'WB failed', d.ok ? 'success' : 'danger'));
-}
-function applyExposure(source, key) {
-  const auto_    = document.getElementById(`ptz-exp-auto-${key}`).checked;
-  const iris     = parseFloat(document.getElementById(`ptz-exp-iris-${key}`)?.value   || 0);
-  const gain     = parseFloat(document.getElementById(`ptz-exp-gain-${key}`)?.value   || 0);
-  const shutter  = parseFloat(document.getElementById(`ptz-exp-shutter-${key}`)?.value || 0);
-  ptzPost(source, 'exposure', {auto: auto_, iris, gain, shutter})
-    .then(d => showToast(d.ok ? 'Exposure applied' : 'Exposure failed', d.ok ? 'success' : 'danger'));
-}
-
-function ptzBtnEvents(el, source, startFn, stopFn) {
-  // Returns event-handler attrs string for inline use — we wire in renderPTZPanels instead
-}
-
-// ── Render per-display PTZ panels ─────────────────────────────────────────────
-let _ptzRendered = false;
-function renderPTZPanels() {
-  if (_ptzRendered) return;
-  _ptzRendered = true;
-  const container = document.getElementById('ptz-panels');
-  let html = '';
-  for (const d of PTZ_DISPLAYS) {
-    const src = d.source;
-    const key = d.key;
-    html += `
+function renderPTZPanels(){
+  const container=document.getElementById('ptz-panels');
+  let html='';
+  for(const d of PTZ_DISPLAYS){
+    const src=d.source,key=d.key;
+    html+=`
     <div class="display-section mb-3">
       <div class="display-section-header">
         <strong><i class="bi bi-camera-video me-1"></i>${d.name}</strong>
-        <span class="ms-2 text-secondary small">Source: ${src || '(none)'}</span>
+        <span class="ms-2 text-secondary small">Source: ${src||'(none)'}</span>
       </div>
-      ${src ? `
+      ${src?`
       <div class="row g-4">
-
-        <!-- Pan/Tilt D-Pad -->
         <div class="col-auto">
           <div class="section-title">Pan / Tilt</div>
           <div style="display:grid;grid-template-columns:repeat(3,52px);gap:4px">
             <div></div>
-            <button class="btn btn-outline-secondary ptz-dpad-btn"
-              id="ptz-up-${key}"
-              style="width:52px;height:52px;font-size:1.2rem">
-              <i class="bi bi-chevron-up"></i>
-            </button>
+            <button class="btn btn-outline-secondary" id="ptz-up-${key}" style="width:52px;height:52px;font-size:1.2rem"><i class="bi bi-chevron-up"></i></button>
             <div></div>
-            <button class="btn btn-outline-secondary ptz-dpad-btn"
-              id="ptz-left-${key}"
-              style="width:52px;height:52px;font-size:1.2rem">
-              <i class="bi bi-chevron-left"></i>
-            </button>
-            <button class="btn btn-outline-light ptz-dpad-btn"
-              id="ptz-home-${key}"
-              style="width:52px;height:52px;font-size:1.2rem"
-              title="Center">
-              <i class="bi bi-house"></i>
-            </button>
-            <button class="btn btn-outline-secondary ptz-dpad-btn"
-              id="ptz-right-${key}"
-              style="width:52px;height:52px;font-size:1.2rem">
-              <i class="bi bi-chevron-right"></i>
-            </button>
+            <button class="btn btn-outline-secondary" id="ptz-left-${key}" style="width:52px;height:52px;font-size:1.2rem"><i class="bi bi-chevron-left"></i></button>
+            <button class="btn btn-outline-light" id="ptz-home-${key}" style="width:52px;height:52px;font-size:1.2rem" title="Center"><i class="bi bi-house"></i></button>
+            <button class="btn btn-outline-secondary" id="ptz-right-${key}" style="width:52px;height:52px;font-size:1.2rem"><i class="bi bi-chevron-right"></i></button>
             <div></div>
-            <button class="btn btn-outline-secondary ptz-dpad-btn"
-              id="ptz-down-${key}"
-              style="width:52px;height:52px;font-size:1.2rem">
-              <i class="bi bi-chevron-down"></i>
-            </button>
+            <button class="btn btn-outline-secondary" id="ptz-down-${key}" style="width:52px;height:52px;font-size:1.2rem"><i class="bi bi-chevron-down"></i></button>
             <div></div>
           </div>
         </div>
-
-        <!-- Zoom -->
         <div class="col-auto">
           <div class="section-title">Zoom</div>
-          <div class="d-flex flex-column gap-2" style="width:56px">
-            <button class="btn btn-outline-info btn-sm" id="ptz-zoom-in-${key}">
-              <i class="bi bi-zoom-in"></i> Tele
-            </button>
-            <button class="btn btn-outline-secondary btn-sm" id="ptz-zoom-stop-${key}"
-              onclick="zoomSpeed(${JSON.stringify(src)}, 0)">Stop</button>
-            <button class="btn btn-outline-info btn-sm" id="ptz-zoom-out-${key}">
-              <i class="bi bi-zoom-out"></i> Wide
-            </button>
+          <div class="d-flex flex-column gap-2" style="width:80px">
+            <button class="btn btn-outline-info btn-sm" id="ptz-zoom-in-${key}"><i class="bi bi-zoom-in"></i> Tele</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="zoomSpeed(${JSON.stringify(src)},0)">Stop</button>
+            <button class="btn btn-outline-info btn-sm" id="ptz-zoom-out-${key}"><i class="bi bi-zoom-out"></i> Wide</button>
           </div>
         </div>
-
-        <!-- Focus -->
         <div class="col-auto">
           <div class="section-title">Focus</div>
           <div class="d-flex flex-column gap-2" style="width:70px">
             <button class="btn btn-outline-info btn-sm" id="ptz-focus-far-${key}">Far</button>
-            <button class="btn btn-outline-secondary btn-sm" id="ptz-focus-stop-${key}"
-              onclick="focusSpeed(${JSON.stringify(src)}, 0)">Stop</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="focusSpeed(${JSON.stringify(src)},0)">Stop</button>
             <button class="btn btn-outline-info btn-sm" id="ptz-focus-near-${key}">Near</button>
-            <button class="btn btn-outline-success btn-sm mt-1"
-              onclick="autoFocus(${JSON.stringify(src)})">Auto</button>
+            <button class="btn btn-outline-success btn-sm mt-1" onclick="autoFocus(${JSON.stringify(src)})">Auto</button>
           </div>
         </div>
-
-        <!-- Exposure -->
         <div class="col-auto" style="min-width:200px">
           <div class="section-title">Exposure</div>
           <div class="form-check form-switch mb-2">
@@ -498,11 +645,8 @@ function renderPTZPanels() {
             <input type="range" class="form-range" id="ptz-exp-shutter-${key}" min="0" max="1" step="0.01" value="0.5"
               oninput="document.getElementById('ptz-exp-shutter-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
           </div>
-          <button class="btn btn-outline-info btn-sm mt-1"
-            onclick="applyExposure(${JSON.stringify(src)}, ${JSON.stringify(key)})">Apply</button>
+          <button class="btn btn-outline-info btn-sm mt-1" onclick="applyExposure(${JSON.stringify(src)},${JSON.stringify(key)})">Apply</button>
         </div>
-
-        <!-- White Balance -->
         <div class="col-auto" style="min-width:200px">
           <div class="section-title">White Balance</div>
           <select class="form-select form-select-sm mb-2" id="ptz-wb-mode-${key}">
@@ -518,355 +662,91 @@ function renderPTZPanels() {
           <label class="form-label small">Blue <span id="ptz-wb-blue-val-${key}">0.5</span></label>
           <input type="range" class="form-range" id="ptz-wb-blue-${key}" min="0" max="1" step="0.01" value="0.5"
             oninput="document.getElementById('ptz-wb-blue-val-${key}').textContent=parseFloat(this.value).toFixed(2)">
-          <button class="btn btn-outline-info btn-sm mt-1"
-            onclick="applyWB(${JSON.stringify(src)}, ${JSON.stringify(key)})">Apply</button>
+          <button class="btn btn-outline-info btn-sm mt-1" onclick="applyWB(${JSON.stringify(src)},${JSON.stringify(key)})">Apply</button>
         </div>
-
-      </div><!-- /row -->
-
-      <!-- Presets (full width row) -->
+      </div>
       <div class="mt-3">
         <div class="section-title">Presets</div>
         <div class="row g-2">
-          ${Array.from({length:8},(_,i) => `
+          ${Array.from({length:8},(_,i)=>`
           <div class="col-6 col-md-3">
             <div class="input-group input-group-sm">
               <span class="input-group-text text-secondary">${i+1}</span>
-              <input type="text" class="form-control" id="ptz-preset-name-${key}-${i}"
-                     placeholder="Preset ${i+1}">
+              <input type="text" class="form-control" id="ptz-preset-name-${key}-${i}" placeholder="Preset ${i+1}">
               <button class="btn btn-outline-warning" title="Store"
-                onclick="storePreset(${JSON.stringify(src)}, ${JSON.stringify(key)}, ${i})">
-                <i class="bi bi-bookmark-plus"></i>
-              </button>
+                onclick="storePreset(${JSON.stringify(src)},${JSON.stringify(key)},${i})"><i class="bi bi-bookmark-plus"></i></button>
               <button class="btn btn-outline-success" title="Recall"
-                onclick="recallPreset(${JSON.stringify(src)}, ${i})">
-                <i class="bi bi-play-fill"></i>
-              </button>
+                onclick="recallPreset(${JSON.stringify(src)},${i})"><i class="bi bi-play-fill"></i></button>
             </div>
           </div>`).join('')}
         </div>
       </div>
-      ` : '<p class="text-secondary small">No source configured for this display.</p>'}
+      `:'<p class="text-secondary small mt-2">No source configured for this display.</p>'}
     </div>`;
   }
-  container.innerHTML = html;
+  container.innerHTML=html;
 
-  // Wire hold-to-move buttons for each display
-  for (const d of PTZ_DISPLAYS) {
-    const src = d.source;
-    if (!src) continue;
-    const key = d.key;
-
-    const holdBtn = (id, startCb, stopCb) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const start = (e) => { e.preventDefault(); startCb(); };
-      const stop  = ()  => stopCb();
-      el.addEventListener('mousedown',   start);
-      el.addEventListener('touchstart',  start, {passive:false});
-      el.addEventListener('mouseup',     stop);
-      el.addEventListener('mouseleave',  stop);
-      el.addEventListener('touchend',    stop);
-      el.addEventListener('touchcancel', stop);
+  for(const d of PTZ_DISPLAYS){
+    const src=d.source;
+    if(!src)continue;
+    const key=d.key;
+    const holdBtn=(id,startCb,stopCb)=>{
+      const el=document.getElementById(id);
+      if(!el)return;
+      el.addEventListener('mousedown',  e=>{e.preventDefault();startCb();});
+      el.addEventListener('touchstart', e=>{e.preventDefault();startCb();},{passive:false});
+      el.addEventListener('mouseup',    ()=>stopCb());
+      el.addEventListener('mouseleave', ()=>stopCb());
+      el.addEventListener('touchend',   ()=>stopCb());
+      el.addEventListener('touchcancel',()=>stopCb());
     };
-
-    holdBtn(`ptz-up-${key}`,
-      () => startPanTilt(src, 0, -1),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-down-${key}`,
-      () => startPanTilt(src, 0, 1),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-left-${key}`,
-      () => startPanTilt(src, -1, 0),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-right-${key}`,
-      () => startPanTilt(src, 1, 0),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-home-${key}`,
-      () => ptzPost(src, 'pan_tilt', {pan:0, tilt:0}),
-      () => {});
-
-    holdBtn(`ptz-zoom-in-${key}`,
-      () => zoomSpeed(src, 1),
-      () => zoomSpeed(src, 0));
-    holdBtn(`ptz-zoom-out-${key}`,
-      () => zoomSpeed(src, -1),
-      () => zoomSpeed(src, 0));
-
-    holdBtn(`ptz-focus-far-${key}`,
-      () => focusSpeed(src, 1),
-      () => focusSpeed(src, 0));
-    holdBtn(`ptz-focus-near-${key}`,
-      () => focusSpeed(src, -1),
-      () => focusSpeed(src, 0));
-
-    // Load saved preset names
-    loadPresets(src, key);
+    holdBtn(`ptz-up-${key}`,       ()=>startPanTilt(src,0,-1),  ()=>stopPanTilt(src));
+    holdBtn(`ptz-down-${key}`,     ()=>startPanTilt(src,0,1),   ()=>stopPanTilt(src));
+    holdBtn(`ptz-left-${key}`,     ()=>startPanTilt(src,-1,0),  ()=>stopPanTilt(src));
+    holdBtn(`ptz-right-${key}`,    ()=>startPanTilt(src,1,0),   ()=>stopPanTilt(src));
+    holdBtn(`ptz-home-${key}`,     ()=>ptzPost(src,'pan_tilt',{pan:0,tilt:0}),()=>{});
+    holdBtn(`ptz-zoom-in-${key}`,  ()=>zoomSpeed(src,1),  ()=>zoomSpeed(src,0));
+    holdBtn(`ptz-zoom-out-${key}`, ()=>zoomSpeed(src,-1), ()=>zoomSpeed(src,0));
+    holdBtn(`ptz-focus-far-${key}`,()=>focusSpeed(src,1), ()=>focusSpeed(src,0));
+    holdBtn(`ptz-focus-near-${key}`,()=>focusSpeed(src,-1),()=>focusSpeed(src,0));
+    loadPresets(src,key);
   }
 }
 
 // ── Gamepad ───────────────────────────────────────────────────────────────────
-let _gamepadInterval = null;
-function toggleGamepad() {
-  const enabled = document.getElementById('gamepad-enable').checked;
-  if (enabled) {
-    _gamepadInterval = setInterval(pollGamepad, 100);
-    showToast('Gamepad control enabled', 'info');
-  } else {
-    clearInterval(_gamepadInterval);
-    _gamepadInterval = null;
-    showToast('Gamepad control disabled', 'info');
-  }
+let _gpInterval=null;
+function toggleGamepad(){
+  const on=document.getElementById('gamepad-enable').checked;
+  if(on){_gpInterval=setInterval(pollGamepad,100);showToast('Gamepad control enabled','info');}
+  else{clearInterval(_gpInterval);_gpInterval=null;showToast('Gamepad control disabled','info');}
 }
-
-function pollGamepad() {
-  const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-  const statusEl = document.getElementById('gamepad-status');
-  let gp = null;
-  for (const g of gamepads) { if (g) { gp = g; break; } }
-  if (!gp) {
-    if (statusEl) statusEl.textContent = 'No gamepad detected';
-    return;
-  }
-  if (statusEl) statusEl.textContent = `Gamepad: ${gp.id}`;
-
-  const selEl  = document.getElementById('gamepad-target');
-  const source = selEl ? selEl.value : '';
-  if (!source) return;
-
-  const DEADZONE = 0.1;
-  const ax = (v) => Math.abs(v) < DEADZONE ? 0 : v;
-
-  const pan  = ax(gp.axes[0] || 0);
-  const tilt = ax(-(gp.axes[1] || 0));  // invert Y
-
-  // R2=button7, L2=button6 (standard gamepad mapping)
-  const r2 = gp.buttons[7] ? gp.buttons[7].value : 0;
-  const l2 = gp.buttons[6] ? gp.buttons[6].value : 0;
-  const zoom = ax(r2 - l2);
-
-  // RB=button5, LB=button4
-  const rb = gp.buttons[5] ? gp.buttons[5].pressed : false;
-  const lb = gp.buttons[4] ? gp.buttons[4].pressed : false;
-  const focus = rb ? 1 : (lb ? -1 : 0);
-
-  if (pan !== 0 || tilt !== 0) {
-    ptzPost(source, 'pan_tilt_speed', {pan_speed: pan, tilt_speed: tilt});
-  } else {
-    ptzPost(source, 'pan_tilt_speed', {pan_speed: 0, tilt_speed: 0});
-  }
-
-  if (zoom !== 0) ptzPost(source, 'zoom_speed', {speed: zoom});
-  else            ptzPost(source, 'zoom_speed', {speed: 0});
-
-  if (focus !== 0) ptzPost(source, 'focus_speed', {speed: focus});
-
-  // Preset recall: buttons 0-7
-  for (let i = 0; i < 8 && i < gp.buttons.length; i++) {
-    if (gp.buttons[i] && gp.buttons[i].pressed && i < 4) {
-      // avoid mapping face buttons used for pan/focus — only recall if not already panning
-      if (pan === 0 && tilt === 0 && focus === 0 && zoom === 0) {
-        ptzPost(source, 'recall_preset', {preset: i, speed: 1.0});
-      }
-    }
-  }
+function pollGamepad(){
+  const gps=navigator.getGamepads?navigator.getGamepads():[];
+  const statusEl=document.getElementById('gamepad-status');
+  let gp=null;
+  for(const g of gps){if(g){gp=g;break;}}
+  if(!gp){if(statusEl)statusEl.textContent='No gamepad detected';return;}
+  if(statusEl)statusEl.textContent=`Gamepad: ${gp.id}`;
+  const selEl=document.getElementById('gamepad-target');
+  const source=selEl?selEl.value:'';
+  if(!source)return;
+  const D=0.1,ax=v=>Math.abs(v)<D?0:v;
+  const pan=ax(gp.axes[0]||0),tilt=ax(-(gp.axes[1]||0));
+  const r2=gp.buttons[7]?gp.buttons[7].value:0,l2=gp.buttons[6]?gp.buttons[6].value:0;
+  const zoom=ax(r2-l2);
+  const rb=gp.buttons[5]?.pressed,lb=gp.buttons[4]?.pressed;
+  const focus=rb?1:(lb?-1:0);
+  ptzPost(source,'pan_tilt_speed',{pan_speed:pan,tilt_speed:tilt});
+  ptzPost(source,'zoom_speed',{speed:zoom});
+  if(focus)ptzPost(source,'focus_speed',{speed:focus});
 }
-
-window.addEventListener('gamepadconnected', (e) => {
-  document.getElementById('gamepad-status').textContent =
-    `Gamepad connected: ${e.gamepad.id}`;
-  showToast(`Gamepad detected: ${e.gamepad.id}`, 'success');
+window.addEventListener('gamepadconnected',e=>{
+  document.getElementById('gamepad-status').textContent=`Gamepad connected: ${e.gamepad.id}`;
+  showToast(`Gamepad detected: ${e.gamepad.id}`,'success');
 });
-window.addEventListener('gamepaddisconnected', () => {
-  document.getElementById('gamepad-status').textContent = 'No gamepad detected';
+window.addEventListener('gamepaddisconnected',()=>{
+  document.getElementById('gamepad-status').textContent='No gamepad detected';
 });
-
-function showToast(msg, type='info') {
-  const id = 'toast-' + Date.now();
-  const c  = {success:'bg-success',danger:'bg-danger',warning:'bg-warning text-dark',info:'bg-info text-dark'};
-  const html = `<div id="${id}" class="toast align-items-center ${c[type]||'bg-info'} border-0" role="alert">
-    <div class="d-flex"><div class="toast-body fw-bold">${msg}</div>
-    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`;
-  document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
-  const el = document.getElementById(id);
-  new bootstrap.Toast(el, {delay:4000}).show();
-  el.addEventListener('hidden.bs.toast', () => el.remove());
-}
-async function post(url, data) {
-  const r = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-  return r.json();
-}
-
-// Called when dropdown changes — immediately select/deselect source
-async function selectSource(display) {
-  const key    = display.replace(/-/g,'_');
-  const source = document.getElementById('src-'+key).value;
-  await applySourceValue(display, source);
-}
-
-// Apply from either dropdown or manual input
-async function applySource(display) {
-  const key    = display.replace(/-/g,'_');
-  const manual = document.getElementById('manual-'+key).value.trim();
-  const select = document.getElementById('src-'+key).value;
-  const source = manual || select;
-  await applySourceValue(display, source);
-}
-
-async function applySourceValue(display, source) {
-  // Also save current video settings alongside the source change
-  const key = display.replace(/-/g,'_');
-  const cfg = await (await fetch('/api/config')).json();
-  if (!cfg.displays[display]) cfg.displays[display] = {};
-  cfg.displays[display].resolution   = document.getElementById('v-res-'+key)?.value || 'auto';
-  cfg.displays[display].framerate    = document.getElementById('v-fps-'+key)?.value || 'auto';
-  cfg.displays[display].chroma       = document.getElementById('v-chroma-'+key)?.value || 'NV12';
-  cfg.displays[display].scaling      = document.getElementById('v-scale-'+key)?.value || 'letterbox';
-  cfg.displays[display].scaler       = document.getElementById('v-scaler-'+key)?.value || 'auto';
-  cfg.displays[display].rotation     = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
-  cfg.displays[display].backup_source= document.getElementById('v-backup-'+key)?.value || '';
-  cfg.displays[display].enabled      = document.getElementById('v-enabled-'+key)?.checked ?? true;
-  await post('/api/config', cfg);
-
-  const d = await post('/api/stream/select', {display, source});
-  if (source) {
-    showToast(d.ok ? `Connecting: ${source} → ${display}` : 'Failed to start stream',
-              d.ok ? 'success' : 'danger');
-  } else {
-    showToast(`${display} — No Source`, 'warning');
-  }
-  setTimeout(updateStatus, 1500);
-}
-
-async function saveDisplayVideo(display) {
-  const key = display.replace(/-/g,'_');
-  const cfg = await (await fetch('/api/config')).json();
-  if (!cfg.displays[display]) cfg.displays[display] = {};
-  cfg.displays[display].resolution    = document.getElementById('v-res-'+key)?.value || 'auto';
-  cfg.displays[display].framerate     = document.getElementById('v-fps-'+key)?.value || 'auto';
-  cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
-  cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
-  cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
-  cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
-  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
-  cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
-  await post('/api/config', cfg);
-  // Restart stream immediately if one is running so settings apply now
-  const source = cfg.displays[display]?.source || '';
-  if (source) {
-    const d = await post('/api/stream/select', {display, source});
-    showToast(d.ok ? 'Video settings applied' : 'Save failed', d.ok ? 'success' : 'danger');
-  } else {
-    showToast('Video settings saved', 'success');
-  }
-}
-
-async function saveNDI() {
-  const cfg  = await (await fetch('/api/config')).json();
-  const groups     = document.getElementById('ndi-groups').value.split('\n').map(s=>s.trim()).filter(Boolean);
-  const discovery  = document.getElementById('ndi-discovery').value.split(',').map(s=>s.trim()).filter(Boolean);
-  cfg.ndi.alias    = document.getElementById('ndi-alias').value;
-  cfg.ndi.groups   = groups;
-  cfg.ndi.discovery_servers = discovery;
-  cfg.ndi.bandwidth = document.getElementById('ndi-bandwidth').value;
-  const d = await post('/api/config', cfg);
-  showToast(d.ok ? 'NDI settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
-}
-
-async function saveAudio() {
-  const cfg = await (await fetch('/api/config')).json();
-  cfg.audio.enabled = document.getElementById('audio-enabled').checked;
-  cfg.audio.sink    = document.getElementById('audio-sink').value;
-  cfg.audio.volume  = parseInt(document.getElementById('audio-volume').value);
-  const d = await post('/api/config', cfg);
-  showToast(d.ok ? 'Audio settings saved' : 'Save failed', d.ok ? 'success' : 'danger');
-}
-
-async function refreshSources() {
-  const r = await fetch('/api/sources');
-  const d = await r.json();
-  const el = document.getElementById('source-list');
-  if (!d.sources.length) {
-    el.innerHTML = '<span class="text-secondary small">No NDI sources found</span>';
-    return;
-  }
-  el.innerHTML = d.sources.map(s =>
-    `<span class="badge bg-secondary source-badge" onclick="fillAllSelects('${s}')">
-      <i class="bi bi-broadcast-pin me-1"></i>${s}</span>`
-  ).join('');
-  // Refresh all source dropdowns
-  document.querySelectorAll('[id^="src-"]').forEach(sel => {
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">— No Source —</option>' +
-      d.sources.map(s => `<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
-  });
-  // Refresh all backup source dropdowns
-  document.querySelectorAll('[id^="v-backup-"]').forEach(sel => {
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">— None —</option>' +
-      d.sources.map(s => `<option value="${s}" ${s===cur?'selected':''}>${s}</option>`).join('');
-  });
-}
-
-function fillAllSelects(name) {
-  document.querySelectorAll('[id^="src-"]').forEach(sel => {
-    for (const o of sel.options) if (o.value === name) { sel.value = name; break; }
-  });
-  document.querySelectorAll('[id^="manual-"]').forEach(el => el.value = '');
-}
-
-async function updateStatus() {
-  try {
-    const r = await fetch('/api/status');
-    const d = await r.json();
-    // RGA availability — annotate the hardware option for every display
-    const rgaAvail = d.system?.rga_avail || false;
-    const rgaDev   = d.system?.rga_dev   || '';
-    document.querySelectorAll('[id^="opt-rga-"]').forEach(el => {
-      const key = el.id.replace('opt-rga-','');
-      const hint = document.getElementById('rga-hint-'+key);
-      if (rgaAvail) {
-        el.textContent = `Hardware RGA (${rgaDev})`;
-        el.disabled = false;
-        if (hint) hint.style.display = 'none';
-      } else {
-        el.textContent = 'Hardware (RGA) — not detected';
-        el.disabled = true;
-        if (hint) {
-          // Only show hint when this option is selected
-          const sel = document.getElementById('v-scaler-'+key);
-          if (sel && sel.value === 'hardware') hint.style.display = '';
-        }
-      }
-    });
-    for (const [name, info] of Object.entries(d.streams)) {
-      const key  = name.replace(/-/g,'_');
-      const dot  = document.getElementById('dot-'+key);
-      const info_el = document.getElementById('info-'+key);
-      if (dot) dot.className = 'status-dot ' + (info.active?'live':'idle');
-      const connBadge = document.getElementById('conn-'+key);
-      if (connBadge) {
-        const conn = info.connected !== false;
-        connBadge.textContent = conn ? 'CONNECTED' : 'NO SIGNAL';
-        connBadge.style.background = conn ? '#00e676' : '#444';
-        connBadge.style.color = conn ? '#000' : '#aaa';
-      }
-      if (info_el) {
-        if (info.active) {
-          const c = info.in_caps;
-          const caps_str = c ? ` · ${c.width}×${c.height} ${c.format} ${c.fps ? c.fps.toFixed(2)+'fps' : ''}` : '';
-          info_el.textContent = `${info.source} — ${info.uptime}${caps_str}`;
-        } else {
-          info_el.textContent = '';
-        }
-      }
-    }
-  } catch(e) {}
-}
-
-setInterval(updateStatus, 5000);
-setInterval(refreshSources, 10000);
-updateStatus();
 </script>
 </body>
 </html>
