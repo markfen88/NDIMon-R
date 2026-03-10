@@ -109,6 +109,15 @@
                       style="font-size:.6rem;padding:.2em .5em;background:{{ '#00e676' if d.connected else '#444' }};color:{{ '#000' if d.connected else '#aaa' }}">
                   {{ 'CONNECTED' if d.connected else 'NO SIGNAL' }}
                 </span>
+                <span class="badge bg-danger ms-1" id="src-unavail-{{ d.name|replace('-','_') }}"
+                      style="font-size:.6rem;display:{{ '' if dc.get('source') and dc.get('source') not in sources else 'none' }}">
+                  Source Unavailable
+                </span>
+                <button class="btn btn-sm btn-outline-danger ms-1 py-0 px-1" id="src-clear-{{ d.name|replace('-','_') }}"
+                        style="font-size:.7rem;display:{{ '' if dc.get('source') and dc.get('source') not in sources else 'none' }}"
+                        onclick="clearSource('{{ d.name }}', 'source')" title="Clear unavailable source">
+                  <i class="bi bi-x-circle"></i>
+                </button>
                 <span class="ms-auto text-secondary small" id="info-{{ d.name|replace('-','_') }}">
                   {% if ds.get('active') %}{{ ds.get('source','') }} — {{ ds.get('uptime','') }}{% endif %}
                 </span>
@@ -125,36 +134,34 @@
               <div class="section-title">NDI Source Settings</div>
               <div class="mb-2">
                 <label class="form-label">Primary Source</label>
-                <div class="d-flex gap-2">
-                  <select class="form-select form-select-sm" id="src-{{ d.name|replace('-','_') }}" style="max-width:340px">
-                    <option value="">— No Source —</option>
-                    {% for s in sources %}
-                    <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}</option>
-                    {% endfor %}
-                  </select>
-                  <input type="text" class="form-control form-control-sm" id="manual-{{ d.name|replace('-','_') }}"
-                         placeholder="Manual source name…"
-                         value="{{ dc.get('source','') if dc.get('source','') not in sources else '' }}">
-                </div>
+                <select class="form-select form-select-sm" id="src-{{ d.name|replace('-','_') }}"
+                        data-saved="{{ dc.get('source','') }}" style="max-width:420px">
+                  <option value="">— No Source —</option>
+                  {% for s in sources %}
+                  <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}{% if source_urls.get(s) %} [{{ source_urls[s] }}]{% endif %}</option>
+                  {% endfor %}
+                  {% if dc.get('source') and dc.get('source') not in sources %}
+                  <option value="{{ dc.get('source') }}" selected>{{ dc.get('source') }}{% if source_urls.get(dc.get('source')) %} [{{ source_urls[dc.get('source')] }}]{% endif %} (unavailable)</option>
+                  {% endif %}
+                </select>
               </div>
               <div class="mb-3">
                 <label class="form-label">Backup / Failover Source</label>
-                <div class="d-flex gap-2">
-                  <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}" style="max-width:340px">
-                    <option value="">— No Source —</option>
-                    {% for s in sources %}
-                    <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}</option>
-                    {% endfor %}
-                  </select>
-                  <input type="text" class="form-control form-control-sm" id="manual-backup-{{ d.name|replace('-','_') }}"
-                         placeholder="Manual backup name…"
-                         value="{{ dc.get('backup_source','') if dc.get('backup_source','') not in sources else '' }}">
-                </div>
+                <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}"
+                        data-saved="{{ dc.get('backup_source','') }}" style="max-width:420px">
+                  <option value="">— No Source —</option>
+                  {% for s in sources %}
+                  <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}{% if source_urls.get(s) %} [{{ source_urls[s] }}]{% endif %}</option>
+                  {% endfor %}
+                  {% if dc.get('backup_source') and dc.get('backup_source') not in sources %}
+                  <option value="{{ dc.get('backup_source') }}" selected>{{ dc.get('backup_source') }}{% if source_urls.get(dc.get('backup_source')) %} [{{ source_urls[dc.get('backup_source')] }}]{% endif %} (unavailable)</option>
+                  {% endif %}
+                </select>
               </div>
 
-              <!-- Apply button -->
+              <!-- Save button -->
               <button class="btn btn-sm btn-outline-info mb-4" onclick="applyDisplay('{{ d.name }}')">
-                <i class="bi bi-play-fill me-1"></i>Apply
+                <i class="bi bi-save me-1"></i>Save
               </button>
 
               <!-- Video Output Settings -->
@@ -232,7 +239,7 @@
                 </div>
               </div>
               <div class="mt-3">
-                <button class="btn btn-sm btn-outline-secondary" onclick="saveDisplayVideo('{{ d.name }}')">
+                <button class="btn btn-sm btn-outline-info" onclick="saveDisplayVideo('{{ d.name }}')">
                   <i class="bi bi-save me-1"></i>Save Video Output Settings
                 </button>
               </div>
@@ -372,47 +379,49 @@ function fillSource(name) {
   document.querySelectorAll('[id^="src-"]').forEach(sel => {
     for (const o of sel.options) if (o.value === name) { sel.value = name; break; }
   });
-  document.querySelectorAll('[id^="manual-"]').forEach(el => el.value = '');
 }
 
 async function refreshSources() {
   try {
     const r = await fetch('/api/sources');
     const d = await r.json();
+    const urls = d.urls || {};
     const el = document.getElementById('source-list');
     if (!d.sources.length) {
       el.innerHTML = '<span class="text-secondary small">No NDI sources found on network</span>';
     } else {
-      el.innerHTML = d.sources.map(s =>
-        `<span class="badge bg-secondary source-badge" onclick="fillSource(${JSON.stringify(s)})">
-          <i class="bi bi-broadcast-pin me-1"></i>${s}</span>`
-      ).join('');
+      el.innerHTML = d.sources.map(s => {
+        const ip = urls[s] ? ` [${urls[s]}]` : '';
+        return `<span class="badge bg-secondary source-badge" onclick="fillSource(${JSON.stringify(s)})">` +
+          `<i class="bi bi-broadcast-pin me-1"></i>${s}${ip}</span>`;
+      }).join('');
     }
-    document.querySelectorAll('[id^="src-"]').forEach(sel => {
-      const cur = sel.value;
-      sel.innerHTML = '<option value="">— No Source —</option>' +
-        d.sources.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
-    });
-    document.querySelectorAll('[id^="v-backup-"]').forEach(sel => {
-      const cur = sel.value;
-      sel.innerHTML = '<option value="">— No Source —</option>' +
-        d.sources.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
-    });
+    function rebuildSelect(sel) {
+      const saved  = sel.dataset.saved || '';
+      const target = sel.value || saved;
+      let html = '<option value="">— No Source —</option>';
+      d.sources.forEach(s => {
+        const ip = urls[s] ? ` [${urls[s]}]` : '';
+        html += `<option value="${s}"${s===target?' selected':''}>${s}${ip}</option>`;
+      });
+      // Keep saved source in dropdown even if not currently discovered
+      if (saved && !d.sources.includes(saved)) {
+        const savedIp = urls[saved] ? ` [${urls[saved]}]` : '';
+        html += `<option value="${saved}"${saved===target?' selected':''}>${saved}${savedIp} (unavailable)</option>`;
+      }
+      sel.innerHTML = html;
+    }
+    document.querySelectorAll('[id^="src-"]').forEach(rebuildSelect);
+    document.querySelectorAll('[id^="v-backup-"]').forEach(rebuildSelect);
   } catch(e) {}
 }
 
-// ── Apply display (alias + source + video + stream) ───────────────────────────
+// ── Save display (alias + source + video + stream) ───────────────────────────
 async function applyDisplay(display) {
-  const key    = display.replace(/-/g,'_');
+  const key           = display.replace(/-/g,'_');
   const alias         = document.getElementById('alias-'+key)?.value.trim() || '';
-  const select        = document.getElementById('src-'+key)?.value || '';
-  const manual        = document.getElementById('manual-'+key)?.value.trim() || '';
-  // Dropdown takes priority — if user picked a discovered source or "No Source", honour it.
-  // Manual field is only used when the dropdown is set to "No Source" (empty).
-  const source        = select || manual;
-  const selectBackup  = document.getElementById('v-backup-'+key)?.value || '';
-  const manualBackup  = document.getElementById('manual-backup-'+key)?.value.trim() || '';
-  const backup_source = selectBackup || manualBackup;
+  const source        = document.getElementById('src-'+key)?.value || '';
+  const backup_source = document.getElementById('v-backup-'+key)?.value || '';
 
   // Save alias
   await post('/api/display/alias', {display, alias});
@@ -430,6 +439,12 @@ async function applyDisplay(display) {
   cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
+
+  // Update data-saved so subsequent refreshSources() preserves selection
+  const srcSel = document.getElementById('src-'+key);
+  const bkpSel = document.getElementById('v-backup-'+key);
+  if (srcSel) srcSel.dataset.saved = source;
+  if (bkpSel) bkpSel.dataset.saved = backup_source;
 
   // Start/stop stream
   const d = await post('/api/stream/select', {display, source});
@@ -453,8 +468,7 @@ async function saveDisplayVideo(display) {
   cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
   cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
-  const manualBk = document.getElementById('manual-backup-'+key)?.value.trim() || '';
-  cfg.displays[display].backup_source = manualBk || document.getElementById('v-backup-'+key)?.value || '';
+  cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
   const source = cfg.displays[display]?.source || '';
@@ -530,8 +544,27 @@ async function updateStatus() {
           info_el.textContent = '';
         }
       }
+      const csrc       = info.configured_source || '';
+      const srcUnavail = csrc && !info.source_available;
+      const unavailBadge = document.getElementById('src-unavail-'+key);
+      const clearBtn     = document.getElementById('src-clear-'+key);
+      if (unavailBadge) unavailBadge.style.display = srcUnavail ? '' : 'none';
+      if (clearBtn)     clearBtn.style.display     = srcUnavail ? '' : 'none';
     }
   } catch(e) {}
+}
+
+async function clearSource(display, which) {
+  const label = which === 'source' ? 'primary' : 'backup';
+  if (!confirm(`Remove ${label} source from ${display}?`)) return;
+  const d = await post('/api/source/clear', {display, which: which === 'source' ? 'source' : 'backup_source'});
+  if (d.ok) {
+    const key = display.replace(/-/g,'_');
+    const sel = document.getElementById(which === 'source' ? 'src-'+key : 'v-backup-'+key);
+    if (sel) { sel.dataset.saved = ''; sel.value = ''; }
+    showToast(`${display} ${label} source cleared`, 'success');
+    setTimeout(updateStatus, 500);
+  }
 }
 
 setInterval(updateStatus, 5000);

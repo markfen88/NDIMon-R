@@ -322,6 +322,17 @@ def background_ndi_discovery():
             with _ndi_sources_lock:
                 _ndi_sources_cache = found
                 _ndi_url_cache.update(urls)
+            # Persist newly discovered URLs to config so they survive reboots
+            if urls:
+                cfg = load_config()
+                stored = cfg.setdefault("ndi_source_urls", {})
+                changed = False
+                for name, url in urls.items():
+                    if stored.get(name) != url:
+                        stored[name] = url
+                        changed = True
+                if changed:
+                    save_config(cfg)
         except Exception as e:
             log.error(f"Discovery thread error: {e}")
         time.sleep(5)
@@ -1407,10 +1418,16 @@ def auto_recovery_thread():
                     # No active stream — try to connect if source is configured
                     if time.time() < _pipeline_backoff.get(disp_name, 0):
                         continue  # Still in backoff after repeated fast failures
+                    with _ndi_sources_lock:
+                        src_url = _ndi_url_cache.get(source, "")
+                        bkp_url = _ndi_url_cache.get(backup_source, "")
+                    # Connect if discoverable OR if we have a cached direct URL (survives
+                    # mDNS gaps — GStreamer will use url-address for direct connection).
+                    # Splash only when neither source has any known address.
                     active_src = None
-                    if source:
+                    if source and (source in available or src_url):
                         active_src = source
-                    elif backup_source and backup_source in available:
+                    elif backup_source and (backup_source in available or bkp_url):
                         active_src = backup_source
                     if active_src:
                         log.info(f"Auto-connecting {active_src} → {disp_name}")
@@ -1515,7 +1532,8 @@ def logout():
 def api_sources():
     with _ndi_sources_lock:
         sources = list(_ndi_sources_cache)
-    return jsonify({"sources": sources})
+        urls    = dict(_ndi_url_cache)
+    return jsonify({"sources": sources, "urls": urls})
 
 @app.route("/api/status")
 @require_auth
@@ -1531,10 +1549,21 @@ def api_status():
     except Exception:
         pass
     cfg = load_config()
-    # Enrich stream status with configured output resolution
+    with _ndi_sources_lock:
+        avail_set = set(_ndi_sources_cache)
+        url_map   = dict(_ndi_url_cache)
+    # Enrich stream status with configured source info and availability
     for disp_name, info in status.items():
         dcfg = cfg["displays"].get(disp_name, {})
         info["output_res"] = dcfg.get("resolution", "auto")
+        csrc = dcfg.get("source", "")
+        cbkp = dcfg.get("backup_source", "")
+        info["configured_source"]  = csrc
+        info["configured_backup"]  = cbkp
+        info["source_available"]   = csrc in avail_set
+        info["backup_available"]   = cbkp in avail_set
+        info["source_url"]         = url_map.get(csrc, "")
+        info["backup_url"]         = url_map.get(cbkp, "")
     return jsonify({
         "streams": status,
         "system": {
@@ -1621,6 +1650,25 @@ def api_stream_select():
         pipeline_mgr.stop_stream(display)
         ok_flag = True
     return jsonify({"ok": ok_flag})
+
+@app.route("/api/source/clear", methods=["POST"])
+@require_auth
+def api_source_clear():
+    """Clear a configured source (primary or backup) from a display and stop the stream."""
+    data    = request.get_json(force=True) or {}
+    display = data.get("display", "").strip()
+    which   = data.get("which", "source")   # "source" or "backup_source"
+    if which not in ("source", "backup_source"):
+        return jsonify({"ok": False, "error": "which must be 'source' or 'backup_source'"}), 400
+    cfg  = load_config()
+    disp = cfg["displays"].setdefault(display, {})
+    disp[which] = ""
+    save_config(cfg)
+    if which == "source":
+        _pipeline_backoff.pop(display, None)
+        _pipeline_failures.pop(display, None)
+        pipeline_mgr.stop_stream(display)
+    return jsonify({"ok": True})
 
 @app.route("/api/stream/record", methods=["POST"])
 @require_auth
@@ -1875,10 +1923,12 @@ def ndi_page():
     for d in pipeline_mgr.displays:
         modes[d["name"]] = pipeline_mgr.get_supported_modes(d["name"])
     with _ndi_sources_lock:
-        sources = list(_ndi_sources_cache)
+        sources     = list(_ndi_sources_cache)
+        source_urls = dict(_ndi_url_cache)
     status = pipeline_mgr.get_status()
     return render_template("ndi.html", cfg=cfg, displays=pipeline_mgr.displays,
-                           modes=modes, sources=sources, status=status, ip=get_ip())
+                           modes=modes, sources=sources, source_urls=source_urls,
+                           status=status, ip=get_ip())
 
 @app.route("/settings")
 @require_auth
@@ -1958,6 +2008,10 @@ def startup():
     _cleanup_old_backups()
     threading.Thread(target=_backup_cleanup_thread,   daemon=True).start()
     cfg = load_config()
+    # Pre-seed URL cache from persisted config so direct connections work immediately
+    # (before discovery has run) and survive reboots.
+    with _ndi_sources_lock:
+        _ndi_url_cache.update(cfg.get("ndi_source_urls", {}))
     if cfg["cec"]["enabled"]:
         threading.Thread(target=cec_listener_thread, daemon=True).start()
 
