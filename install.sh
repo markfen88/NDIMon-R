@@ -186,25 +186,42 @@ if [[ "$BOARD" == "rk3588" || "$BOARD" == "rk3399" ]]; then
             RADXA_REPO_BASE="rk3399-bookworm"
         fi
 
-        # Try to fetch Radxa GPG keyring (try multiple known URLs)
+        # Fetch Radxa GPG keyring from radxa-repo.github.io (primary CDN)
+        KEYRING_DEST="/usr/share/keyrings/radxa-archive-keyring.gpg"
         KEYRING_FETCHED=0
+
+        # Try multiple key URLs — the .gpg is already binary (no gpg --dearmor needed)
         for KEY_URL in \
-            "https://apt.radxa.com/${RADXA_REPO_BASE}/public.key" \
-            "https://apt.radxa.com/bookworm-stable/public.key" \
-            "https://radxa-repo.github.io/bookworm/public.key"; do
-            if curl -fsSL --connect-timeout 10 "$KEY_URL" | gpg --batch --yes --dearmor -o /usr/share/keyrings/radxa-archive-keyring.gpg 2>/dev/null; then
-                KEYRING_FETCHED=1
-                info "Radxa keyring fetched from $KEY_URL"
-                break
+            "https://radxa-repo.github.io/radxa-archive-keyring.gpg" \
+            "https://radxa-repo.github.io/bookworm/radxa-archive-keyring.gpg" \
+            "https://apt.radxa.com/bookworm-stable/public.key"; do
+            # Determine if the key is armor (ASCII) or binary
+            if curl -fsSL --connect-timeout 15 "$KEY_URL" -o /tmp/radxa.key.tmp 2>/dev/null; then
+                if file /tmp/radxa.key.tmp | grep -q "PGP"; then
+                    # Binary GPG keyring — copy directly
+                    cp /tmp/radxa.key.tmp "$KEYRING_DEST"
+                    KEYRING_FETCHED=1
+                    info "Radxa keyring (binary) fetched from $KEY_URL"
+                    break
+                elif file /tmp/radxa.key.tmp | grep -qi "ASCII\|text"; then
+                    # ASCII-armored key — dearmor
+                    if gpg --batch --yes --dearmor -o "$KEYRING_DEST" < /tmp/radxa.key.tmp 2>/dev/null; then
+                        KEYRING_FETCHED=1
+                        info "Radxa keyring (ascii) fetched from $KEY_URL"
+                        break
+                    fi
+                fi
             fi
         done
+        rm -f /tmp/radxa.key.tmp
 
         if [[ $KEYRING_FETCHED -eq 1 ]]; then
-            echo "deb [signed-by=/usr/share/keyrings/radxa-archive-keyring.gpg] https://apt.radxa.com/${RADXA_REPO_BASE}/ bookworm main" \
+            # radxa-repo.github.io uses the repo-base name as both path and suite
+            echo "deb [signed-by=${KEYRING_DEST}] https://radxa-repo.github.io/${RADXA_REPO_BASE} ${RADXA_REPO_BASE} main" \
                 > /etc/apt/sources.list.d/radxa.list
             apt-get update -qq || warn "Radxa repo update failed — hardware decode may be unavailable"
         else
-            warn "Could not fetch Radxa keyring from any source — skipping MPP install"
+            warn "Could not fetch Radxa keyring — skipping MPP install"
         fi
     fi
 
