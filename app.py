@@ -804,6 +804,10 @@ class PipelineManager:
         return pipeline
 
     def start_stream(self, display_name, source, cfg_disp=None, show_banner=False):
+        if not source:
+            log.warning(f"start_stream called with empty source for {display_name} — showing splash")
+            self.show_splash(display_name)
+            return False
         cfg = load_config()
         if cfg_disp is None:
             cfg_disp = cfg["displays"].get(display_name, {})
@@ -920,7 +924,10 @@ class PipelineManager:
         with self.lock:
             p = self.pipelines.pop(display_name, None)
         self._kill_pipeline_proc(p)
-        # Update NDI receiver advertisement — no longer connected to any source
+        # Remove and re-add the NDI receiver advertisement with empty source so the
+        # discovery server reflects the cleared state (advertise_receiver skips if already
+        # registered, so unadvertise must come first).
+        ptz_mgr.unadvertise_receiver("", display_name)
         ptz_mgr.advertise_receiver("", display_name)
         if show_splash_after:
             self.show_splash(display_name)
@@ -1424,7 +1431,10 @@ def auto_recovery_thread():
                         else:
                             log.warning(f"Pipeline died on {disp_name} (exit={proc.poll()}, "
                                         f"uptime={uptime:.1f}s, fail #{fc}), restarting...")
-                            pipeline_mgr.start_stream(disp_name, source)
+                            if source:
+                                pipeline_mgr.start_stream(disp_name, source)
+                            else:
+                                pipeline_mgr.show_splash(disp_name)
                 else:
                     # No active stream — try to connect if source is configured
                     if time.time() < _pipeline_backoff.get(disp_name, 0):
