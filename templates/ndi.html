@@ -135,28 +135,40 @@
               <div class="mb-2">
                 <label class="form-label">Primary Source</label>
                 <select class="form-select form-select-sm" id="src-{{ d.name|replace('-','_') }}"
-                        data-saved="{{ dc.get('source','') }}" style="max-width:420px">
-                  <option value="">— No Source —</option>
+                        data-saved="{{ dc.get('source','') }}" style="max-width:420px"
+                        onchange="toggleManual(this, 'manual-src-wrap-{{ d.name|replace('-','_') }}')">
+                  <option value="">None</option>
                   {% for s in sources %}
                   <option value="{{ s }}" {{ 'selected' if s == dc.get('source','') }}>{{ s }}{% if source_urls.get(s) %} [{{ source_urls[s] }}]{% endif %}</option>
                   {% endfor %}
                   {% if dc.get('source') and dc.get('source') not in sources %}
                   <option value="{{ dc.get('source') }}" selected>{{ dc.get('source') }}{% if source_urls.get(dc.get('source')) %} [{{ source_urls[dc.get('source')] }}]{% endif %} (unavailable)</option>
                   {% endif %}
+                  <option value="__manual__">Manual entry…</option>
                 </select>
+                <div id="manual-src-wrap-{{ d.name|replace('-','_') }}" style="display:none;margin-top:.4rem">
+                  <input type="text" class="form-control form-control-sm" id="manual-src-{{ d.name|replace('-','_') }}"
+                         placeholder="Source name exactly as shown in NDI discovery…" style="max-width:420px">
+                </div>
               </div>
               <div class="mb-3">
                 <label class="form-label">Backup / Failover Source</label>
                 <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}"
-                        data-saved="{{ dc.get('backup_source','') }}" style="max-width:420px">
-                  <option value="">— No Source —</option>
+                        data-saved="{{ dc.get('backup_source','') }}" style="max-width:420px"
+                        onchange="toggleManual(this, 'manual-bkp-wrap-{{ d.name|replace('-','_') }}')">
+                  <option value="">None</option>
                   {% for s in sources %}
                   <option value="{{ s }}" {{ 'selected' if s == dc.get('backup_source','') }}>{{ s }}{% if source_urls.get(s) %} [{{ source_urls[s] }}]{% endif %}</option>
                   {% endfor %}
                   {% if dc.get('backup_source') and dc.get('backup_source') not in sources %}
                   <option value="{{ dc.get('backup_source') }}" selected>{{ dc.get('backup_source') }}{% if source_urls.get(dc.get('backup_source')) %} [{{ source_urls[dc.get('backup_source')] }}]{% endif %} (unavailable)</option>
                   {% endif %}
+                  <option value="__manual__">Manual entry…</option>
                 </select>
+                <div id="manual-bkp-wrap-{{ d.name|replace('-','_') }}" style="display:none;margin-top:.4rem">
+                  <input type="text" class="form-control form-control-sm" id="manual-bkp-{{ d.name|replace('-','_') }}"
+                         placeholder="Backup source name exactly as shown in NDI discovery…" style="max-width:420px">
+                </div>
               </div>
 
               <!-- Save button -->
@@ -398,17 +410,20 @@ async function refreshSources() {
     }
     function rebuildSelect(sel) {
       const saved  = sel.dataset.saved || '';
-      const target = sel.value || saved;
-      let html = '<option value="">— No Source —</option>';
+      const cur    = sel.value;
+      // If currently on __manual__, preserve it; otherwise prefer current value or saved
+      const target = (cur && cur !== '__manual__') ? cur : saved;
+      let html = '<option value="">None</option>';
       d.sources.forEach(s => {
         const ip = urls[s] ? ` [${urls[s]}]` : '';
         html += `<option value="${s}"${s===target?' selected':''}>${s}${ip}</option>`;
       });
-      // Keep saved source in dropdown even if not currently discovered
-      if (saved && !d.sources.includes(saved)) {
+      // Keep saved source as an option even if not currently discovered
+      if (saved && saved !== '__manual__' && !d.sources.includes(saved)) {
         const savedIp = urls[saved] ? ` [${urls[saved]}]` : '';
         html += `<option value="${saved}"${saved===target?' selected':''}>${saved}${savedIp} (unavailable)</option>`;
       }
+      html += `<option value="__manual__"${cur==='__manual__'?' selected':''}>Manual entry…</option>`;
       sel.innerHTML = html;
     }
     document.querySelectorAll('[id^="src-"]').forEach(rebuildSelect);
@@ -416,12 +431,23 @@ async function refreshSources() {
   } catch(e) {}
 }
 
+function resolveSource(selId, manualId) {
+  const val = document.getElementById(selId)?.value || '';
+  if (val === '__manual__') return document.getElementById(manualId)?.value.trim() || '';
+  return val;
+}
+
+function toggleManual(sel, wrapId) {
+  const wrap = document.getElementById(wrapId);
+  if (wrap) wrap.style.display = sel.value === '__manual__' ? '' : 'none';
+}
+
 // ── Save display (alias + source + video + stream) ───────────────────────────
 async function applyDisplay(display) {
   const key           = display.replace(/-/g,'_');
   const alias         = document.getElementById('alias-'+key)?.value.trim() || '';
-  const source        = document.getElementById('src-'+key)?.value || '';
-  const backup_source = document.getElementById('v-backup-'+key)?.value || '';
+  const source        = resolveSource('src-'+key, 'manual-src-'+key);
+  const backup_source = resolveSource('v-backup-'+key, 'manual-bkp-'+key);
 
   // Save alias
   await post('/api/display/alias', {display, alias});
@@ -440,11 +466,15 @@ async function applyDisplay(display) {
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
 
-  // Update data-saved so subsequent refreshSources() preserves selection
+  // Update data-saved with the resolved name so refreshSources() preserves it
   const srcSel = document.getElementById('src-'+key);
   const bkpSel = document.getElementById('v-backup-'+key);
-  if (srcSel) srcSel.dataset.saved = source;
-  if (bkpSel) bkpSel.dataset.saved = backup_source;
+  if (srcSel) { srcSel.dataset.saved = source; if (srcSel.value === '__manual__') srcSel.value = ''; }
+  if (bkpSel) { bkpSel.dataset.saved = backup_source; if (bkpSel.value === '__manual__') bkpSel.value = ''; }
+  // Hide manual input fields after save
+  ['manual-src-wrap-'+key, 'manual-bkp-wrap-'+key].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
 
   // Start/stop stream
   const d = await post('/api/stream/select', {display, source});
@@ -452,7 +482,7 @@ async function applyDisplay(display) {
     showToast(d.ok ? `Connecting: ${source} → ${display}` : 'Failed to start stream',
               d.ok ? 'success' : 'danger');
   } else {
-    showToast(`${display} — No Source`, 'warning');
+    showToast(`${display} — None`, 'warning');
   }
   setTimeout(updateStatus, 1500);
 }

@@ -884,10 +884,11 @@ class PipelineManager:
                     log.info(f"Channel banner dismissed on {dname}, restarting clean")
                     self.start_stream(dname, src, show_banner=False)
                 threading.Thread(target=_dismiss_banner, daemon=True).start()
-            # Save last source
-            cfg["displays"][display_name]["source"] = source
-            cfg["displays"][display_name].pop("paused", None)
-            save_config(cfg)
+            # Clear paused flag using a fresh config load so we never overwrite a
+            # concurrent "source=''" written by api_stream_select or api_source_clear.
+            _fresh = load_config()
+            _fresh["displays"].setdefault(display_name, {}).pop("paused", None)
+            save_config(_fresh)
             ok_msg = f"Stream started: {source} → {display_name}"
             log.info(ok_msg)
             ptz_mgr.advertise_receiver(source, display_name)
@@ -911,6 +912,8 @@ class PipelineManager:
         with self.lock:
             p = self.pipelines.pop(display_name, None)
         self._kill_pipeline_proc(p)
+        # Update NDI receiver advertisement — no longer connected to any source
+        ptz_mgr.advertise_receiver("", display_name)
         if show_splash_after:
             self.show_splash(display_name)
 
