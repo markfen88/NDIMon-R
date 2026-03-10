@@ -154,6 +154,8 @@ PKGS=(
     kmod
     # HDMI CEC control
     cec-utils
+    libcec6
+    python3-cec
     # mDNS (NDI source discovery)
     avahi-utils
     avahi-daemon
@@ -289,6 +291,24 @@ fi
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
 "$INSTALL_DIR/venv/bin/pip" install -q -r "$INSTALL_DIR/requirements.txt"
 ok "Python packages installed"
+
+###############################################################################
+# PYTHON CEC BINDINGS (system package → venv symlinks)
+###############################################################################
+section "Linking python3-cec into virtualenv"
+
+PYTHON_VER=$("$INSTALL_DIR/venv/bin/python3" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+VENV_SITE="$INSTALL_DIR/venv/lib/python${PYTHON_VER}/site-packages"
+
+if [[ -f /usr/lib/python3/dist-packages/cec.py ]]; then
+    ln -sf /usr/lib/python3/dist-packages/cec.py "$VENV_SITE/cec.py"
+    for so in /usr/lib/python3/dist-packages/_cec.cpython-*-linux-gnu.so; do
+        [[ -f "$so" ]] && ln -sf "$so" "$VENV_SITE/$(basename "$so")" && break
+    done
+    ok "python3-cec linked into venv (Python ${PYTHON_VER})"
+else
+    warn "python3-cec not found — CEC control unavailable"
+fi
 
 ###############################################################################
 # DIRECTORIES & PERMISSIONS
