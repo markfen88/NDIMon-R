@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NDI — NDIMon-R</title>
+<title>NDI — NDI Monitor</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <style>
@@ -35,7 +35,7 @@
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark px-3">
-  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDIMon-R</a>
+  <a class="navbar-brand" href="/"><i class="bi bi-broadcast-pin me-2"></i>NDI Monitor</a>
   <div class="d-flex align-items-center gap-3 ms-3">
     <a href="/" class="nav-link-page">Dashboard</a>
     <a href="/ndi" class="nav-link-page active">NDI</a>
@@ -163,15 +163,6 @@
               <i class="bi bi-exclamation-triangle me-1"></i>RGA not detected — will fall back to software
             </div>
           </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Rotation</label>
-            <select class="form-select form-select-sm" id="v-rotation-{{ d.name|replace('-','_') }}">
-              <option value="0"   {{ 'selected' if dc.get('rotation', 0)|int == 0   }}>0° (Normal)</option>
-              <option value="90"  {{ 'selected' if dc.get('rotation', 0)|int == 90  }}>90° Clockwise</option>
-              <option value="180" {{ 'selected' if dc.get('rotation', 0)|int == 180 }}>180°</option>
-              <option value="270" {{ 'selected' if dc.get('rotation', 0)|int == 270 }}>270° Clockwise</option>
-            </select>
-          </div>
           <div class="col-12 col-md-6">
             <label class="form-label">Backup / Failover Source</label>
             <select class="form-select form-select-sm" id="v-backup-{{ d.name|replace('-','_') }}">
@@ -186,6 +177,14 @@
               <input class="form-check-input" type="checkbox" id="v-enabled-{{ d.name|replace('-','_') }}"
                      {{ 'checked' if dc.get('enabled', true) }}>
               <label class="form-check-label text-secondary small">Display Enabled</label>
+            </div>
+          </div>
+          <div class="col-12 col-md-6 d-flex align-items-end pb-1">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="v-ndilock-{{ d.name|replace('-','_') }}"
+                     {{ 'checked' if dc.get('ndi_lock', false) }}
+                     onchange="setNdiLock('{{ d.name }}', this.checked)">
+              <label class="form-check-label text-secondary small"><i class="bi bi-lock me-1"></i>NDI Lock (block remote source changes)</label>
             </div>
           </div>
         </div>
@@ -206,7 +205,7 @@
           <div class="section-title">Identity</div>
           <div class="mb-3">
             <label class="form-label">NDI Alias (Display Name)</label>
-            <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}" placeholder="NDIMON-XXXX">
+            <input type="text" class="form-control" id="ndi-alias" value="{{ cfg.ndi.alias }}">
           </div>
           <div class="mb-3">
             <label class="form-label">Bandwidth</label>
@@ -218,10 +217,9 @@
           </div>
           <div class="section-title">Discovery</div>
           <div class="mb-3">
-            <label class="form-label">Discovery Servers / Source IPs (comma-separated)</label>
+            <label class="form-label">Discovery Servers (comma-separated)</label>
             <input type="text" class="form-control" id="ndi-discovery"
                    value="{{ cfg.ndi.discovery_servers | join(', ') }}" placeholder="192.168.1.100">
-            <div class="form-text">Enter NDI discovery server IPs <em>or</em> the IP address of any host running NDI sources. Either method works without needing mDNS multicast. Leave blank to rely on mDNS only.</div>
           </div>
           <div class="mb-3">
             <label class="form-label">NDI Groups (one per line)</label>
@@ -392,20 +390,15 @@ function ptzBtnEvents(el, source, startFn, stopFn) {
 }
 
 // ── Render per-display PTZ panels ─────────────────────────────────────────────
-let _ptzRendered = false;
-function renderPTZPanels() {
-  if (_ptzRendered) return;
-  _ptzRendered = true;
-  const container = document.getElementById('ptz-panels');
-  let html = '';
-  for (const d of PTZ_DISPLAYS) {
-    const src = d.source;
-    const key = d.key;
-    html += `
+let _ptzCurrentSources = {};  // display name -> source currently rendered
+
+function _buildPanelHTML(d, src) {
+  const key = d.key;
+  return `
     <div class="display-section mb-3">
       <div class="display-section-header">
         <strong><i class="bi bi-camera-video me-1"></i>${d.name}</strong>
-        <span class="ms-2 text-secondary small">Source: ${src || '(none)'}</span>
+        <span class="ms-2 text-secondary small">Source: <span id="ptz-src-${key}">${src || '(none)'}</span></span>
       </div>
       ${src ? `
       <div class="row g-4">
@@ -544,60 +537,108 @@ function renderPTZPanels() {
       </div>
       ` : '<p class="text-secondary small">No source configured for this display.</p>'}
     </div>`;
+}
+
+function _wireHoldButtons(d, src) {
+  if (!src) return;
+  const key = d.key;
+  const holdBtn = (id, startCb, stopCb) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const start = (e) => { e.preventDefault(); startCb(); };
+    const stop  = ()  => stopCb();
+    el.addEventListener('mousedown',   start);
+    el.addEventListener('touchstart',  start, {passive:false});
+    el.addEventListener('mouseup',     stop);
+    el.addEventListener('mouseleave',  stop);
+    el.addEventListener('touchend',    stop);
+    el.addEventListener('touchcancel', stop);
+  };
+
+  holdBtn(`ptz-up-${key}`,
+    () => startPanTilt(src, 0, -1),
+    () => stopPanTilt(src));
+  holdBtn(`ptz-down-${key}`,
+    () => startPanTilt(src, 0, 1),
+    () => stopPanTilt(src));
+  holdBtn(`ptz-left-${key}`,
+    () => startPanTilt(src, -1, 0),
+    () => stopPanTilt(src));
+  holdBtn(`ptz-right-${key}`,
+    () => startPanTilt(src, 1, 0),
+    () => stopPanTilt(src));
+  holdBtn(`ptz-home-${key}`,
+    () => ptzPost(src, 'pan_tilt', {pan:0, tilt:0}),
+    () => {});
+  holdBtn(`ptz-zoom-in-${key}`,
+    () => zoomSpeed(src, 1),
+    () => zoomSpeed(src, 0));
+  holdBtn(`ptz-zoom-out-${key}`,
+    () => zoomSpeed(src, -1),
+    () => zoomSpeed(src, 0));
+  holdBtn(`ptz-focus-far-${key}`,
+    () => focusSpeed(src, 1),
+    () => focusSpeed(src, 0));
+  holdBtn(`ptz-focus-near-${key}`,
+    () => focusSpeed(src, -1),
+    () => focusSpeed(src, 0));
+  loadPresets(src, key);
+}
+
+async function renderPTZPanels() {
+  const container = document.getElementById('ptz-panels');
+  // Fetch live sources from API
+  let liveSources = {};
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    for (const [name, info] of Object.entries(d.streams || {})) {
+      liveSources[name] = info.source || '';
+    }
+  } catch(e) {}
+
+  let html = '';
+  for (const d of PTZ_DISPLAYS) {
+    // Use live source if available, fallback to baked-in value
+    const src = liveSources[d.name] !== undefined ? liveSources[d.name] : d.source;
+    _ptzCurrentSources[d.name] = src;
+    html += `<div id="ptz-panel-${d.key}">${_buildPanelHTML(d, src)}</div>`;
   }
   container.innerHTML = html;
 
-  // Wire hold-to-move buttons for each display
+  // Wire hold buttons for all displays
   for (const d of PTZ_DISPLAYS) {
-    const src = d.source;
-    if (!src) continue;
-    const key = d.key;
+    const src = _ptzCurrentSources[d.name] || '';
+    _wireHoldButtons(d, src);
+  }
+}
 
-    const holdBtn = (id, startCb, stopCb) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      const start = (e) => { e.preventDefault(); startCb(); };
-      const stop  = ()  => stopCb();
-      el.addEventListener('mousedown',   start);
-      el.addEventListener('touchstart',  start, {passive:false});
-      el.addEventListener('mouseup',     stop);
-      el.addEventListener('mouseleave',  stop);
-      el.addEventListener('touchend',    stop);
-      el.addEventListener('touchcancel', stop);
-    };
+async function refreshPTZPanels() {
+  // Fetch current sources and update panels where source changed
+  let liveSources = {};
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    for (const [name, info] of Object.entries(d.streams || {})) {
+      liveSources[name] = info.source || '';
+    }
+  } catch(e) { return; }
 
-    holdBtn(`ptz-up-${key}`,
-      () => startPanTilt(src, 0, -1),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-down-${key}`,
-      () => startPanTilt(src, 0, 1),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-left-${key}`,
-      () => startPanTilt(src, -1, 0),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-right-${key}`,
-      () => startPanTilt(src, 1, 0),
-      () => stopPanTilt(src));
-    holdBtn(`ptz-home-${key}`,
-      () => ptzPost(src, 'pan_tilt', {pan:0, tilt:0}),
-      () => {});
-
-    holdBtn(`ptz-zoom-in-${key}`,
-      () => zoomSpeed(src, 1),
-      () => zoomSpeed(src, 0));
-    holdBtn(`ptz-zoom-out-${key}`,
-      () => zoomSpeed(src, -1),
-      () => zoomSpeed(src, 0));
-
-    holdBtn(`ptz-focus-far-${key}`,
-      () => focusSpeed(src, 1),
-      () => focusSpeed(src, 0));
-    holdBtn(`ptz-focus-near-${key}`,
-      () => focusSpeed(src, -1),
-      () => focusSpeed(src, 0));
-
-    // Load saved preset names
-    loadPresets(src, key);
+  for (const d of PTZ_DISPLAYS) {
+    const newSrc = liveSources[d.name] !== undefined ? liveSources[d.name] : (d.source || '');
+    const oldSrc = _ptzCurrentSources[d.name];
+    if (newSrc !== oldSrc) {
+      // Source changed — re-render this display's panel
+      const panelWrapper = document.getElementById(`ptz-panel-${d.key}`);
+      if (panelWrapper) {
+        panelWrapper.innerHTML = _buildPanelHTML(d, newSrc);
+        _wireHoldButtons(d, newSrc);
+      }
+      // Update source label
+      const srcSpan = document.getElementById(`ptz-src-${d.key}`);
+      if (srcSpan) srcSpan.textContent = newSrc || '(none)';
+      _ptzCurrentSources[d.name] = newSrc;
+    }
   }
 }
 
@@ -719,7 +760,6 @@ async function applySourceValue(display, source) {
   cfg.displays[display].chroma       = document.getElementById('v-chroma-'+key)?.value || 'NV12';
   cfg.displays[display].scaling      = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].scaler       = document.getElementById('v-scaler-'+key)?.value || 'auto';
-  cfg.displays[display].rotation     = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
   cfg.displays[display].backup_source= document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled      = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
@@ -732,6 +772,11 @@ async function applySourceValue(display, source) {
     showToast(`${display} — No Source`, 'warning');
   }
   setTimeout(updateStatus, 1500);
+  // If PTZ is expanded, refresh panels with new source
+  const ptzCollapse = document.getElementById('ptz-collapse');
+  if (ptzCollapse && ptzCollapse.classList.contains('show')) {
+    setTimeout(refreshPTZPanels, 1800);
+  }
 }
 
 async function saveDisplayVideo(display) {
@@ -743,7 +788,6 @@ async function saveDisplayVideo(display) {
   cfg.displays[display].chroma        = document.getElementById('v-chroma-'+key)?.value || 'NV12';
   cfg.displays[display].scaling       = document.getElementById('v-scale-'+key)?.value || 'letterbox';
   cfg.displays[display].scaler        = document.getElementById('v-scaler-'+key)?.value || 'auto';
-  cfg.displays[display].rotation      = parseInt(document.getElementById('v-rotation-'+key)?.value || '0');
   cfg.displays[display].backup_source = document.getElementById('v-backup-'+key)?.value || '';
   cfg.displays[display].enabled       = document.getElementById('v-enabled-'+key)?.checked ?? true;
   await post('/api/config', cfg);
@@ -851,6 +895,21 @@ async function updateStatus() {
       }
     }
   } catch(e) {}
+}
+
+async function setNdiLock(displayName, locked) {
+  try {
+    const r = await fetch('/api/ndi/lock', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({display: displayName, locked: locked})
+    });
+    const d = await r.json();
+    showToast(d.ok ? (locked ? 'NDI Lock ON — remote changes blocked' : 'NDI Lock OFF') : 'Lock failed',
+              d.ok ? (locked ? 'warning' : 'success') : 'danger');
+  } catch(e) {
+    showToast('Lock request failed', 'danger');
+  }
 }
 
 setInterval(updateStatus, 5000);

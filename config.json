@@ -9,62 +9,44 @@
     "password": ""
   },
   "cec": {
-    "device_name": "NDI Monitor",
-    "enabled": true
+    "device_name": "NDIMon-R",
+    "enabled": false
   },
-  "displays": {
-    "HDMI-A-1": {
-      "source": "",
-      "scaling": "letterbox",
-      "chroma": "NV12",
-      "resolution": "auto"
-    },
-    "HDMI-A-2": {
-      "source": "",
-      "scaling": "crop",
-      "chroma": "RGB",
-      "resolution": "auto"
-    }
-  },
+  "displays": {},
   "multiview": {
     "enabled": false,
     "layout": "2x2",
-    "sources": [
-      "",
-      "",
-      "",
-      ""
-    ]
+    "sources": ["", "", "", ""]
   },
   "ndi": {
     "alias": "",
     "bandwidth": "highest",
     "discovery_servers": [],
-    "groups": [
-      "Public"
-    ]
+    "groups": ["Public"]
   },
   "network": {
     "address": "",
-    "dns": [
-      "8.8.8.8",
-      "8.8.4.4"
-    ],
+    "dns": ["8.8.8.8", "8.8.4.4"],
     "gateway": "",
     "interface": "eth0",
     "mode": "dhcp",
     "netmask": ""
   },
+  "ptz": {},
   "splash": {
-    "custom_image": "",
+    "bg_color": "#546fa6",
+    "logo": "/opt/ndi-monitor/static/img/logo.png",
     "show_overlay": true
   },
   "version": "1.0.0",
   "video": {
+    "banner_duration": 5,
     "default_framerate": "59.94",
     "default_resolution": "1920x1080",
     "enable_osd": false,
     "enable_tally": false,
+    "osd_color": "#ffffff",
+    "osd_keyed": true,
     "osd_timeout": 8,
     "tally_gpio_green": 27,
     "tally_gpio_red": 17
