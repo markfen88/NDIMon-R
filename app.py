@@ -324,7 +324,7 @@ def background_ndi_discovery():
                 _ndi_url_cache.update(urls)
             # Persist newly discovered URLs to config so they survive reboots.
             # Load config fresh here (after the ~5s discovery wait) to avoid
-            # overwriting paused/source fields that may have changed during discovery.
+            # overwriting source fields that may have changed during discovery.
             if urls:
                 changed = False
                 _fresh_cfg = load_config()
@@ -898,11 +898,7 @@ class PipelineManager:
                     log.info(f"Channel banner dismissed on {dname}, restarting clean")
                     self.start_stream(dname, src, show_banner=False)
                 threading.Thread(target=_dismiss_banner, daemon=True).start()
-            # Clear paused flag using a fresh config load so we never overwrite a
-            # concurrent "source=''" written by api_stream_select or api_source_clear.
-            _fresh = load_config()
-            _fresh["displays"].setdefault(display_name, {}).pop("paused", None)
-            save_config(_fresh)
+            _paused_displays.discard(display_name)
             ok_msg = f"Stream started: {source} → {display_name}"
             log.info(ok_msg)
             ptz_mgr.advertise_receiver(source, display_name)
@@ -927,9 +923,8 @@ class PipelineManager:
             p = self.pipelines.pop(display_name, None)
         self._kill_pipeline_proc(p)
         # Do NOT unadvertise/re-advertise here. Re-advertising with "" causes the
-        # NDI discovery server to echo back the stored assignment ("assign RAWRZILLA"),
-        # which fights against the user's explicit None selection regardless of paused flag.
-        # The _watch thread keeps running and respects the paused flag already.
+        # NDI discovery server to echo back the stored assignment ("assign RAWRZILLA").
+        # The _watch thread keeps running and respects the in-memory _paused_displays set.
         if show_splash_after:
             self.show_splash(display_name)
 
@@ -1170,13 +1165,12 @@ class PTZManager:
                             lib.NDIlib_recv_free_string(ctypes.c_void_p(recv), name_ptr)
                             name_ptr = ctypes.c_char_p(None)
                             log.info(f"NDI remote: assign '{source_name}' -> {disp_name}")
-                            cfg = load_config()
-                            if cfg["displays"].get(disp_name, {}).get("paused"):
+                            if disp_name in _paused_displays:
                                 log.info(f"NDI remote: assign '{source_name}' -> {disp_name} IGNORED (user paused)")
                             else:
+                                cfg = load_config()
                                 disp = cfg["displays"].setdefault(disp_name, {})
                                 disp["source"] = source_name
-                                disp.pop("paused", None)
                                 save_config(cfg)
                                 _pipeline_backoff.pop(disp_name, None)
                                 _pipeline_failures.pop(disp_name, None)
@@ -1187,14 +1181,10 @@ class PTZManager:
                             # would trigger unadvertise+advertise("") and cause the discovery
                             # server to echo back the previous "assign" command again.
                             log.info(f"NDI remote: clear source -> {disp_name}")
+                            _paused_displays.discard(disp_name)
                             cfg = load_config()
                             disp = cfg["displays"].setdefault(disp_name, {})
                             disp["source"] = ""
-                            # Do NOT set paused=True here — the DS itself cleared us,
-                            # so the DS should be free to reassign immediately.
-                            # paused=True is only for web-UI-initiated None selections
-                            # (where the DS still has the old source stored and would echo it).
-                            disp.pop("paused", None)
                             save_config(cfg)
                             with pipeline_mgr.lock:
                                 p = pipeline_mgr.pipelines.pop(disp_name, None)
@@ -1356,6 +1346,9 @@ pipeline_mgr = PipelineManager()
 _pipeline_failures  = {}  # disp_name -> (fail_count, last_start_time)
 _pipeline_backoff   = {}  # disp_name -> retry_after (unix timestamp)
 _display_connected  = {}  # disp_name -> bool (last known state for hotplug detection)
+# In-memory paused set — NOT persisted to config. Cleared on service restart so the
+# NDI Discovery Server always works fresh at boot. Only blocks DS echoes within a session.
+_paused_displays: set = set()
 MAX_FAST_FAILURES   = 3   # clear url cache + backoff after this many crashes within window
 FAST_FAIL_WINDOW    = 30  # seconds
 BACKOFF_SECS        = 120 # seconds to wait after fast-failure before retrying
@@ -1670,16 +1663,16 @@ def api_stream_select():
     data    = request.get_json()
     display = data.get("display", "HDMI-A-1")
     source  = data.get("source", "")
-    # Save source to config; set paused=True when clearing so _watch ignores
-    # any pending "assign" echoes from the NDI discovery server.
     cfg = load_config()
     disp = cfg["displays"].setdefault(display, {})
     disp["source"] = source
-    if source:
-        disp.pop("paused", None)
-    else:
-        disp["paused"] = True
     save_config(cfg)
+    # Track paused in-memory only (not config) so service restart always
+    # allows the NDI Discovery Server to assign sources fresh.
+    if source:
+        _paused_displays.discard(display)
+    else:
+        _paused_displays.add(display)
     # Clear any backoff so auto-recovery picks it up immediately
     _pipeline_backoff.pop(display, None)
     _pipeline_failures.pop(display, None)
@@ -1706,6 +1699,7 @@ def api_source_clear():
     if which == "source":
         _pipeline_backoff.pop(display, None)
         _pipeline_failures.pop(display, None)
+        _paused_displays.add(display)
         pipeline_mgr.stop_stream(display)
     return jsonify({"ok": True})
 
