@@ -1170,22 +1170,31 @@ class PTZManager:
                             name_ptr = ctypes.c_char_p(None)
                             log.info(f"NDI remote: assign '{source_name}' -> {disp_name}")
                             cfg = load_config()
-                            disp = cfg["displays"].setdefault(disp_name, {})
-                            disp["source"] = source_name
-                            disp.pop("paused", None)
-                            save_config(cfg)
-                            _pipeline_backoff.pop(disp_name, None)
-                            _pipeline_failures.pop(disp_name, None)
-                            pipeline_mgr.start_stream(disp_name, source_name, show_banner=True)
+                            if cfg["displays"].get(disp_name, {}).get("paused"):
+                                log.info(f"NDI remote: assign '{source_name}' -> {disp_name} IGNORED (user paused)")
+                            else:
+                                disp = cfg["displays"].setdefault(disp_name, {})
+                                disp["source"] = source_name
+                                disp.pop("paused", None)
+                                save_config(cfg)
+                                _pipeline_backoff.pop(disp_name, None)
+                                _pipeline_failures.pop(disp_name, None)
+                                pipeline_mgr.start_stream(disp_name, source_name, show_banner=True)
                         else:
-                            # Discovery server assigned no source — stop stream
+                            # Discovery server cleared the source assignment.
+                            # Kill the pipeline directly — do NOT call stop_stream() which
+                            # would trigger unadvertise+advertise("") and cause the discovery
+                            # server to echo back the previous "assign" command again.
                             log.info(f"NDI remote: clear source -> {disp_name}")
                             cfg = load_config()
                             disp = cfg["displays"].setdefault(disp_name, {})
                             disp["source"] = ""
                             disp["paused"] = True
                             save_config(cfg)
-                            pipeline_mgr.stop_stream(disp_name)
+                            with pipeline_mgr.lock:
+                                p = pipeline_mgr.pipelines.pop(disp_name, None)
+                            pipeline_mgr._kill_pipeline_proc(p)
+                            pipeline_mgr.show_splash(disp_name)
                 except Exception as exc:
                     log.warning(f"NDI source-watch error on {disp_name}: {exc}")
                     stop_evt.wait(2)
@@ -1656,11 +1665,15 @@ def api_stream_select():
     data    = request.get_json()
     display = data.get("display", "HDMI-A-1")
     source  = data.get("source", "")
-    # Save source to config (clears paused if present)
+    # Save source to config; set paused=True when clearing so _watch ignores
+    # any pending "assign" echoes from the NDI discovery server.
     cfg = load_config()
     disp = cfg["displays"].setdefault(display, {})
     disp["source"] = source
-    disp.pop("paused", None)
+    if source:
+        disp.pop("paused", None)
+    else:
+        disp["paused"] = True
     save_config(cfg)
     # Clear any backoff so auto-recovery picks it up immediately
     _pipeline_backoff.pop(display, None)
