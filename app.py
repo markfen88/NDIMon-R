@@ -1190,7 +1190,11 @@ class PTZManager:
                             cfg = load_config()
                             disp = cfg["displays"].setdefault(disp_name, {})
                             disp["source"] = ""
-                            disp["paused"] = True
+                            # Do NOT set paused=True here — the DS itself cleared us,
+                            # so the DS should be free to reassign immediately.
+                            # paused=True is only for web-UI-initiated None selections
+                            # (where the DS still has the old source stored and would echo it).
+                            disp.pop("paused", None)
                             save_config(cfg)
                             with pipeline_mgr.lock:
                                 p = pipeline_mgr.pipelines.pop(disp_name, None)
