@@ -2,7 +2,7 @@
 # NDIMon-R — Update script
 set -e
 
-INSTALL_DIR="/opt/ndi-monitor"
+INSTALL_DIR="/opt/ndimon-r"
 SERVICE_NAME="ndimon-r"
 cd "$INSTALL_DIR"
 git pull origin master

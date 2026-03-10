@@ -196,8 +196,8 @@
                     <div class="input-group input-group-sm">
                       <span class="input-group-text text-secondary"><i class="bi bi-folder"></i></span>
                       <input type="text" class="form-control" id="rec-path-{{ d.name|replace('-','_') }}"
-                             value="{{ dc.get('recording_path', '/opt/ndi-monitor/recordings') }}"
-                             placeholder="/opt/ndi-monitor/recordings">
+                             value="{{ dc.get('recording_path', '/opt/ndimon-r/recordings') }}"
+                             placeholder="/opt/ndimon-r/recordings">
                     </div>
                   </div>
                   <div class="col-auto">
@@ -424,7 +424,7 @@ async function saveRecording() {
   {% for d in displays %}
   if (!cfg.displays['{{ d.name }}']) cfg.displays['{{ d.name }}'] = {};
   cfg.displays['{{ d.name }}'].recording_enabled = document.getElementById('rec-enabled-{{ d.name|replace("-","_") }}').checked;
-  cfg.displays['{{ d.name }}'].recording_path    = document.getElementById('rec-path-{{ d.name|replace("-","_") }}')?.value || '/opt/ndi-monitor/recordings';
+  cfg.displays['{{ d.name }}'].recording_path    = document.getElementById('rec-path-{{ d.name|replace("-","_") }}')?.value || '/opt/ndimon-r/recordings';
   {% endfor %}
   const d = await post('/api/config', cfg);
   showToast(d.ok ? 'Recording settings saved' : 'Save failed', d.ok ? 'success' : 'danger');

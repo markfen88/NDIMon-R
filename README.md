@@ -4,7 +4,7 @@
 
 # NDIMon-R
 
-**Open-source NDI Monitor Appliance for Rockchip SBCs**
+**Open-source NDIMon-R Appliance for Rockchip SBCs**
 
 *A BirdDog Play replacement — built from scratch, entirely free.*
 
@@ -271,7 +271,7 @@ Flask Web App (app.py, port 8080)
     ├── /settings      → System Configuration
     └── /api/*         → JSON REST API (status, sources, stream control)
 
-systemd: ndi-monitor.service
+systemd: ndimon-r.service
     └── python3 app.py (single worker, PID lock)
 ```
 
@@ -292,16 +292,16 @@ systemd: ndi-monitor.service
 **Service:**
 ```bash
 # Status
-systemctl status ndi-monitor
+systemctl status ndimon-r
 
 # Logs
-journalctl -u ndi-monitor -f
+journalctl -u ndimon-r -f
 
 # Restart
-systemctl restart ndi-monitor
+systemctl restart ndimon-r
 
 # Update
-/opt/ndi-monitor/update.sh
+/opt/ndimon-r/update.sh
 ```
 
 ---

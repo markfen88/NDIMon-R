@@ -5,14 +5,14 @@
 # Run as root: sudo bash install.sh
 #
 # Optional env overrides:
-#   REPO_URL=git@myserver:/path/ndi-monitor.git bash install.sh
+#   REPO_URL=git@myserver:/path/ndimon-r.git bash install.sh
 #   INSTALL_DIR=/opt/ndimon-r bash install.sh
 set -e
 
 ###############################################################################
 # CONFIG
 ###############################################################################
-INSTALL_DIR="${INSTALL_DIR:-/opt/ndi-monitor}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/ndimon-r}"
 REPO_URL="${REPO_URL:-https://github.com/markfen88/NDIMon-R.git}"
 SERVICE_NAME="ndimon-r"
 OLD_SERVICE_NAME="ndi-monitor"   # migrate from previous installs
@@ -355,7 +355,7 @@ NDI_LIB_PATH_ENV="/usr/local/ndisdk/lib/aarch64-linux-gnu:/usr/local/lib"
 
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
-Description=NDIMon-R NDI Monitor Appliance
+Description=NDIMon-R — Rockchip NDI Display Appliance
 After=network-online.target avahi-daemon.service
 Wants=network-online.target avahi-daemon.service
 

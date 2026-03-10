@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NDIMon-R - NDI Monitor Appliance for Rockchip SBCs"""
+"""NDIMon-R - Rockchip NDI Display Appliance"""
 import os, json, time, subprocess, threading, socket, re, glob, signal, ctypes, fcntl
 import logging
 from pathlib import Path
@@ -12,7 +12,7 @@ from PIL import Image
 import psutil
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_DIR    = Path("/opt/ndi-monitor")
+BASE_DIR    = Path("/opt/ndimon-r")
 CONFIG_FILE = BASE_DIR / "config.json"
 UPLOAD_DIR  = BASE_DIR / "uploads"
 LOG_DIR     = BASE_DIR / "logs"
@@ -943,7 +943,7 @@ class PipelineManager:
     def start_recording(self, display_name):
         cfg      = load_config()
         d_cfg    = cfg["displays"].get(display_name, {})
-        rec_path = d_cfg.get("recording_path", "/opt/ndi-monitor/recordings")
+        rec_path = d_cfg.get("recording_path", "/opt/ndimon-r/recordings")
         source   = d_cfg.get("source", "")
         if not source:
             return False, "No source configured"
