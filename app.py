@@ -713,9 +713,10 @@ class PipelineManager:
         if not display:
             log.error(f"Display not found: {display_name}")
             return False
-        if not display.get("connected", True):
+        if not _sysfs_connected(display_name):
             log.warning(f"Skipping stream to disconnected display {display_name}")
             return False
+        display["connected"] = True  # keep cache in sync
 
         # Validate resolution
         if resolution != "auto":
@@ -1233,6 +1234,21 @@ def auto_recovery_thread():
                     continue
                 source        = d_cfg.get("source", "")
                 backup_source = d_cfg.get("backup_source", "")
+
+                # Always check live sysfs state — drives hotplug detection for all paths below
+                now_connected = _sysfs_connected(disp_name)
+                was_connected = _display_connected.get(disp_name, now_connected)
+                _display_connected[disp_name] = now_connected
+                # Keep pipeline_mgr.displays cache in sync
+                for _d in pipeline_mgr.displays:
+                    if _d["name"] == disp_name:
+                        _d["connected"] = now_connected
+                        break
+                # On reconnect: re-advertise NDI receiver so discovery server sees it again
+                if now_connected and not was_connected:
+                    log.info(f"Display {disp_name} reconnected")
+                    ptz_mgr.advertise_receiver("", disp_name)
+
                 with pipeline_mgr.lock:
                     pipe_info = pipeline_mgr.pipelines.get(disp_name)
                 if pipe_info:
@@ -1282,19 +1298,16 @@ def auto_recovery_thread():
                         log.info(f"Auto-connecting {active_src} → {disp_name}")
                         pipeline_mgr.start_stream(disp_name, active_src)
                     else:
-                        # Hotplug: refresh splash if display just reconnected
-                        now_connected = _sysfs_connected(disp_name)
-                        was_connected = _display_connected.get(disp_name, True)
+                        # Splash: show on reconnect or restart if watchdog detects it died
                         if now_connected and not was_connected:
                             log.info(f"Display {disp_name} reconnected — refreshing splash")
                             pipeline_mgr.show_splash(disp_name)
-                        _display_connected[disp_name] = now_connected
-                        # Splash watchdog: restart splash if it has died (prevents blank screen)
-                        with pipeline_mgr.lock:
-                            splash_proc = pipeline_mgr.splash_procs.get(disp_name)
-                        if now_connected and (splash_proc is None or splash_proc.poll() is not None):
-                            log.info(f"Splash died on {disp_name} — restarting to prevent blank screen")
-                            pipeline_mgr.show_splash(disp_name)
+                        else:
+                            with pipeline_mgr.lock:
+                                splash_proc = pipeline_mgr.splash_procs.get(disp_name)
+                            if now_connected and (splash_proc is None or splash_proc.poll() is not None):
+                                log.info(f"Splash died on {disp_name} — restarting to prevent blank screen")
+                                pipeline_mgr.show_splash(disp_name)
         except Exception as e:
             log.error(f"Auto-recovery error: {e}")
         time.sleep(8)

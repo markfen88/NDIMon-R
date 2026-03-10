@@ -367,7 +367,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=GST_PLUGIN_PATH=${GST_PLUGIN_PATH_ENV}
 Environment=LD_LIBRARY_PATH=${NDI_LIB_PATH_ENV}
 ExecStartPre=/bin/sh -c 'printf "\033[2J\033[H\033[?25l" > /dev/tty1 2>/dev/null; true'
-ExecStart=${INSTALL_DIR}/venv/bin/python3 app.py
+ExecStart=${INSTALL_DIR}/venv/bin/gunicorn -w 1 -b 0.0.0.0:8080 --timeout 120 app:app
 Restart=always
 RestartSec=5
 StandardOutput=append:${INSTALL_DIR}/logs/app.log
