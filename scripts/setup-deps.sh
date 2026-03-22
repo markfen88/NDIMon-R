@@ -249,17 +249,18 @@ else
     fi
 fi
 
-# --- 4. Node.js (v20 LTS via NodeSource) ---
-if command -v node &>/dev/null && node --version | grep -q "^v2[0-9]"; then
-    NODE_VER=$(node --version)
-    ok "Node.js already installed: $NODE_VER"
+# --- 4. Node.js (v20 LTS via NodeSource) + npm ---
+if command -v node &>/dev/null && node --version | grep -q "^v2[0-9]" && command -v npm &>/dev/null; then
+    ok "Node.js already installed: $(node --version) / npm $(npm --version)"
 else
-    info "Installing Node.js v20 LTS..."
+    info "Installing Node.js v20 LTS + npm..."
     # Debian trixie ships Node 18, so use NodeSource for v20 on all distros
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>/dev/null || \
         curl -fsSL https://deb.nodesource.com/setup_20.x | DEBIAN_CODENAME="${CODENAME:-bookworm}" bash -
     apt-get install -yq nodejs
-    ok "Node.js installed: $(node --version)"
+    # npm is bundled with NodeSource nodejs; if somehow missing, install separately
+    command -v npm &>/dev/null || apt-get install -yq npm
+    ok "Node.js installed: $(node --version) / npm $(npm --version 2>/dev/null || echo '?')"
 fi
 
 # --- 5. RPi-specific: DRM/V4L2 group membership ---

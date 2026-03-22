@@ -60,7 +60,7 @@ if [ "$(id -u)" = "0" ] && [ ! -e /dev/rga ]; then
 fi
 
 echo "[install] Installing Node.js API dependencies..."
-cd api && npm install --production && cd ..
+(cd "$PROJECT_DIR/api" && npm install --production) || echo "  WARNING: npm install failed (API may not work)"
 
 echo "[install] Granting Node.js permission to bind port 80..."
 NODE_BIN=$(which node 2>/dev/null || echo "")
