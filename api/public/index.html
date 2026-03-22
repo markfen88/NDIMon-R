@@ -847,6 +847,11 @@ function populateOutputSrcSelector(cardIdx) {
   const cur = S.outputs[cardIdx]?.source_name || '';
   const prev = sel.value;
   sel.innerHTML = '<option value="">— Select source —</option>';
+  // "None" always appears first so the user can explicitly disconnect/save as unconnected
+  const noneOpt = document.createElement('option');
+  noneOpt.value = 'None'; noneOpt.textContent = 'None';
+  if ((prev || cur) === 'None' || (!prev && !cur)) noneOpt.selected = true;
+  sel.appendChild(noneOpt);
   S.sources.forEach(s => {
     const o = document.createElement('option');
     o.value = s; o.textContent = s;
@@ -860,7 +865,8 @@ async function connectOutput(cardIdx) {
   const sel = document.getElementById(`src-sel-${cardIdx}`);
   if (!sel?.value) { toast('Select a source first', 'warning'); return; }
   await post('/v1/NDIDecode/connectTo', { SourceName: sel.value, SourceIP: sourceIPs[sel.value]||'', Output: (out?.output_index??cardIdx)+1 });
-  toast(`Output ${cardIdx+1}: connecting to ${sel.value}…`);
+  if (sel.value === 'None') toast(`Output ${cardIdx+1}: disconnected`);
+  else toast(`Output ${cardIdx+1}: connecting to ${sel.value}…`);
 }
 
 async function disconnectOutput(cardIdx) {
@@ -971,11 +977,19 @@ function updateNDIState() {
 function renderSrcList() {
   const el = document.getElementById('ndi-src-list');
   if (!el) return;
-  if (!S.sources.length) {
-    el.innerHTML='<div style="color:var(--text-muted);text-align:center;padding:40px 0"><i class="bi bi-wifi-off" style="font-size:2rem"></i><div class="mt-2">No NDI sources found</div><div style="font-size:.8rem;margin-top:4px">Check network or use Manual Connect</div></div>';
-    return;
-  }
-  el.innerHTML = S.sources.map(s => {
+  const noneActive = !S.connected;
+  const noneItem = `<div class="source-item ${noneActive?'active-src':''}">
+    <span class="src-dot ${noneActive?'on':'off'}"></span>
+    <span class="src-name">None</span>
+    ${noneActive
+      ? '<span class="badge-live">ACTIVE</span>'
+      : `<button class="btn btn-outline-secondary btn-sm" style="font-size:.78rem;padding:3px 10px" onclick="doDisconnect()"><i class="bi bi-x-circle me-1"></i>Disconnect</button>`
+    }
+  </div>`;
+  const noSrcMsg = !S.sources.length
+    ? '<div style="color:var(--text-muted);text-align:center;padding:20px 0;font-size:.85rem"><i class="bi bi-wifi-off"></i> No NDI sources found — check network or use Manual Connect</div>'
+    : '';
+  el.innerHTML = noneItem + noSrcMsg + S.sources.map(s => {
     const active = s===S.source_name && S.connected;
     const ip = sourceIPs[s] || '';
     return `<div class="source-item ${active?'active-src':''}">
