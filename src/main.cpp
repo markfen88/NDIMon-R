@@ -48,7 +48,11 @@ static void write_ndi_sdk_config(const Config& cfg) {
         discovery = cfg.finder.discovery_server_ip;
     }
 
-    // Build JSON manually to avoid pulling nlohmann into this helper
+    // Build JSON manually to avoid pulling nlohmann into this helper.
+    // codec.h264/h265.passthrough=true forces the NDI SDK to deliver HX streams
+    // as compressed H.264/H.265 bitstream rather than decoding them internally.
+    // This is critical on Noble where libavcodec.so.61 (FFmpeg 7) is not available;
+    // without passthrough the SDK renders a "Video Decoder not Found" error frame.
     std::string json =
         "{\n"
         "  \"ndi\": {\n"
@@ -59,6 +63,10 @@ static void write_ndi_sdk_config(const Config& cfg) {
         "    \"networks\": {\n"
         "      \"ips\": \"" + cfg.off_subnet_ips + "\",\n"
         "      \"discovery\": \"" + discovery + "\"\n"
+        "    },\n"
+        "    \"codec\": {\n"
+        "      \"h264\": { \"passthrough\": true },\n"
+        "      \"h265\": { \"passthrough\": true }\n"
         "    }\n"
         "  }\n"
         "}\n";
