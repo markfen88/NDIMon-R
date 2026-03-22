@@ -261,23 +261,20 @@ public:
             recv_->set_discovery_server(cfg.finder.discovery_server_ip);
         }
 
-        if (drm_ok) {
-            // Create recv instance immediately so the device is always visible
-            // as a receiver in the NDI discovery server, even before connecting.
-            ndi_started_ = true;
-            recv_->init_recv();
+        // Always create and register the NDI receiver so this device appears
+        // as a receiver in the DS regardless of display state.
+        // Connecting to a source is deferred until DRM is ready.
+        ndi_started_ = true;
+        recv_->init_recv();
 
+        if (drm_ok) {
             if (!out_cfg.source_name.empty() && out_cfg.source_name != "None") {
                 std::cout << "[Worker" << ch_num_ << "] Auto-connecting to: "
                           << out_cfg.source_name << "\n";
                 connect_source(out_cfg.source_name, out_cfg.source_ip);
             }
         } else {
-            // No display yet — defer NDI init until hotplug to avoid creating
-            // a second recv instance that would connect to the same source as
-            // an already-running worker (NDI SDK heap corruption with concurrent
-            // recv instances on the same source).
-            std::cout << "[Worker" << ch_num_ << "] No display — deferring NDI init until hotplug\n";
+            std::cout << "[Worker" << ch_num_ << "] No display — NDI receiver registered, awaiting hotplug\n";
         }
 
         fps_last_time_ = std::chrono::steady_clock::now();
@@ -573,21 +570,16 @@ public:
             if (drm_->check_hotplug()) {
                 std::cout << "[Worker" << ch_num_ << "] Display connected via hotplug\n";
                 drm_->show_splash(connected_.load());
-                // Initialize NDI now that the display is available.
-                // Deferred from start() to avoid two recv instances connecting
-                // to the same source when the second output has no display.
-                if (recv_ && !ndi_started_) {
-                    ndi_started_ = true;
-                    recv_->init_recv();
-                    std::string sname, sip;
-                    {
-                        std::lock_guard<std::mutex> lk(source_mutex_);
-                        sname = source_name_;
-                        sip   = source_ip_;
-                    }
-                    if (!sname.empty() && sname != "None") {
-                        connect_source(sname, sip);
-                    }
+                // NDI receiver was already registered at start() — just connect
+                // to the configured source now that the display is ready.
+                std::string sname, sip;
+                {
+                    std::lock_guard<std::mutex> lk(source_mutex_);
+                    sname = source_name_;
+                    sip   = source_ip_;
+                }
+                if (!sname.empty() && sname != "None") {
+                    connect_source(sname, sip);
                 }
             }
         }
