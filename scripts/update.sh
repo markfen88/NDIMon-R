@@ -13,8 +13,7 @@ echo "[update] Stopping ndimon-r to replace binary..."
 systemctl stop ndimon-r 2>/dev/null || true
 
 echo "[update] Installing binary..."
-cmake --install build --component runtime 2>/dev/null || \
-    cp build/ndimon-r /usr/local/bin/ndimon-r
+cmake --install build
 
 echo "[update] Installing API..."
 cp -r api /opt/ndimon-r/
