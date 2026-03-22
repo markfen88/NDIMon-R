@@ -164,18 +164,9 @@ target_link_libraries(ndimon-finder PRIVATE
 install(TARGETS ndimon-r ndimon-finder
     RUNTIME DESTINATION /usr/local/bin
 )
-
-install(FILES
-    config/ndimon-dec1-settings.json
-    config/ndimon-rx-settings.json
-    config/ndimon-find-settings.json
-    config/ndimon-sources.json
-    config/ndi-config.json
-    config/ndi-group.json
-    config/ndimon-device-settings.json
-    config/ndimon-about-settings.json
-    DESTINATION /etc
-)
+# Config files are intentionally NOT installed by cmake.
+# install.sh handles first-time config installation with "skip if exists"
+# semantics so user settings are never overwritten on update.
 
 message(STATUS "")
 message(STATUS "=== NDIMon-R Build Configuration ===")
