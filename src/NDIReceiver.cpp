@@ -346,6 +346,7 @@ void NDIReceiver::recv_thread() {
         if (connections > 0 && !was_connected) {
             was_connected = true;
             probe_active  = false;  // connected — disable probe
+            first_frame_logged_ = false;  // log FourCC of first frame from new source
             std::cout << "[NDIRecv] Connected to " << current_source_ << "\n";
             if (conn_cb_) conn_cb_(true, current_source_);
             // Send routing ACK immediately so DS sees the assignment right away.
@@ -423,6 +424,22 @@ void NDIReceiver::recv_thread() {
 
         switch (frame_type) {
             case NDIlib_frame_type_video: {
+                // Log first frame details for debugging
+                if (!first_frame_logged_) {
+                    first_frame_logged_ = true;
+                    char fcc[5] = {};
+                    uint32_t f = (uint32_t)video_frame->FourCC;
+                    fcc[0] = (char)(f & 0xff);
+                    fcc[1] = (char)((f >> 8) & 0xff);
+                    fcc[2] = (char)((f >> 16) & 0xff);
+                    fcc[3] = (char)((f >> 24) & 0xff);
+                    std::cout << "[NDIRecv] First frame: " << video_frame->xres
+                              << "x" << video_frame->yres
+                              << " FourCC='" << fcc << "'"
+                              << " stride=" << video_frame->line_stride_in_bytes
+                              << " data_size=" << video_frame->data_size_in_bytes
+                              << "\n";
+                }
                 // Warn on HDR FourCC: color_format_fastest does not down-map HDR to SDR.
                 if (video_frame->FourCC == NDIlib_FourCC_video_type_P216 ||
                     video_frame->FourCC == NDIlib_FourCC_video_type_PA16) {

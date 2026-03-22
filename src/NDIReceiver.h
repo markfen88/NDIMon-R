@@ -128,5 +128,7 @@ private:
     NDIConnectionCallback conn_cb_;
     NDIRoutingCallback    routing_cb_;
 
+    bool first_frame_logged_ = false;  // log FourCC/size of very first frame for diagnostics
+
     static bool ndi_initialized_;
 };

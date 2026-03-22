@@ -202,33 +202,27 @@ else
     install_ndi_sdk || warn "NDI SDK install failed — build will fail without it"
 fi
 
-# --- 3b. NDI HX codec compat symlinks (Ubuntu Noble only) ---
-# NDI SDK 6.3.1 dlopen()s libavcodec.so.61 + libavutil.so.59 (FFmpeg 7.x) for HX decode.
-# Noble ships FFmpeg 6.1 (libavcodec.so.60 / libavutil.so.58). Create compat symlinks so
-# HX streams work without upgrading FFmpeg. The NDI SDK only uses stable API symbols
-# (avcodec_send_packet, avcodec_receive_frame, etc.) that are ABI-compatible across 6→7.
+# --- 3b. NDI HX codec compat symlinks — REMOVE if present ---
+# The NDI SDK dlopen()s libavcodec.so.61 + libavutil.so.59 (FFmpeg 7.x) to decode HX
+# streams internally. Pointing these at FFmpeg 6 (Noble's libavcodec.so.60.x) causes
+# a hard crash (SEGV) due to ABI differences between FFmpeg 6 and 7 in the structures
+# and symbols the NDI HX plugin relies on.
+#
+# Correct approach on RK3588/RK3399: let the NDI SDK fall back to delivering HX video
+# as a compressed H.264/H.265 bitstream. The application then decodes it using
+# Rockchip MPP (hardware) or FFmpeg (software). This is more efficient anyway.
+# Remove any previously created compat symlinks so the NDI HX plugin cannot load.
 if [[ "$CODENAME" == "noble" ]]; then
     FFMPEG_LIB_DIR="/lib/aarch64-linux-gnu"
-    if [[ ! -e "$FFMPEG_LIB_DIR/libavcodec.so.61" ]]; then
-        avcodec_src=$(find "$FFMPEG_LIB_DIR" -name 'libavcodec.so.60.*' 2>/dev/null | sort -V | tail -1)
-        if [[ -n "$avcodec_src" ]]; then
-            ln -sf "$avcodec_src" "$FFMPEG_LIB_DIR/libavcodec.so.61"
-            info "Created symlink: libavcodec.so.61 → $(basename "$avcodec_src")"
-        else
-            warn "libavcodec.so.60.* not found — NDI HX streams may not work"
+    for _lib in libavcodec.so.61 libavutil.so.59; do
+        _path="$FFMPEG_LIB_DIR/$_lib"
+        if [[ -L "$_path" ]]; then
+            rm -f "$_path"
+            info "Removed stale compat symlink: $_lib (caused NDI HX crash)"
         fi
-    fi
-    if [[ ! -e "$FFMPEG_LIB_DIR/libavutil.so.59" ]]; then
-        avutil_src=$(find "$FFMPEG_LIB_DIR" -name 'libavutil.so.58.*' 2>/dev/null | sort -V | tail -1)
-        if [[ -n "$avutil_src" ]]; then
-            ln -sf "$avutil_src" "$FFMPEG_LIB_DIR/libavutil.so.59"
-            info "Created symlink: libavutil.so.59 → $(basename "$avutil_src")"
-        else
-            warn "libavutil.so.58.* not found — NDI HX streams may not work"
-        fi
-    fi
+    done
     ldconfig
-    ok "NDI HX codec symlinks verified (Noble FFmpeg 6→7 compat)"
+    ok "NDI HX compat symlinks removed — HX decoded by MPP/FFmpeg application-side"
 fi
 
 # --- 4. Node.js (v20 LTS via NodeSource) ---
