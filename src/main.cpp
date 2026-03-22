@@ -844,6 +844,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // The NDI SDK rewrites ndi-config.v1.json during NDIlib_initialize(), wiping any
+    // extra keys we wrote before init. Re-write now so the codec passthrough settings
+    // are present when the recv instances are created (SDK reads them at recv creation).
+    write_ndi_sdk_config(cfg);
+
     // Auto-detect the DRM card that has HDMI/DP connectors.
     // On RPi4, HDMI outputs are on card1 (vc4), not card0 (V3D).
     // On Rockchip boards they are typically on card0 (VOP2).

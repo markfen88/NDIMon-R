@@ -522,13 +522,17 @@ bool DRMDisplay::init(int fd, const std::string& connector_name,
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_ATOMIC, 1);
 
 #ifdef HAVE_RGA
-    if (access("/dev/rga", F_OK) == 0) {
+    // On Armbian/newer kernels the RGA device is registered as /dev/video0, not /dev/rga.
+    // Check both paths; if either exists let imcheckHeader() confirm functionality.
+    if (access("/dev/rga", F_OK) == 0 || access("/dev/video0", F_OK) == 0) {
         if (imcheckHeader() == IM_STATUS_SUCCESS) {
             rga_available_ = true;
             std::cout << "[DRM] RGA hardware color conversion available\n";
+        } else {
+            std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
         }
     } else {
-        std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
+        std::cout << "[DRM] RGA device not found, using software color conversion\n";
     }
 #endif
 
