@@ -333,6 +333,12 @@ public:
 
     void connect_source(const std::string& name, const std::string& ip) {
         bool real_source = !name.empty() && name != "None";
+        // Refuse to connect when no display is attached — the NDI receiver
+        // stays registered with DS (visible/monitorable) but won't stream.
+        if (real_source && !drm_ready()) {
+            std::cout << "[Worker" << ch_num_ << "] No display — ignoring connect request for \"" << name << "\"\n";
+            return;
+        }
         // Mark as not connected immediately — status queries will report
         // disconnected until the new source establishes its connection.
         connected_ = false;
@@ -429,6 +435,7 @@ public:
             ev["output"]    = ch_num_ - 1;
             ev["connected"] = false;
             ev["source"]    = "";
+            ev["drm_ready"] = drm_ready();
             ipc_->push_event(ev);
         }
         if (drm_) drm_->set_streaming(false);  // allow splash to render
@@ -614,6 +621,13 @@ public:
     }
 
     void tick() {
+        // If DS routed us to a source via allow_controlling but we have no display,
+        // immediately disconnect — we don't want to consume an NDI slot with no output.
+        if (connected_.load() && !drm_ready()) {
+            std::cout << "[Worker" << ch_num_ << "] No display — dropping DS-assigned connection\n";
+            disconnect_source();
+        }
+
         // Hotplug check
         if (drm_ && !drm_->is_initialized()) {
             if (drm_->check_hotplug()) {
