@@ -59,8 +59,15 @@ if [ "$(id -u)" = "0" ] && [ ! -e /dev/rga ]; then
     fi
 fi
 
-echo "[install] Installing Node.js API dependencies..."
-(cd "$PROJECT_DIR/api" && npm install --production) || echo "  WARNING: npm install failed (API may not work)"
+# --- Install API to stable location ---
+# The API is installed to /opt/ndimon-r/api so its path is independent of
+# where the source was cloned (avoids WorkingDirectory pointing at a temp dir).
+API_INSTALL_DIR="/opt/ndimon-r"
+echo "[install] Installing Node.js API to $API_INSTALL_DIR/api..."
+$SUDO mkdir -p "$API_INSTALL_DIR"
+$SUDO cp -r "$PROJECT_DIR/api" "$API_INSTALL_DIR/"
+(cd "$API_INSTALL_DIR/api" && $SUDO npm install --production) || \
+    echo "  WARNING: npm install failed (API may not work)"
 
 echo "[install] Granting Node.js permission to bind port 80..."
 NODE_BIN=$(which node 2>/dev/null || echo "")
@@ -75,13 +82,13 @@ fi
 echo "[install] Installing systemd services..."
 mkdir -p "$SYSTEMD_DIR"
 ACTUAL_NODE=$(which node 2>/dev/null || echo "/usr/bin/node")
-for svc in systemd/*.service; do
-    name=$(basename $svc)
-    # Replace install dir placeholder, node binary path, and WantedBy target
-    sed -e "s|NDIMON_INSTALL_DIR|$PROJECT_DIR|g" \
-        -e "s|ExecStart=.*/node server\.js|ExecStart=$ACTUAL_NODE server.js|g" \
-        -e "s|WantedBy=default\.target|WantedBy=$WANTED_BY|g" \
-        "$svc" > "$SYSTEMD_DIR/$name"
+for svc in "$PROJECT_DIR/systemd/"*.service; do
+    name=$(basename "$svc")
+    # Replace placeholders: install dir → /opt/ndimon-r, node binary, WantedBy target
+    $SUDO sed -e "s|NDIMON_INSTALL_DIR|$API_INSTALL_DIR|g" \
+              -e "s|ExecStart=.*/node server\.js|ExecStart=$ACTUAL_NODE server.js|g" \
+              -e "s|WantedBy=default\.target|WantedBy=$WANTED_BY|g" \
+              "$svc" > "$SYSTEMD_DIR/$name"
     echo "  Installed $name → $SYSTEMD_DIR/$name"
 done
 

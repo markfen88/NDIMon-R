@@ -53,14 +53,13 @@ ok "Build tools installed"
 
 # --- 2. Rockchip MPP (only on Rockchip boards) ---
 if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
-    if ldconfig -p 2>/dev/null | grep -q librockchip_mpp; then
+    if /sbin/ldconfig -p 2>/dev/null | grep -q librockchip_mpp; then
         ok "Rockchip MPP already installed"
     else
         info "Installing Rockchip MPP..."
 
-        # Install the Radxa archive keyring .deb (replaces the old raw .gpg approach)
+        # Install the Radxa archive keyring .deb
         # The keyring package installs yearly-rotated keys to /usr/share/keyrings/
-        # Note: GitHub /releases/latest/download/ requires the exact filename; fetch it via the API
         _keyring_url=$(curl -sL https://api.github.com/repos/radxa-pkg/radxa-archive-keyring/releases/latest 2>/dev/null \
             | python3 -c "import sys,json; assets=json.load(sys.stdin).get('assets',[]); \
               print(next((a['browser_download_url'] for a in assets if a['name'].endswith('_all.deb')), ''))" 2>/dev/null)
@@ -81,23 +80,28 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
         RADXA_KEY=$(ls /usr/share/keyrings/radxa-archive-keyring-*.gpg 2>/dev/null | sort -V | tail -1)
 
         if [[ -n "$RADXA_KEY" ]]; then
-            # MPP packages live in rk3588-bookworm / rk3399-bookworm regardless of host OS.
-            # There is no rk3588-noble repo; the bookworm libs are ABI-compatible with Noble.
+            # MPP packages live in rk3588-bookworm regardless of host OS.
+            # Also add noble + noble-test repos (Radxa utilities, dependency resolution).
             SUITE_SOC="${BOARD}-bookworm"
             RADXA_LIST=/etc/apt/sources.list.d/radxa-rockchip.list
             {
                 echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/bookworm bookworm main"
                 echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/${SUITE_SOC} ${SUITE_SOC} main"
+                if [[ "$CODENAME" == "noble" ]]; then
+                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/noble noble main"
+                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/noble-test noble-test main"
+                fi
             } > "$RADXA_LIST"
 
-            apt-get update -o Dir::Etc::sourcelist="$RADXA_LIST" \
-                -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 -qq 2>/dev/null || true
+            # Full update so apt can resolve dependencies across all sources
+            info "Updating apt package index (Radxa repos)..."
+            apt-get update -qq 2>&1 | grep -E 'Err:|W:' || true
 
             apt-get install -yq --no-install-recommends \
                 librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 \
-                librga2 librga-dev 2>/dev/null || \
+                librga2 librga-dev && ok "MPP + RGA installed" || \
             apt-get install -yq --no-install-recommends \
-                librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 2>/dev/null || \
+                librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 && ok "MPP installed (no RGA)" || \
             warn "MPP packages unavailable — software decode only"
         else
             warn "Radxa keyring not found — MPP installation skipped (software decode will be used)"
@@ -250,16 +254,24 @@ else
 fi
 
 # --- 4. Node.js (v20 LTS via NodeSource) + npm ---
-if command -v node &>/dev/null && node --version | grep -q "^v2[0-9]" && command -v npm &>/dev/null; then
+# Check that node is v20+ AND comes from NodeSource (not the Ubuntu/Debian system package).
+# Ubuntu 24.04 ships v18 from apt; NodeSource v20 must replace it.
+_node_ok=0
+if command -v node &>/dev/null && node --version 2>/dev/null | grep -q "^v2[0-9]"; then
+    # Verify it's from NodeSource, not the distro package
+    if dpkg -l nodejs 2>/dev/null | grep -q nodesource; then
+        _node_ok=1
+    fi
+fi
+if [[ $_node_ok -eq 1 ]] && command -v npm &>/dev/null; then
     ok "Node.js already installed: $(node --version) / npm $(npm --version)"
 else
-    info "Installing Node.js v20 LTS + npm..."
-    # Debian trixie ships Node 18, so use NodeSource for v20 on all distros
+    info "Installing Node.js v20 LTS via NodeSource..."
+    # Remove distro-packaged nodejs first to avoid conflicts
+    apt-get remove -yq nodejs npm 2>/dev/null || true
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>/dev/null || \
         curl -fsSL https://deb.nodesource.com/setup_20.x | DEBIAN_CODENAME="${CODENAME:-bookworm}" bash -
     apt-get install -yq nodejs
-    # npm is bundled with NodeSource nodejs; if somehow missing, install separately
-    command -v npm &>/dev/null || apt-get install -yq npm
     ok "Node.js installed: $(node --version) / npm $(npm --version 2>/dev/null || echo '?')"
 fi
 
