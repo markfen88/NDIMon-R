@@ -84,18 +84,44 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
             # Also add noble + noble-test repos (Radxa utilities, dependency resolution).
             SUITE_SOC="${BOARD}-bookworm"
             RADXA_LIST=/etc/apt/sources.list.d/radxa-rockchip.list
-            {
-                echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/bookworm bookworm main"
-                echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/${SUITE_SOC} ${SUITE_SOC} main"
-                if [[ "$CODENAME" == "noble" ]]; then
-                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/noble noble main"
-                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/noble-test noble-test main"
-                fi
-            } > "$RADXA_LIST"
+            write_radxa_sources() {
+                local key="$1"
+                {
+                    echo "deb [signed-by=$key] https://radxa-repo.github.io/bookworm bookworm main"
+                    echo "deb [signed-by=$key] https://radxa-repo.github.io/${SUITE_SOC} ${SUITE_SOC} main"
+                    if [[ "$CODENAME" == "noble" ]]; then
+                        echo "deb [signed-by=$key] https://radxa-repo.github.io/noble noble main"
+                        echo "deb [signed-by=$key] https://radxa-repo.github.io/noble-test noble-test main"
+                    fi
+                } > "$RADXA_LIST"
+            }
+            write_radxa_sources "$RADXA_KEY"
 
             # Full update so apt can resolve dependencies across all sources
             info "Updating apt package index (Radxa repos)..."
-            apt-get update -qq 2>&1 | grep -E 'Err:|W:' || true
+            UPDATE_ERRORS=$(apt-get update -qq 2>&1 | grep -E 'Err:|W:.*GPG|E:.*not signed' || true)
+            if [[ -n "$UPDATE_ERRORS" ]]; then
+                # The latest keyring may not yet sign the repos (e.g. 2026 key, repos still
+                # signed by 2025 key). Fall back to the known-good 2025 keyring.
+                RADXA_KEY_2025="/usr/share/keyrings/radxa-archive-keyring-2025.gpg"
+                if [[ ! -f "$RADXA_KEY_2025" ]]; then
+                    info "Fetching Radxa 2025 keyring (fallback)..."
+                    _mpp_tmpdir2=$(mktemp -d)
+                    if wget -q -O "$_mpp_tmpdir2/radxa-keyring-2025.deb" \
+                        "https://github.com/radxa-pkg/radxa-archive-keyring/releases/download/0.2.2/radxa-archive-keyring_0.2.2_all.deb" 2>/dev/null; then
+                        dpkg -i "$_mpp_tmpdir2/radxa-keyring-2025.deb" 2>/dev/null || true
+                    fi
+                    rm -rf "$_mpp_tmpdir2"
+                fi
+                if [[ -f "$RADXA_KEY_2025" ]]; then
+                    warn "Latest keyring has GPG errors — falling back to 2025 keyring"
+                    RADXA_KEY="$RADXA_KEY_2025"
+                    write_radxa_sources "$RADXA_KEY"
+                    apt-get update -qq 2>&1 | grep -E 'Err:|W:' || true
+                else
+                    echo "$UPDATE_ERRORS"
+                fi
+            fi
 
             apt-get install -yq --no-install-recommends \
                 librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 \
