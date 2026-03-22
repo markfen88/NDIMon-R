@@ -51,35 +51,6 @@ apt-get install -yq --no-install-recommends \
 }
 ok "Build tools installed"
 
-# Download and install MPP .deb files directly from GitHub releases (no apt repo needed)
-install_mpp_debs_direct() {
-    info "Trying direct .deb download for MPP packages..."
-    local tmpdir; tmpdir=$(mktemp -d)
-    trap "rm -rf $tmpdir" RETURN
-
-    # These debs are from the Radxa bookworm repo and work on Noble too (no libc version deps)
-    local BASE_URL="https://github.com/radxa-pkg/rockchip-multimedia/releases/latest/download"
-    local PKGS=(librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 librga2 librga-dev)
-    local any_installed=0
-
-    for pkg in "${PKGS[@]}"; do
-        local url="${BASE_URL}/${pkg}_arm64.deb"
-        info "  Downloading $pkg..."
-        if wget -q -O "$tmpdir/${pkg}.deb" "$url" 2>/dev/null; then
-            dpkg -i "$tmpdir/${pkg}.deb" 2>/dev/null && any_installed=1 || true
-        else
-            warn "  Could not download $pkg (skipping)"
-        fi
-    done
-
-    if [[ $any_installed -eq 0 ]]; then
-        warn "Direct .deb install failed — build will use software decode only"
-    else
-        ldconfig
-        ok "MPP packages installed via direct download"
-    fi
-}
-
 # --- 2. Rockchip MPP (only on Rockchip boards) ---
 if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
     if ldconfig -p 2>/dev/null | grep -q librockchip_mpp; then
@@ -87,53 +58,38 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
     else
         info "Installing Rockchip MPP..."
 
-        RADXA_KEY="/usr/share/keyrings/radxa-archive-keyring.gpg"
-        if [[ ! -f "$RADXA_KEY" ]]; then
-            curl -fsSL https://radxa-repo.github.io/bookworm/radxa-archive-keyring.gpg \
-                -o "$RADXA_KEY" 2>/dev/null || \
-            curl -fsSL https://radxa-repo.github.io/noble/radxa-archive-keyring.gpg \
-                -o "$RADXA_KEY" 2>/dev/null || true
+        # Install the Radxa archive keyring .deb (replaces the old raw .gpg approach)
+        # The keyring package installs yearly-rotated keys to /usr/share/keyrings/
+        # Note: GitHub /releases/latest/download/ requires the exact filename; fetch it via the API
+        local _keyring_url
+        _keyring_url=$(curl -sL https://api.github.com/repos/radxa-pkg/radxa-archive-keyring/releases/latest 2>/dev/null \
+            | python3 -c "import sys,json; assets=json.load(sys.stdin).get('assets',[]); \
+              print(next((a['browser_download_url'] for a in assets if a['name'].endswith('_all.deb')), ''))" 2>/dev/null)
+        RADXA_KEYRING_DEB="${_keyring_url:-https://github.com/radxa-pkg/radxa-archive-keyring/releases/download/0.2.2/radxa-archive-keyring_0.2.2_all.deb}"
+        if ! dpkg -s radxa-archive-keyring &>/dev/null; then
+            info "Fetching Radxa archive keyring..."
+            local _tmpdir; _tmpdir=$(mktemp -d)
+            if wget -q -O "$_tmpdir/radxa-keyring.deb" "$RADXA_KEYRING_DEB" 2>/dev/null; then
+                dpkg -i "$_tmpdir/radxa-keyring.deb" 2>/dev/null && ok "Radxa keyring installed" || \
+                    warn "Radxa keyring install failed"
+            else
+                warn "Could not download Radxa keyring"
+            fi
+            rm -rf "$_tmpdir"
         fi
 
-        if [[ -f "$RADXA_KEY" ]]; then
-            # Try Noble-specific repo first, then Bookworm
-            RADXA_LIST=/etc/apt/sources.list.d/radxa-rockchip.list
-            case "$BOARD" in
-                rk3588)
-                    if [[ "$CODENAME" == "noble" || "$ID" == "ubuntu" ]]; then
-                        SUITE_BASE="noble"
-                        SUITE_SOC="rk3588-noble"
-                    else
-                        SUITE_BASE="bookworm"
-                        SUITE_SOC="rk3588-bookworm"
-                    fi
-                    ;;
-                rk3399)
-                    if [[ "$CODENAME" == "noble" || "$ID" == "ubuntu" ]]; then
-                        SUITE_BASE="noble"
-                        SUITE_SOC="rk3399-noble"
-                    else
-                        SUITE_BASE="bookworm"
-                        SUITE_SOC="rk3399-bookworm"
-                    fi
-                    ;;
-            esac
+        # Find a valid installed keyring file (yearly rotation: 2024, 2025, 2026 …)
+        RADXA_KEY=$(ls /usr/share/keyrings/radxa-archive-keyring-*.gpg 2>/dev/null | sort -V | tail -1)
 
-            # Test if the SOC repo exists
-            if curl -fsSL --head "https://radxa-repo.github.io/${SUITE_SOC}/dists/${SUITE_SOC}/Release" \
-                    -o /dev/null 2>/dev/null; then
-                {
-                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/${SUITE_BASE} ${SUITE_BASE} main"
-                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/${SUITE_SOC} ${SUITE_SOC} main"
-                } > "$RADXA_LIST"
-            else
-                # Fall back to bookworm repos
-                warn "No ${SUITE_SOC} repo found, trying bookworm packages"
-                {
-                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/bookworm bookworm main"
-                    echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/rk3588-bookworm rk3588-bookworm main"
-                } > "$RADXA_LIST"
-            fi
+        if [[ -n "$RADXA_KEY" ]]; then
+            # MPP packages live in rk3588-bookworm / rk3399-bookworm regardless of host OS.
+            # There is no rk3588-noble repo; the bookworm libs are ABI-compatible with Noble.
+            SUITE_SOC="${BOARD}-bookworm"
+            RADXA_LIST=/etc/apt/sources.list.d/radxa-rockchip.list
+            {
+                echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/bookworm bookworm main"
+                echo "deb [signed-by=$RADXA_KEY] https://radxa-repo.github.io/${SUITE_SOC} ${SUITE_SOC} main"
+            } > "$RADXA_LIST"
 
             apt-get update -o Dir::Etc::sourcelist="$RADXA_LIST" \
                 -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 -qq 2>/dev/null || true
@@ -145,8 +101,7 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
                 librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 2>/dev/null || \
             warn "MPP packages unavailable — software decode only"
         else
-            warn "Could not fetch Radxa signing key — attempting direct .deb download fallback"
-            install_mpp_debs_direct
+            warn "Radxa keyring not found — MPP installation skipped (software decode will be used)"
         fi
 
         # Create librga.pc stub if librga installed but no pkg-config file
