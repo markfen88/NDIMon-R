@@ -41,6 +41,24 @@ done
 # Create param file if missing
 [ -f /etc/ndi_src_find_param ] || $SUDO touch /etc/ndi_src_find_param
 
+# --- RGA device symlink ---
+# On newer kernels (6.x) the Rockchip RGA is registered as /dev/video* instead
+# of /dev/rga. librga still opens /dev/rga at runtime, so we create a symlink
+# and a persistent udev rule so it survives reboots.
+if [ "$(id -u)" = "0" ] && [ ! -e /dev/rga ]; then
+    RGA_DEV=$(grep -rl "rockchip-rga" /sys/class/video4linux/*/name 2>/dev/null \
+              | sed 's|/sys/class/video4linux/\(video[0-9]*\)/name|\1|' | head -1)
+    if [ -n "$RGA_DEV" ]; then
+        ln -sf "/dev/$RGA_DEV" /dev/rga
+        echo "[install] Created /dev/rga -> /dev/$RGA_DEV"
+        # Persist via udev so symlink survives reboot
+        echo 'KERNEL=="video*", ATTRS{name}=="rockchip-rga", SYMLINK+="rga"' \
+            > /etc/udev/rules.d/99-rockchip-rga.rules
+        udevadm control --reload-rules 2>/dev/null || true
+        echo "[install] Installed udev rule for /dev/rga"
+    fi
+fi
+
 echo "[install] Installing Node.js API dependencies..."
 cd api && npm install --production && cd ..
 
