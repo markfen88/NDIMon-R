@@ -511,18 +511,20 @@ void NDIReceiver::recv_thread() {
                     std::string xml(metadata.p_data);
                     // Routing command from discovery server: assign a source to this receiver.
                     // Format: <ndi_routing><source name="..." url="..."/></ndi_routing>
+                    // With allow_controlling=true the SDK handles the actual connection switch.
+                    // routing_cb_ is purely informational (pushes IPC event for UI display).
+                    // Do NOT call connect_source() from here — that causes a feedback loop:
+                    //   DS routing → connect → routing ACK → DS routing → connect → crash (SEGV).
                     if (xml.find("ndi_routing") != std::string::npos) {
                         std::string name = xml_attr(xml, "name");
                         std::string url  = xml_attr(xml, "url");
-                        std::cout << "[NDIRecv] Routing command: source='"
+                        std::cout << "[NDIRecv] DS routing: source='"
                                   << name << "' url='" << url << "'\n";
-                        if (routing_cb_) {
-                        // Dispatch asynchronously: routing_cb_ calls connect_source()
-                        // → stop_thread() → join(), which would deadlock if called
-                        // from within this thread. Detached thread avoids self-join.
-                        auto cb = routing_cb_;
-                        std::thread([cb, name, url]() { cb(name, url); }).detach();
-                    }
+                        // Update internal state so status queries reflect DS assignment
+                        current_source_ = (name.empty() || name == "None") ? "" : name;
+                        current_ip_     = url;
+                        // Notify Node.js for UI display (informational only — no reconnect)
+                        if (routing_cb_) routing_cb_(name, url);
                     } else {
                         // Log unknown metadata for debugging
                         std::cout << "[NDIRecv] Metadata: " << xml.substr(0, 120) << "\n";
@@ -542,17 +544,15 @@ void NDIReceiver::recv_thread() {
             case NDIlib_frame_type_source_change: {
                 // SDK notifies us that the connected source changed — either the DS
                 // reassigned us (allow_controlling=true) or the source renamed itself.
-                // Read the new source name and fire the routing callback so the rest
-                // of the stack (DRM, splash, config save) can react properly.
+                // Just sync internal state; do NOT fire routing_cb_ — that would trigger
+                // a connect_source() call which races with the SDK's own switch and
+                // creates a stop_thread()/join() crash loop.
                 const char* p_src = nullptr;
                 NDIlib_recv_get_source_name(recv_, &p_src, 0);
                 std::string new_src = p_src ? p_src : "";
                 if (p_src) NDIlib_recv_free_string(recv_, p_src);
                 std::cout << "[NDIRecv] Source change: '" << new_src << "'\n";
-                if (routing_cb_ && new_src != current_source_) {
-                    auto cb = routing_cb_;
-                    std::thread([cb, new_src]() { cb(new_src, ""); }).detach();
-                }
+                if (!new_src.empty()) current_source_ = new_src;
                 if (video_frame) { delete video_frame; video_frame = nullptr; }
                 if (audio_frame) { delete audio_frame; audio_frame = nullptr; }
                 break;

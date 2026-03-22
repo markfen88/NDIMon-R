@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <string>
 #include <mutex>
+#include <set>
 #include <vector>
 #include <map>
 #include <chrono>
@@ -175,7 +176,7 @@ public:
         drm_->set_scale_mode(scale_mode_);
         bool drm_ok;
         if (lease_fd_ >= 0) {
-            drm_ok = drm_->init(lease_fd_, connector_name_, preferred_mode_);
+            drm_ok = drm_->init(lease_fd_, connector_name_, preferred_mode_, device_);
         } else {
             drm_ok = drm_->init(device_, connector_name_, preferred_mode_);
         }
@@ -879,12 +880,16 @@ int main(int argc, char* argv[]) {
     }
     std::map<std::string, int> lease_fds;
     if (drm_master_fd >= 0) {
+        std::set<uint32_t> used_crtcs;
         for (const auto& conn : connectors) {
             if (conn.name.find("HDMI") == std::string::npos &&
                 conn.name.find("DP")   == std::string::npos) continue;
-            int lfd = DRMDisplay::create_lease(drm_master_fd, conn.name);
-            if (lfd >= 0)
+            uint32_t selected_crtc = 0;
+            int lfd = DRMDisplay::create_lease(drm_master_fd, conn.name, used_crtcs, &selected_crtc);
+            if (lfd >= 0) {
                 lease_fds[conn.name] = lfd;
+                if (selected_crtc) used_crtcs.insert(selected_crtc);
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -47,13 +48,18 @@ public:
               const std::string& preferred_mode = "");
 
     // Init with a pre-opened fd (e.g. a DRM lease). Skips open() and drmSetMaster().
-    bool init(int fd, const std::string& connector_name, const std::string& preferred_mode);
+    bool init(int fd, const std::string& connector_name, const std::string& preferred_mode,
+              const std::string& device_path = "/dev/dri/card0");
 
     void destroy();
 
     // Create a DRM lease for a named connector. Returns a lease fd (or -1 on failure).
     // The caller must keep master_fd open until the lease fd is closed.
-    static int create_lease(int master_fd, const std::string& connector_name);
+    // excluded_crtcs: set of CRTC IDs already in other leases (to avoid EBUSY conflicts).
+    // selected_crtc_out: if non-null, receives the CRTC ID assigned to this lease.
+    static int create_lease(int master_fd, const std::string& connector_name,
+                            const std::set<uint32_t>& excluded_crtcs = {},
+                            uint32_t* selected_crtc_out = nullptr);
 
     bool is_initialized() const { return initialized_; }
     int    width()          const { return width_; }

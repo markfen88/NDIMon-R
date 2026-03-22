@@ -382,7 +382,9 @@ std::vector<ConnectorInfo> DRMDisplay::enumerate_connectors(const std::string& d
 // The lease gives the holder DRM master rights for its connector/CRTC/planes.
 // master_fd must remain open as long as the lease fd is in use.
 // ---------------------------------------------------------------------------
-int DRMDisplay::create_lease(int master_fd, const std::string& connector_name) {
+int DRMDisplay::create_lease(int master_fd, const std::string& connector_name,
+                             const std::set<uint32_t>& excluded_crtcs,
+                             uint32_t* selected_crtc_out) {
     // Need to see all planes
     drmSetClientCap(master_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
 
@@ -416,24 +418,25 @@ int DRMDisplay::create_lease(int master_fd, const std::string& connector_name) {
 
         conn_id = conn->connector_id;
 
-        // 1. Try current encoder's CRTC
+        // 1. Try current encoder's CRTC (only if not excluded by another lease)
         if (conn->encoder_id) {
             drmModeEncoder* enc = drmModeGetEncoder(master_fd, conn->encoder_id);
             if (enc) {
-                if (enc->crtc_id) crtc_id = enc->crtc_id;
+                if (enc->crtc_id && !excluded_crtcs.count(enc->crtc_id))
+                    crtc_id = enc->crtc_id;
                 drmModeFreeEncoder(enc);
             }
         }
-        // 2. Try possible encoders
+        // 2. Try possible encoders — skip CRTCs already claimed by another lease
         for (int j = 0; j < conn->count_encoders && !crtc_id; j++) {
             drmModeEncoder* enc = drmModeGetEncoder(master_fd, conn->encoders[j]);
             if (!enc) continue;
             for (int k = 0; k < res->count_crtcs; k++) {
-                if (enc->possible_crtcs & (1u << k)) {
-                    crtc_id = res->crtcs[k];
-                    crtc_index = k;
-                    break;
-                }
+                if (!(enc->possible_crtcs & (1u << k))) continue;
+                if (excluded_crtcs.count(res->crtcs[k])) continue;
+                crtc_id = res->crtcs[k];
+                crtc_index = k;
+                break;
             }
             drmModeFreeEncoder(enc);
         }
@@ -496,6 +499,7 @@ int DRMDisplay::create_lease(int master_fd, const std::string& connector_name) {
         std::cout << "[DRM] Lease created for " << connector_name
                   << " (conn=" << conn_id << " crtc=" << crtc_id
                   << " planes=" << (objects.size()-2) << ")\n";
+        if (selected_crtc_out) *selected_crtc_out = crtc_id;
     }
     return lease_fd;
 }
@@ -504,8 +508,9 @@ int DRMDisplay::create_lease(int master_fd, const std::string& connector_name) {
 // init with pre-opened fd (DRM lease)
 // ---------------------------------------------------------------------------
 bool DRMDisplay::init(int fd, const std::string& connector_name,
-                      const std::string& preferred_mode) {
-    device_path_    = "/dev/dri/card0";
+                      const std::string& preferred_mode,
+                      const std::string& device_path) {
+    device_path_    = device_path;
     connector_name_ = connector_name;
     preferred_mode_ = preferred_mode;
     drm_fd_         = fd;
@@ -634,7 +639,9 @@ bool DRMDisplay::setup_crtc(const std::string& connector_name,
         // Check connection (sysfs is more reliable)
         bool is_connected = false;
         {
-            std::string sysfs = "/sys/class/drm/card0-" + this_name + "/status";
+            std::string card_base = device_path_.empty() ? "card0"
+                : device_path_.substr(device_path_.rfind('/') + 1);
+            std::string sysfs = "/sys/class/drm/" + card_base + "-" + this_name + "/status";
             std::ifstream sf(sysfs);
             if (sf.is_open()) {
                 std::string st;
@@ -765,7 +772,9 @@ bool DRMDisplay::check_hotplug() {
 
     // Check sysfs status
     std::string check_name = connector_name_.empty() ? "HDMI-A-1" : connector_name_;
-    std::string sysfs = "/sys/class/drm/card0-" + check_name + "/status";
+    std::string card_base = device_path_.empty() ? "card0"
+        : device_path_.substr(device_path_.rfind('/') + 1);
+    std::string sysfs = "/sys/class/drm/" + card_base + "-" + check_name + "/status";
     std::ifstream sf(sysfs);
     if (!sf.is_open()) return false;
 
@@ -1525,11 +1534,13 @@ bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
 // ---------------------------------------------------------------------------
 void DRMDisplay::set_hdmi_enabled(bool enable) {
     // Try the connector-specific sysfs path
-    std::string path = "/sys/class/drm/card0-" + connector_name_ + "/status";
+    std::string card_base = device_path_.empty() ? "card0"
+        : device_path_.substr(device_path_.rfind('/') + 1);
+    std::string path = "/sys/class/drm/" + card_base + "-" + connector_name_ + "/status";
     FILE* f = fopen(path.c_str(), "w");
     if (!f) {
-        // Fallback to hardcoded HDMI-A-1
-        f = fopen("/sys/class/drm/card0-HDMI-A-1/status", "w");
+        // Fallback to HDMI-A-1 on same card
+        f = fopen(("/sys/class/drm/" + card_base + "-HDMI-A-1/status").c_str(), "w");
     }
     if (f) {
         fputs(enable ? "on" : "off", f);
