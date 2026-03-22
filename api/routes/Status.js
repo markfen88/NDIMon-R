@@ -196,15 +196,23 @@ async function broadcastStatus() {
 setInterval(broadcastStatus, 1500);
 
 // Handle routing events from DS via C++ push
-// DS routing events are INFORMATIONAL ONLY — the NDI SDK handles the actual
-// connection switch via allow_controlling=true on the receiver advertiser.
-// Local config (SourceName/SourceIP) is the source of truth for persistence
-// and reconnect-after-loss. DS cannot override local config.
+// DS assignment is persisted to local config so reconnect-after-loss uses DS source.
+// The NDI SDK handles the actual connection switch via allow_controlling=true —
+// we do NOT send a connect IPC back, which would create a feedback loop:
+//   DS routing → connect → routing ACK → DS routing → connect → SEGV.
 ipcEvents.on('routing', async ev => {
     const { source, url: ip, output = 0 } = ev;
-    console.log(`[Events] DS routing hint: output=${output} source="${source}" ip="${ip}" (SDK handles switch)`);
-    // Do NOT write to config — local user selection is source of truth
-    // Do NOT send connect IPC — SDK handles switch, re-triggering causes SEGV feedback loop
+    const ch = output + 1;
+    console.log(`[Events] DS routing: output=${output} source="${source}" ip="${ip}"`);
+    const cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`);
+    if (source && source !== 'None') {
+        // Persist DS assignment — reconnect loop will use this source if it drops
+        writeJson(`/etc/ndimon-dec${ch}-settings.json`, { ...cfg, SourceName: source, SourceIP: ip });
+    } else {
+        // DS cleared this receiver — clear saved source so reconnect loop stays idle
+        writeJson(`/etc/ndimon-dec${ch}-settings.json`, { ...cfg, SourceName: '', SourceIP: '' });
+    }
+    // Do NOT sendIPC connect/disconnect — SDK already switched via allow_controlling=true
     broadcastStatus();
 });
 
