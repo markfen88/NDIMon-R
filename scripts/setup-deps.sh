@@ -240,12 +240,17 @@ fi
 #
 # Previously a compat symlink (.so.61 → .so.60) was suggested; DO NOT do this —
 # the FFmpeg 6 and 7 ABIs differ in AVFrame/AVPacket layout and cause a hard SEGV.
-# Remove any such stale symlink before installing the real packages.
+# Remove only stale compat shims (those pointing to FFmpeg 6 targets, e.g. .so.60.*).
+# Do NOT remove real Debian/Ubuntu package symlinks pointing to .so.61.* targets.
 for _stale in /lib/aarch64-linux-gnu/libavcodec.so.61 /lib/aarch64-linux-gnu/libavutil.so.59 \
               /usr/lib/aarch64-linux-gnu/libavcodec.so.61 /usr/lib/aarch64-linux-gnu/libavutil.so.59; do
     if [[ -L "$_stale" ]]; then
-        rm -f "$_stale"
-        info "Removed stale FFmpeg compat symlink: $_stale"
+        _target=$(readlink "$_stale")
+        # Only remove if pointing to an FFmpeg 6 library (compat shim), not FFmpeg 7
+        if [[ "$_target" != *".so.61."* && "$_target" != *".so.59."* ]]; then
+            rm -f "$_stale"
+            info "Removed stale FFmpeg compat symlink: $_stale -> $_target"
+        fi
     fi
 done
 
