@@ -167,7 +167,10 @@ public:
     }
 
     // Push current connection state to newly connected subscriber so Node.js
-    // can start a retry loop immediately if the saved source is unavailable
+    // can start a retry loop immediately if the saved source is unavailable.
+    // drm_ready is included so Node.js won't start a reconnect loop for an
+    // output with no physical display (avoids fighting with workers that have
+    // no display but have a saved source from a previous DS routing event).
     void push_connection_state() {
         if (!ipc_) return;
         nlohmann::json ev;
@@ -175,6 +178,7 @@ public:
         ev["output"]    = ch_num_ - 1;
         ev["connected"] = connected_.load();
         ev["source"]    = connected_.load() ? last_source_ : "";
+        ev["drm_ready"] = drm_ready();
         ipc_->push_event(ev);
     }
 

@@ -243,9 +243,15 @@ ipcEvents.on('routing', async ev => {
 
 // Handle connection state changes from C++ push
 ipcEvents.on('connection', async ev => {
-    const { output = 0, connected } = ev;
-    console.log(`[Events] Connection: output=${output} connected=${connected}`);
+    const { output = 0, connected, drm_ready } = ev;
+    console.log(`[Events] Connection: output=${output} connected=${connected} drm_ready=${drm_ready}`);
     if (!connected) {
+        // No display attached — don't start reconnect loop, cancel any existing one
+        if (drm_ready === false) {
+            stopReconnectLoop(output);
+            broadcastStatus();
+            return;
+        }
         // Suppress reconnect loop during the grace period after an explicit
         // connectTo — the intermediate disconnect is expected during a source
         // switch and the connect IPC is already in flight.
