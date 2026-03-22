@@ -276,6 +276,11 @@ static void draw_logo(uint32_t* pixels, uint32_t stride_u32,
 #ifdef HAVE_RGA
 #include <rga/im2d.hpp>
 #include <rga/RgaUtils.h>
+#include <atomic>
+// libRGA uses a global singleton that can only be safely initialised once.
+// Gate all init checks behind this flag so multiple DRMDisplay instances
+// don't race and corrupt the singleton.
+static std::atomic<int> g_rga_state{0};  // 0=unknown, 1=ok, -1=unavailable
 #endif
 
 // BT.601 YUV->RGB, clamped to [0,255]
@@ -522,15 +527,26 @@ bool DRMDisplay::init(int fd, const std::string& connector_name,
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_ATOMIC, 1);
 
 #ifdef HAVE_RGA
-    if (access("/dev/rga", F_OK) == 0) {
-        if (imcheckHeader() == IM_STATUS_SUCCESS) {
+    {
+        int state = g_rga_state.load();
+        if (state == 0) {
+            // First instance: probe RGA once and cache result globally
+            if (access("/dev/rga", F_OK) == 0 && imcheckHeader() == IM_STATUS_SUCCESS) {
+                g_rga_state = 1;
+                rga_available_ = true;
+                std::cout << "[DRM] RGA hardware color conversion available\n";
+            } else {
+                g_rga_state = -1;
+                if (access("/dev/rga", F_OK) != 0)
+                    std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
+                else
+                    std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
+            }
+        } else if (state == 1) {
             rga_available_ = true;
-            std::cout << "[DRM] RGA hardware color conversion available\n";
-        } else {
-            std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
+            // No log — already reported by first instance
         }
-    } else {
-        std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
+        // state == -1: leave rga_available_ = false (default)
     }
 #endif
 
@@ -571,17 +587,23 @@ bool DRMDisplay::init(const std::string& device,
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_ATOMIC, 1);
 
 #ifdef HAVE_RGA
-    // RGA requires the kernel device node. Check before attempting any RGA calls
-    // because librga crashes with SIGSEGV if the device is missing.
-    if (access("/dev/rga", F_OK) == 0) {
-        if (imcheckHeader() == IM_STATUS_SUCCESS) {
+    {
+        int state = g_rga_state.load();
+        if (state == 0) {
+            if (access("/dev/rga", F_OK) == 0 && imcheckHeader() == IM_STATUS_SUCCESS) {
+                g_rga_state = 1;
+                rga_available_ = true;
+                std::cout << "[DRM] RGA hardware color conversion available\n";
+            } else {
+                g_rga_state = -1;
+                if (access("/dev/rga", F_OK) != 0)
+                    std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
+                else
+                    std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
+            }
+        } else if (state == 1) {
             rga_available_ = true;
-            std::cout << "[DRM] RGA hardware color conversion available\n";
-        } else {
-            std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
         }
-    } else {
-        std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
     }
 #endif
 
@@ -1059,6 +1081,134 @@ void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
 }
 
 // ---------------------------------------------------------------------------
+// UYVY native plane path — VOP2 Cluster handles YUV→RGB during scanout.
+// ---------------------------------------------------------------------------
+
+bool DRMDisplay::alloc_yuv_fb_if_needed() {
+    if (yuv_fb_state_ == 1) {
+        if (yuv_fb_[0].width == width_ && yuv_fb_[0].height == height_)
+            return true;
+        // Wrong size — free and reallocate
+        for (auto& b : yuv_fb_) free_fb(b);
+        yuv_fb_state_ = 0;
+    }
+    if (yuv_fb_state_ == -1) return false;
+
+    for (int i = 0; i < kNumBuffers; i++) {
+        free_fb(yuv_fb_[i]);
+
+        struct drm_mode_create_dumb cd = {};
+        cd.width  = width_;
+        cd.height = height_;
+        cd.bpp    = 16;
+        if (drmIoctl(drm_fd_, DRM_IOCTL_MODE_CREATE_DUMB, &cd) < 0) {
+            std::cerr << "[DRM] UYVY alloc: CREATE_DUMB(bpp=16) failed: "
+                      << strerror(errno) << "\n";
+            for (int j = 0; j < i; j++) free_fb(yuv_fb_[j]);
+            yuv_fb_state_ = -1;
+            return false;
+        }
+        yuv_fb_[i].bo_handle = cd.handle;
+        yuv_fb_[i].stride    = cd.pitch;
+        yuv_fb_[i].size      = cd.size;
+        yuv_fb_[i].width     = width_;
+        yuv_fb_[i].height    = height_;
+
+        uint32_t handles[4] = { yuv_fb_[i].bo_handle };
+        uint32_t strides[4] = { yuv_fb_[i].stride };
+        uint32_t offsets[4] = { 0 };
+        if (drmModeAddFB2(drm_fd_, width_, height_, DRM_FORMAT_UYVY,
+                          handles, strides, offsets, &yuv_fb_[i].fb_id, 0) != 0) {
+            std::cerr << "[DRM] UYVY alloc: drmModeAddFB2(UYVY) failed: "
+                      << strerror(errno) << " — plane does not support UYVY\n";
+            struct drm_mode_destroy_dumb d = {};
+            d.handle = yuv_fb_[i].bo_handle;
+            drmIoctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &d);
+            yuv_fb_[i].bo_handle = 0;
+            for (int j = 0; j < i; j++) free_fb(yuv_fb_[j]);
+            yuv_fb_state_ = -1;
+            return false;
+        }
+
+        struct drm_mode_map_dumb md = {};
+        md.handle = yuv_fb_[i].bo_handle;
+        if (drmIoctl(drm_fd_, DRM_IOCTL_MODE_MAP_DUMB, &md) == 0) {
+            yuv_fb_[i].map = mmap(nullptr, yuv_fb_[i].size,
+                                  PROT_READ | PROT_WRITE, MAP_SHARED,
+                                  drm_fd_, md.offset);
+            if (yuv_fb_[i].map == MAP_FAILED) {
+                yuv_fb_[i].map = nullptr;
+                std::cerr << "[DRM] UYVY alloc: mmap failed\n";
+            }
+        }
+    }
+
+    yuv_fb_state_ = 1;
+    cur_yuv_buf_  = 0;
+    std::cout << "[DRM] UYVY native plane active (VOP2 hardware YUV→RGB)\n";
+    return true;
+}
+
+// Fill entire UYVY buffer with black (U=128, Y=16, V=128, Y=16).
+void DRMDisplay::fill_bg_yuv(DRMBuffer& buf) {
+    if (!buf.map) return;
+    // UYVY black pattern as uint32: [U=0x80][Y=0x10][V=0x80][Y=0x10]
+    uint32_t* p   = static_cast<uint32_t*>(buf.map);
+    uint32_t  n   = buf.size / 4;
+    uint32_t  pat = 0x10801080u;
+    for (uint32_t i = 0; i < n; i++) p[i] = pat;
+}
+
+// Scale UYVY src into the dst rectangle dr without any colour conversion.
+// src_stride and dst_stride are in bytes. dr.x must be even.
+void DRMDisplay::sw_uyvy_scale(const uint8_t* src,
+                                uint32_t src_w, uint32_t src_h, uint32_t src_stride,
+                                uint8_t* dst, uint32_t dst_stride,
+                                const Rect& dr) {
+    if (dr.w == 0 || dr.h == 0) return;
+
+    uint32_t x_step = (src_w << 16) / dr.w;
+    uint32_t y_step = (src_h << 16) / dr.h;
+
+    // dr.x must be even for UYVY pair alignment
+    uint32_t dst_x_bytes = (dr.x & ~1u) * 2u;
+    uint32_t out_pairs   = dr.w / 2;
+
+    uint32_t sy_fp = 0;
+    for (uint32_t dy = dr.y; dy < dr.y + dr.h; dy++, sy_fp += y_step) {
+        uint32_t sy = sy_fp >> 16;
+        if (sy >= src_h) sy = src_h - 1;
+        const uint8_t* srow = src + (size_t)sy * src_stride;
+        uint8_t*       drow = dst + (size_t)dy * dst_stride + dst_x_bytes;
+
+        uint32_t sx_fp = 0;
+        for (uint32_t p = 0; p < out_pairs; p++) {
+            uint32_t sx0 = sx_fp >> 16;
+            sx_fp += x_step;
+            uint32_t sx1 = sx_fp >> 16;
+            sx_fp += x_step;
+
+            if (sx0 >= src_w) sx0 = src_w - 1;
+            if (sx1 >= src_w) sx1 = src_w - 1;
+
+            uint32_t sp0 = sx0 >> 1;
+            uint32_t sp1 = sx1 >> 1;
+
+            // UYVY pair layout: [U0][Y0][V0][Y1]
+            uint8_t u  = srow[sp0 * 4 + 0];
+            uint8_t y0 = srow[sp0 * 4 + 1 + (sx0 & 1u) * 2u];
+            uint8_t v  = srow[sp0 * 4 + 2];
+            uint8_t y1 = srow[sp1 * 4 + 1 + (sx1 & 1u) * 2u];
+
+            drow[p * 4 + 0] = u;
+            drow[p * 4 + 1] = y0;
+            drow[p * 4 + 2] = v;
+            drow[p * 4 + 3] = y1;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // rga_blit (RGA hardware path)
 // ---------------------------------------------------------------------------
 bool DRMDisplay::rga_blit(const void* src_va, int src_fd,
@@ -1095,7 +1245,8 @@ bool DRMDisplay::rga_blit(const void* src_va, int src_fd,
     IM_STATUS status = improcess(src_buf, dst_buf, {}, src_rect, dst_rect, {}, IM_SYNC);
     if (status != IM_STATUS_SUCCESS) {
         std::cerr << "[DRM] RGA blit failed: " << imStrError(status) << " — disabling RGA\n";
-        rga_available_ = false;  // don't attempt RGA again
+        rga_available_ = false;  // don't attempt RGA again on this instance
+        g_rga_state = -1;        // tell all future instances RGA is unusable
         return false;
     }
     return true;
@@ -1114,6 +1265,23 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
                                     uint32_t stride, uint32_t drm_format) {
     if (!initialized_) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
+
+    // UYVY native path: feed 16bpp UYVY dumb buffer to the VOP2 Cluster plane.
+    // The display controller handles YUV→RGB during scanout — zero CPU colour math.
+    if (drm_format == DRM_FORMAT_UYVY && data && alloc_yuv_fb_if_needed()) {
+        DRMBuffer& ybuf = yuv_fb_[cur_yuv_buf_];
+        if (ybuf.map) {
+            fill_bg_yuv(ybuf);
+            Rect dr = compute_dst_rect(frame_w, frame_h);
+            uint32_t src_stride_bytes = stride ? stride : frame_w * 2u;
+            sw_uyvy_scale(data, frame_w, frame_h, src_stride_bytes,
+                          static_cast<uint8_t*>(ybuf.map), ybuf.stride, dr);
+            streaming_ = true;
+            bool ok = commit_fb(ybuf.fb_id);
+            cur_yuv_buf_ = (cur_yuv_buf_ + 1) % kNumBuffers;
+            return ok;
+        }
+    }
 
     DRMBuffer& buf = fb_[cur_buf_];
 
@@ -1241,9 +1409,26 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
         }
 #endif
         if (!rga_ok) {
-            // We can't easily do SW conversion from DMA-BUF without mmap
-            // Show black rather than garbage
-            if (buf.map) memset(buf.map, 0, buf.size);
+            // RGA unavailable — mmap the DMA-BUF and do software conversion.
+            // NV12: Y plane at offset 0, UV plane at offset stride_y * frame_h.
+            if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV16) {
+                size_t uv_rows = (format == DRM_FORMAT_NV12) ? (frame_h / 2) : frame_h;
+                size_t map_size = (size_t)stride_y * frame_h
+                                + (size_t)stride_uv * uv_rows;
+                void* mapped = ::mmap(nullptr, map_size, PROT_READ, MAP_SHARED, dma_fd, 0);
+                if (mapped != MAP_FAILED) {
+                    sw_nv12_to_xrgb((const uint8_t*)mapped,
+                                    frame_w, frame_h, stride_y,
+                                    (uint8_t*)buf.map, buf.stride,
+                                    dr, width_, height_);
+                    ::munmap(mapped, map_size);
+                } else {
+                    if (buf.map) memset(buf.map, 0, buf.size);
+                }
+            } else {
+                // Other formats: show black (no software path)
+                if (buf.map) memset(buf.map, 0, buf.size);
+            }
         }
 
         streaming_ = true;
@@ -1501,7 +1686,9 @@ bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
     if (!found) return false;
 
     // Free existing FBs (sized for old mode)
-    for (auto& b : fb_) free_fb(b);
+    for (auto& b : fb_)     free_fb(b);
+    for (auto& b : yuv_fb_) free_fb(b);
+    yuv_fb_state_ = 0;
     if (import_fb_id_) { drmModeRmFB(drm_fd_, import_fb_id_); import_fb_id_ = 0; }
     if (import_bo_) {
         struct drm_gem_close c = {};
@@ -1566,7 +1753,8 @@ void DRMDisplay::destroy() {
     }
 
     if (drm_fd_ >= 0) {
-        for (auto& b : fb_) free_fb(b);
+        for (auto& b : fb_)     free_fb(b);
+        for (auto& b : yuv_fb_) free_fb(b);
         if (owns_fd_) {
             std::cout << "[DRM] Closing DRM device\n";
             close(drm_fd_);
@@ -1584,5 +1772,7 @@ void DRMDisplay::destroy() {
     width_ = height_ = vrefresh_ = 0;
     connector_id_ = crtc_id_ = 0;
     cur_buf_ = 0;
+    cur_yuv_buf_  = 0;
+    yuv_fb_state_ = 0;
     invalidate_fill_cache();
 }

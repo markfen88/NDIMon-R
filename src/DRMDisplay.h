@@ -140,6 +140,15 @@ private:
                   void* dst_va, uint32_t dst_stride,
                   const Rect& dr, uint32_t dst_w, uint32_t dst_h);
 
+    // UYVY native plane path — VOP2 Cluster handles YUV→RGB during scanout.
+    // Eliminates all per-pixel color conversion CPU work.
+    bool alloc_yuv_fb_if_needed();
+    void fill_bg_yuv(DRMBuffer& buf);
+    static void sw_uyvy_scale(const uint8_t* src,
+                               uint32_t src_w, uint32_t src_h, uint32_t src_stride,
+                               uint8_t* dst, uint32_t dst_stride,
+                               const Rect& dr);
+
     mutable std::mutex frame_mutex_;  // serialises all FB alloc/write/flip ops
 
     int         drm_fd_   = -1;
@@ -165,6 +174,10 @@ private:
     static constexpr int kNumBuffers = 2;
     DRMBuffer fb_[kNumBuffers];
     int cur_buf_ = 0;
+
+    DRMBuffer yuv_fb_[kNumBuffers];
+    int       cur_yuv_buf_  = 0;
+    int       yuv_fb_state_ = 0;   // 0=untried, 1=ok, -1=unsupported by plane
 
     // Per-buffer fill cache — prevents overwriting bars every frame,
     // but must be tracked independently for each buffer in the double-buffer pair.

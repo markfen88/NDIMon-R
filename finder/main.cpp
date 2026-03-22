@@ -18,9 +18,9 @@
 #include <sys/stat.h>
 
 static const char* PARAM_FILE    = "/etc/ndi_src_find_param";
-static const char* SRC_LIST_FILE = "/etc/birddog_ndi_src.json";
+static const char* SRC_LIST_FILE = "/etc/ndimon-sources.json";
 static const char* WEBUI_LIST    = "/etc/NDIFinderSrcList.json";
-static const char* FIND_SETTINGS = "/etc/birddog-ndinet-find-settings.json";
+static const char* FIND_SETTINGS = "/etc/ndimon-find-settings.json";
 static const char* NDI_CONFIG    = "/etc/ndi-config.json";
 static const char* NDI_GROUP     = "/etc/ndi-group.json";
 
@@ -77,6 +77,11 @@ static void write_ndi_sdk_config(const FindSettings& s) {
     if (s.use_discovery_server && !s.discovery_server_ip.empty())
         discovery = s.discovery_server_ip;
 
+    // Include codec passthrough keys so the NDI SDK delivers H.264/H.265 as
+    // compressed bitstream rather than decoding internally. Without these,
+    // the SDK renders a "Video Decoder not Found" error frame on Noble (Ubuntu
+    // 24.04) where libavcodec.so.61 is absent. ndimon-r also writes this file,
+    // but we write it here too so we never overwrite it without the codec keys.
     std::string json =
         "{\n"
         "  \"ndi\": {\n"
@@ -87,6 +92,10 @@ static void write_ndi_sdk_config(const FindSettings& s) {
         "    \"networks\": {\n"
         "      \"ips\": \"" + extra + "\",\n"
         "      \"discovery\": \"" + discovery + "\"\n"
+        "    },\n"
+        "    \"codec\": {\n"
+        "      \"h264\": { \"passthrough\": true },\n"
+        "      \"h265\": { \"passthrough\": true }\n"
         "    }\n"
         "  }\n"
         "}\n";
@@ -151,11 +160,14 @@ static void run_once() {
     find_create.show_local_sources = true;
     find_create.p_groups = settings.groups.empty() ? nullptr : settings.groups.c_str();
 
-    // Discovery server
+    // Discovery server — combine DS IP + extra_ips so both are used
+    std::string extra_ips_combined;
     if (settings.use_discovery_server && !settings.discovery_server_ip.empty()) {
         std::cout << "[ NDIFinder ] Discovery Server Enabled " << settings.discovery_server_ip << "\n";
-        find_create.p_extra_ips = settings.extra_ips.empty() ?
-            settings.discovery_server_ip.c_str() : settings.extra_ips.c_str();
+        extra_ips_combined = settings.discovery_server_ip;
+        if (!settings.extra_ips.empty())
+            extra_ips_combined += "," + settings.extra_ips;
+        find_create.p_extra_ips = extra_ips_combined.c_str();
     } else {
         std::cout << "[ NDIFinder ] Discovery Server Disabled\n";
         if (!settings.extra_ips.empty())
@@ -202,9 +214,13 @@ static void run_continuous() {
     NDIlib_find_create_t find_create = {};
     find_create.show_local_sources = true;
     find_create.p_groups = settings.groups.empty() ? nullptr : settings.groups.c_str();
-    if (settings.use_discovery_server && !settings.discovery_server_ip.empty())
-        find_create.p_extra_ips = settings.discovery_server_ip.c_str();
-    else if (!settings.extra_ips.empty())
+    std::string extra_ips_combined;
+    if (settings.use_discovery_server && !settings.discovery_server_ip.empty()) {
+        extra_ips_combined = settings.discovery_server_ip;
+        if (!settings.extra_ips.empty())
+            extra_ips_combined += "," + settings.extra_ips;
+        find_create.p_extra_ips = extra_ips_combined.c_str();
+    } else if (!settings.extra_ips.empty())
         find_create.p_extra_ips = settings.extra_ips.c_str();
 
     NDIlib_find_instance_t finder = NDIlib_find_create_v2(&find_create);
@@ -225,8 +241,13 @@ static void run_continuous() {
             settings = load_settings();
             NDIlib_find_destroy(finder);
             find_create.p_groups = settings.groups.empty() ? nullptr : settings.groups.c_str();
-            if (settings.use_discovery_server && !settings.discovery_server_ip.empty())
-                find_create.p_extra_ips = settings.discovery_server_ip.c_str();
+            if (settings.use_discovery_server && !settings.discovery_server_ip.empty()) {
+                extra_ips_combined = settings.discovery_server_ip;
+                if (!settings.extra_ips.empty())
+                    extra_ips_combined += "," + settings.extra_ips;
+                find_create.p_extra_ips = extra_ips_combined.c_str();
+            } else if (!settings.extra_ips.empty())
+                find_create.p_extra_ips = settings.extra_ips.c_str();
             finder = NDIlib_find_create_v2(&find_create);
             if (!finder) break;
             last_list.clear();

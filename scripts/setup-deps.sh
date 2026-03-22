@@ -61,21 +61,20 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
         # Install the Radxa archive keyring .deb (replaces the old raw .gpg approach)
         # The keyring package installs yearly-rotated keys to /usr/share/keyrings/
         # Note: GitHub /releases/latest/download/ requires the exact filename; fetch it via the API
-        local _keyring_url
         _keyring_url=$(curl -sL https://api.github.com/repos/radxa-pkg/radxa-archive-keyring/releases/latest 2>/dev/null \
             | python3 -c "import sys,json; assets=json.load(sys.stdin).get('assets',[]); \
               print(next((a['browser_download_url'] for a in assets if a['name'].endswith('_all.deb')), ''))" 2>/dev/null)
         RADXA_KEYRING_DEB="${_keyring_url:-https://github.com/radxa-pkg/radxa-archive-keyring/releases/download/0.2.2/radxa-archive-keyring_0.2.2_all.deb}"
         if ! dpkg -s radxa-archive-keyring &>/dev/null; then
             info "Fetching Radxa archive keyring..."
-            local _tmpdir; _tmpdir=$(mktemp -d)
-            if wget -q -O "$_tmpdir/radxa-keyring.deb" "$RADXA_KEYRING_DEB" 2>/dev/null; then
-                dpkg -i "$_tmpdir/radxa-keyring.deb" 2>/dev/null && ok "Radxa keyring installed" || \
+            _mpp_tmpdir=$(mktemp -d)
+            if wget -q -O "$_mpp_tmpdir/radxa-keyring.deb" "$RADXA_KEYRING_DEB" 2>/dev/null; then
+                dpkg -i "$_mpp_tmpdir/radxa-keyring.deb" 2>/dev/null && ok "Radxa keyring installed" || \
                     warn "Radxa keyring install failed"
             else
                 warn "Could not download Radxa keyring"
             fi
-            rm -rf "$_tmpdir"
+            rm -rf "$_mpp_tmpdir"
         fi
 
         # Find a valid installed keyring file (yearly rotation: 2024, 2025, 2026 …)
@@ -105,9 +104,9 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
         fi
 
         # Create librga.pc stub if librga installed but no pkg-config file
-        if ldconfig -p 2>/dev/null | grep -q "librga\." && \
+        if /sbin/ldconfig -p 2>/dev/null | grep -q "librga\." && \
            ! pkg-config --exists librga 2>/dev/null; then
-            local _rga_so; _rga_so=$(find /usr/lib -name "librga.so*" 2>/dev/null | head -1)
+            _rga_so=$(find /usr/lib -name "librga.so*" 2>/dev/null | head -1)
             RGA_LIBDIR=$(dirname "$_rga_so" 2>/dev/null)
             if [[ -n "$RGA_LIBDIR" ]]; then
                 cat > /usr/lib/aarch64-linux-gnu/pkgconfig/librga.pc <<RGAEOF
@@ -202,27 +201,52 @@ else
     install_ndi_sdk || warn "NDI SDK install failed — build will fail without it"
 fi
 
-# --- 3b. NDI HX codec compat symlinks — REMOVE if present ---
-# The NDI SDK dlopen()s libavcodec.so.61 + libavutil.so.59 (FFmpeg 7.x) to decode HX
-# streams internally. Pointing these at FFmpeg 6 (Noble's libavcodec.so.60.x) causes
-# a hard crash (SEGV) due to ABI differences between FFmpeg 6 and 7 in the structures
-# and symbols the NDI HX plugin relies on.
+# --- 3b. FFmpeg 7 (libavcodec.so.61 + libavutil.so.59) for NDI HX decode ---
+# NDI SDK 6.x dlopen()s libavcodec.so.61 + libavutil.so.59 at runtime to decode
+# H.265 HX sources internally. Without these libraries the SDK renders a
+# "Video Decoder not Found" error frame for any H.265 source.
 #
-# Correct approach on RK3588/RK3399: let the NDI SDK fall back to delivering HX video
-# as a compressed H.264/H.265 bitstream. The application then decodes it using
-# Rockchip MPP (hardware) or FFmpeg (software). This is more efficient anyway.
-# Remove any previously created compat symlinks so the NDI HX plugin cannot load.
-if [[ "$CODENAME" == "noble" ]]; then
-    FFMPEG_LIB_DIR="/lib/aarch64-linux-gnu"
-    for _lib in libavcodec.so.61 libavutil.so.59; do
-        _path="$FFMPEG_LIB_DIR/$_lib"
-        if [[ -L "$_path" ]]; then
-            rm -f "$_path"
-            info "Removed stale compat symlink: $_lib (caused NDI HX crash)"
-        fi
-    done
-    ldconfig
-    ok "NDI HX compat symlinks removed — HX decoded by MPP/FFmpeg application-side"
+# These packages coexist with the distro FFmpeg (different sonames) — no conflicts.
+#
+# Previously a compat symlink (.so.61 → .so.60) was suggested; DO NOT do this —
+# the FFmpeg 6 and 7 ABIs differ in AVFrame/AVPacket layout and cause a hard SEGV.
+# Remove any such stale symlink before installing the real packages.
+for _stale in /lib/aarch64-linux-gnu/libavcodec.so.61 /lib/aarch64-linux-gnu/libavutil.so.59 \
+              /usr/lib/aarch64-linux-gnu/libavcodec.so.61 /usr/lib/aarch64-linux-gnu/libavutil.so.59; do
+    if [[ -L "$_stale" ]]; then
+        rm -f "$_stale"
+        info "Removed stale FFmpeg compat symlink: $_stale"
+    fi
+done
+
+install_ffmpeg7() {
+    # Use Ubuntu Plucky (25.04) arm64 packages — they install cleanly on
+    # both Ubuntu Noble and Debian Bookworm (same libc/libstdc++ ABI).
+    local _tmplist; _tmplist=$(mktemp /etc/apt/sources.list.d/_tmp_plucky_XXXXXX.list)
+    echo "deb [arch=arm64 trusted=yes] http://ports.ubuntu.com/ubuntu-ports plucky main universe" \
+        > "$_tmplist"
+    apt-get update -o Dir::Etc::sourcelist="$_tmplist" \
+        -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 -qq 2>/dev/null || true
+    apt-get install -yq --no-install-recommends libavcodec61 libavutil59 2>/dev/null
+    local _rc=$?
+    rm -f "$_tmplist"
+    # Restore normal apt lists cache so subsequent apt-get calls work correctly
+    apt-get update -qq 2>/dev/null || true
+    return $_rc
+}
+
+if /sbin/ldconfig -p 2>/dev/null | grep -q 'libavcodec\.so\.61\b'; then
+    ok "FFmpeg 7 already present (libavcodec.so.61)"
+else
+    info "Installing FFmpeg 7 (libavcodec61 + libavutil59) for NDI HX decode..."
+    if install_ffmpeg7; then
+        /sbin/ldconfig
+        ok "FFmpeg 7 installed — NDI SDK can now decode H.265 HX sources"
+    else
+        warn "FFmpeg 7 install failed — NDI HX (H.265) sources will show 'Video Decoder not Found'"
+        warn "Manual fix: add Ubuntu Plucky to apt sources and run:"
+        warn "  apt-get install libavcodec61 libavutil59"
+    fi
 fi
 
 # --- 4. Node.js (v20 LTS via NodeSource) ---
@@ -265,12 +289,14 @@ fi
 # --- 6. Verify ---
 echo ""
 info "Dependency check:"
-ldconfig -p | grep libndi    && echo "  ✓ NDI SDK"        || echo "  ✗ NDI SDK MISSING"
-ldconfig -p | grep librockchip_mpp 2>/dev/null && echo "  ✓ MPP" || echo "  - MPP (not found, software decode will be used)"
-ldconfig -p | grep librga    2>/dev/null && echo "  ✓ librga"    || echo "  - librga (not found, ok)"
-pkg-config --exists libdrm   && echo "  ✓ libdrm"         || echo "  ✗ libdrm MISSING"
-pkg-config --exists alsa     && echo "  ✓ alsa"           || echo "  ✗ alsa MISSING"
-command -v cmake  &>/dev/null && echo "  ✓ cmake"          || echo "  ✗ cmake MISSING"
-command -v node   &>/dev/null && echo "  ✓ node $(node --version)"  || echo "  ✗ node MISSING"
+/sbin/ldconfig -p | grep libndi          && echo "  ✓ NDI SDK"           || echo "  ✗ NDI SDK MISSING"
+/sbin/ldconfig -p | grep 'libavcodec\.so\.61\b' && echo "  ✓ FFmpeg 7 (libavcodec61)" \
+                                          || echo "  ✗ FFmpeg 7 (libavcodec61) MISSING — H.265 HX sources will fail"
+/sbin/ldconfig -p | grep librockchip_mpp 2>/dev/null && echo "  ✓ MPP"   || echo "  - MPP (not found, software decode will be used)"
+/sbin/ldconfig -p | grep librga          2>/dev/null && echo "  ✓ librga" || echo "  - librga (not found, ok)"
+pkg-config --exists libdrm   && echo "  ✓ libdrm"          || echo "  ✗ libdrm MISSING"
+pkg-config --exists alsa     && echo "  ✓ alsa"            || echo "  ✗ alsa MISSING"
+command -v cmake  &>/dev/null && echo "  ✓ cmake"           || echo "  ✗ cmake MISSING"
+command -v node   &>/dev/null && echo "  ✓ node $(node --version)" || echo "  ✗ node MISSING"
 echo ""
 ok "setup-deps.sh complete"

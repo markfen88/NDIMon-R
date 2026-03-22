@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <string>
 #include <mutex>
+#include <condition_variable>
+#include <queue>
 #include <set>
 #include <vector>
 #include <map>
@@ -286,10 +288,21 @@ public:
         }
 
         fps_last_time_ = std::chrono::steady_clock::now();
+
+        // Start dedicated display thread for uncompressed frames
+        display_running_ = true;
+        display_thr_ = std::thread(&DisplayWorker::display_loop, this);
+
         return true;
     }
 
     void stop() {
+        // Stop display thread first so it doesn't race with drm_ teardown
+        display_running_ = false;
+        frame_cv_.notify_all();
+        if (display_thr_.joinable()) display_thr_.join();
+        { std::lock_guard<std::mutex> lk(frame_mtx_); while (!frame_queue_.empty()) frame_queue_.pop(); }
+
         if (recv_) {
             recv_->disconnect();
             recv_.reset();
@@ -550,6 +563,12 @@ public:
         s["input_width"]  = input_w_.load();
         s["input_height"] = input_h_.load();
         s["fps"]          = fps_.load();
+        {
+            int total = 0, dropped = 0;
+            if (recv_) recv_->get_performance(total, dropped);
+            s["total_frames"]   = total;
+            s["dropped_frames"] = dropped;
+        }
         s["width"]        = drm_ ? drm_->width()      : 0;
         s["height"]       = drm_ ? drm_->height()     : 0;
         s["refresh"]      = drm_ ? drm_->refresh()    : 0;
@@ -666,9 +685,21 @@ private:
                 std::lock_guard<std::mutex> lk(decoder_mutex_);
                 codec_name_ = "uncompressed";
             }
-            drm_->show_frame_memory(vf.data, vf.size,
-                                    vf.width, vf.height,
-                                    vf.stride, drm_fmt);
+
+            // Copy frame to owned buffer and hand off to the display thread.
+            // This returns immediately — the recv thread is never blocked on vsync
+            // or software color conversion, keeping the NDI queue drained.
+            RawFrame rf;
+            rf.data.assign(vf.data, vf.data + vf.size);
+            rf.width = vf.width; rf.height = vf.height;
+            rf.stride = vf.stride; rf.drm_format = drm_fmt;
+            {
+                std::lock_guard<std::mutex> lk(frame_mtx_);
+                // Drop oldest frame if display thread can't keep up
+                while (frame_queue_.size() >= 2) frame_queue_.pop();
+                frame_queue_.push(std::move(rf));
+            }
+            frame_cv_.notify_one();
         }
     }
 
@@ -750,6 +781,40 @@ private:
         // skips its own release. decoder_ is guaranteed non-null here
         // because we're called from within decoder_->decode().
         decoder_->release_frame(f);
+    }
+
+    // -------------------------------------------------------------------------
+    // Raw uncompressed frame queue — recv thread copies and returns immediately;
+    // display_loop() drains the queue on a dedicated thread (avoids blocking
+    // the NDI recv thread on vsync / software color conversion).
+    struct RawFrame {
+        std::vector<uint8_t> data;
+        int width{}, height{}, stride{};
+        uint32_t drm_format{};
+    };
+    std::mutex              frame_mtx_;
+    std::condition_variable frame_cv_;
+    std::queue<RawFrame>    frame_queue_;   // bounded to 2 frames (drop oldest)
+    std::atomic<bool>       display_running_{false};
+    std::thread             display_thr_;
+
+    void display_loop() {
+        while (display_running_) {
+            RawFrame rf;
+            {
+                std::unique_lock<std::mutex> lk(frame_mtx_);
+                frame_cv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
+                    return !frame_queue_.empty() || !display_running_;
+                });
+                if (!display_running_) break;
+                if (frame_queue_.empty()) continue;
+                rf = std::move(frame_queue_.front());
+                frame_queue_.pop();
+            }
+            if (drm_ && drm_->is_initialized())
+                drm_->show_frame_memory(rf.data.data(), rf.data.size(),
+                                        rf.width, rf.height, rf.stride, rf.drm_format);
+        }
     }
 
     // -------------------------------------------------------------------------
