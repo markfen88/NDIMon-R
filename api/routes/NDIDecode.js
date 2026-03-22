@@ -2,7 +2,7 @@
 const express = require('express');
 const router  = express.Router();
 const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
-const { stopReconnectLoop: cancelReconnect } = require('./Status');
+const { stopReconnectLoop: cancelReconnect, notifyManualConnect } = require('./Status');
 
 const DEC1_SETTINGS = '/etc/ndimon-dec1-settings.json';
 const DEC1_STATUS   = '/etc/ndimon-dec1-status.json';
@@ -97,6 +97,7 @@ router.get('/connectTo', (req, res) => {
     const { SourceName, SourceIP, Output = 1 } = req.query;
     const outputIdx = (parseInt(Output, 10) || 1) - 1;
     cancelReconnect(outputIdx);  // explicit user action — cancel pending auto-reconnect
+    if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);
     const cfg = readJson(DEC1_SETTINGS);
     if (SourceName && SourceName !== 'None') {
         cfg.SourceName = SourceName;
@@ -118,6 +119,7 @@ router.post('/connectTo', (req, res) => {
     const { SourceName, SourceIP, Output = 1 } = req.body || {};
     const outputIdx = (parseInt(Output, 10) || 1) - 1;
     cancelReconnect(outputIdx);  // explicit user action — cancel pending auto-reconnect
+    if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);
     const cfg = readJson(DEC1_SETTINGS);
     if (SourceName && SourceName !== 'None') {
         cfg.SourceName = SourceName;

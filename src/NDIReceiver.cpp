@@ -278,6 +278,35 @@ void NDIReceiver::disconnect() {
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
 }
 
+void NDIReceiver::reload_discovery(const std::string& new_ds) {
+    if (new_ds == discovery_server_) return;
+    discovery_server_ = new_ds;
+    std::cout << "[NDIRecv] Reloading discovery server: '" << new_ds << "'\n";
+
+    // Tear down old advertiser
+    if (advertiser_) {
+        if (recv_) NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
+        NDIlib_recv_advertiser_destroy(advertiser_);
+        advertiser_ = nullptr;
+    }
+
+    // Create new advertiser with updated DS address (video connection is unaffected)
+    if (!new_ds.empty() && recv_) {
+        NDIlib_recv_advertiser_create_t adv = {};
+        adv.p_url_address = new_ds.c_str();
+        advertiser_ = NDIlib_recv_advertiser_create(&adv);
+        if (advertiser_) {
+            NDIlib_recv_advertiser_add_receiver(advertiser_, recv_,
+                                                /*allow_controlling=*/true,
+                                                /*allow_monitoring=*/true,
+                                                /*group=*/nullptr);
+            std::cout << "[NDIRecv] Re-registered with new discovery server: " << new_ds << "\n";
+        } else {
+            std::cerr << "[NDIRecv] WARNING: recv_advertiser_create failed for " << new_ds << "\n";
+        }
+    }
+}
+
 bool NDIReceiver::is_connected() const {
     if (!recv_) return false;
     return NDIlib_recv_get_no_connections(recv_) > 0;

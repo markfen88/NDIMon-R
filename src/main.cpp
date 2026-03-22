@@ -329,6 +329,9 @@ public:
 
     void connect_source(const std::string& name, const std::string& ip) {
         bool real_source = !name.empty() && name != "None";
+        // Mark as not connected immediately — status queries will report
+        // disconnected until the new source establishes its connection.
+        connected_ = false;
         {
             std::lock_guard<std::mutex> lk(source_mutex_);
             source_name_ = name;
@@ -412,6 +415,18 @@ public:
 
     void disconnect_source() {
         if (recv_) recv_->disconnect();
+        // Explicitly update connected_ flag so status queries reflect the
+        // disconnect immediately. recv_->disconnect() restarts the thread with
+        // was_connected=false so conn_cb_ won't fire; we must do it here.
+        connected_ = false;
+        if (ipc_) {
+            nlohmann::json ev;
+            ev["type"]      = "connection";
+            ev["output"]    = ch_num_ - 1;
+            ev["connected"] = false;
+            ev["source"]    = "";
+            ipc_->push_event(ev);
+        }
         if (drm_) drm_->set_streaming(false);  // allow splash to render
         if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
         // Do NOT clear source from persistent config so the device can
@@ -460,13 +475,16 @@ public:
             drm_->set_osd_text(cfg.osd.text);
         }
 
-        // Discovery server
+        // Discovery server — recreate advertiser if DS address changed
         if (recv_) {
             std::string ds;
             if (cfg.finder.discovery_server_mode == "NDIDisServEn" &&
                 !cfg.finder.discovery_server_ip.empty())
                 ds = cfg.finder.discovery_server_ip;
-            recv_->set_discovery_server(ds);
+            if (ds != recv_->get_discovery_server()) {
+                write_ndi_sdk_config(cfg);   // update ndi-config.v1.json
+                recv_->reload_discovery(ds); // recreate advertiser with new DS
+            }
         }
 
         // Audio enable/disable (ch1 legacy)

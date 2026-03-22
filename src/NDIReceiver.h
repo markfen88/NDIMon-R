@@ -66,6 +66,11 @@ public:
 
     // Set discovery server IP (used in find_source and for reconnect)
     void set_discovery_server(const std::string& ip) { discovery_server_ = ip; }
+    std::string get_discovery_server() const { return discovery_server_; }
+
+    // Recreate the NDI advertiser with a new discovery server address.
+    // Call when DS settings change at runtime. Does not interrupt video connection.
+    void reload_discovery(const std::string& new_ds);
 
     // Set the NDI receiver name visible in discovery tools.
     // Call rename() instead if the recv instance is already running.

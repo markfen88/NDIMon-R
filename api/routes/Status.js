@@ -13,6 +13,21 @@ const sseClients = new Set();
 // Reconnect state keyed by output index: { timer, attempts }
 const reconnectState = {};
 
+// Grace period after a user-initiated connectTo (30s).
+// Suppresses: reconnect loop from intermediate disconnects during source switch,
+// and DS routing events overwriting the user's manual source selection.
+const manualConnectTime = {};  // output → timestamp (ms)
+const MANUAL_CONNECT_GRACE_MS = 30000;
+
+function notifyManualConnect(output) {
+    manualConnectTime[output] = Date.now();
+}
+
+function isInGracePeriod(output) {
+    return !!(manualConnectTime[output] &&
+              (Date.now() - manualConnectTime[output] < MANUAL_CONNECT_GRACE_MS));
+}
+
 function startReconnectLoop(output, src, ip) {
     stopReconnectLoop(output);
     reconnectState[output] = { attempts: 0, src, ip };
@@ -204,6 +219,16 @@ ipcEvents.on('routing', async ev => {
     const { source, url: ip, output = 0 } = ev;
     const ch = output + 1;
     console.log(`[Events] DS routing: output=${output} source="${source}" ip="${ip}"`);
+
+    // Don't let DS routing events overwrite a user's manual source selection
+    // during the grace period after a connectTo. The user's choice takes precedence
+    // — the DS will eventually sync once it receives our routing ACK.
+    if (isInGracePeriod(output)) {
+        console.log(`[Events] DS routing ignored (manual connect grace period active)`);
+        broadcastStatus();
+        return;
+    }
+
     const cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`);
     if (source && source !== 'None') {
         // Persist DS assignment — reconnect loop will use this source if it drops
@@ -221,6 +246,13 @@ ipcEvents.on('connection', async ev => {
     const { output = 0, connected } = ev;
     console.log(`[Events] Connection: output=${output} connected=${connected}`);
     if (!connected) {
+        // Suppress reconnect loop during the grace period after an explicit
+        // connectTo — the intermediate disconnect is expected during a source
+        // switch and the connect IPC is already in flight.
+        if (isInGracePeriod(output)) {
+            broadcastStatus();
+            return;
+        }
         const ch = output + 1;
         const cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`);
         const src = cfg.SourceName || '';
@@ -234,6 +266,8 @@ ipcEvents.on('connection', async ev => {
             }
         }
     } else {
+        // Successful connection — clear grace period and stop reconnect loop
+        delete manualConnectTime[output];
         stopReconnectLoop(output);
     }
     broadcastStatus();
@@ -257,4 +291,4 @@ router.get('/events', (req, res) => {
     req.on('close', () => sseClients.delete(res));
 });
 
-module.exports = { router, stopReconnectLoop };
+module.exports = { router, stopReconnectLoop, notifyManualConnect };

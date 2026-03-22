@@ -1268,6 +1268,8 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
 
     // UYVY native path: feed 16bpp UYVY dumb buffer to the VOP2 Cluster plane.
     // The display controller handles YUV→RGB during scanout — zero CPU colour math.
+    // If commit_fb fails (plane doesn't support UYVY in this lease), fall back
+    // to the software XRGB conversion path and mark UYVY as unsupported.
     if (drm_format == DRM_FORMAT_UYVY && data && alloc_yuv_fb_if_needed()) {
         DRMBuffer& ybuf = yuv_fb_[cur_yuv_buf_];
         if (ybuf.map) {
@@ -1278,8 +1280,17 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
                           static_cast<uint8_t*>(ybuf.map), ybuf.stride, dr);
             streaming_ = true;
             bool ok = commit_fb(ybuf.fb_id);
-            cur_yuv_buf_ = (cur_yuv_buf_ + 1) % kNumBuffers;
-            return ok;
+            if (ok) {
+                cur_yuv_buf_ = (cur_yuv_buf_ + 1) % kNumBuffers;
+                return true;
+            }
+            // commit_fb failed — this plane doesn't support UYVY natively.
+            // Free UYVY buffers, mark path as unsupported, fall through to
+            // software XRGB conversion below.
+            std::cerr << "[DRM] UYVY native commit failed — disabling UYVY path, "
+                         "falling back to software conversion\n";
+            for (auto& b : yuv_fb_) free_fb(b);
+            yuv_fb_state_ = -1;
         }
     }
 
