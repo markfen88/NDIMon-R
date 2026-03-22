@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NDI Decoder</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+<style>
+  :root {
+    --bg-base:    #0b0e14;
+    --bg-card:    #141920;
+    --bg-card2:   #1a2030;
+    --border:     #252d3d;
+    --text:       #dce3ef;
+    --text-muted: #7a8aaa;
+    --accent:     #3d8ef5;
+    --live:       #00d68f;
+    --idle:       #4a5568;
+    --warn:       #f7b731;
+    --danger:     #e84040;
+    --sidebar-w:  220px;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg-base); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; min-height: 100vh; }
+
+  /* ─── Topbar ─── */
+  .topbar {
+    position: fixed; top: 0; left: 0; right: 0; height: 54px; z-index: 100;
+    background: #0d1019; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 18px; gap: 16px;
+  }
+  .topbar .brand { font-weight: 700; font-size: 1.05rem; letter-spacing: .04em; color: #fff; display: flex; align-items: center; gap: 8px; }
+  .topbar .brand i { color: var(--accent); font-size: 1.25rem; }
+  .status-pill { display: flex; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 20px; font-size: .78rem; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; transition: all .4s; }
+  .status-pill.live { background: rgba(0,214,143,.12); color: var(--live); border: 1px solid rgba(0,214,143,.3); }
+  .status-pill.idle { background: rgba(74,85,104,.15); color: var(--idle); border: 1px solid rgba(74,85,104,.3); }
+  .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .status-pill.live .dot { box-shadow: 0 0 6px var(--live); }
+  .topbar .ms-auto { margin-left: auto; }
+
+  /* ─── Sidebar ─── */
+  .sidebar { position: fixed; top: 54px; left: 0; bottom: 0; width: var(--sidebar-w); background: #0d1019; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px 0; z-index: 90; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 18px; color: var(--text-muted); text-decoration: none; font-size: .9rem; font-weight: 500; border-left: 3px solid transparent; transition: all .2s; cursor: pointer; user-select: none; }
+  .nav-item:hover { color: var(--text); background: rgba(255,255,255,.04); }
+  .nav-item.active { color: #fff; background: rgba(61,142,245,.1); border-left-color: var(--accent); }
+  .nav-item i { font-size: 1.1rem; width: 20px; }
+
+  /* ─── Content ─── */
+  .content { margin-left: var(--sidebar-w); margin-top: 54px; padding: 24px; min-height: calc(100vh - 54px); }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ─── Cards ─── */
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; }
+  .card-header { background: var(--bg-card2); border-bottom: 1px solid var(--border); padding: 12px 16px; font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--text-muted); border-radius: 10px 10px 0 0 !important; display: flex; align-items: center; gap: 8px; }
+  .card-body { padding: 16px; }
+
+  /* ─── Stat rows ─── */
+  .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { font-size: .82rem; color: var(--text-muted); }
+  .stat-val { font-size: .88rem; font-weight: 600; }
+
+  /* ─── Progress bars ─── */
+  .metric-bar { margin-bottom: 14px; }
+  .metric-label { display: flex; justify-content: space-between; font-size: .78rem; color: var(--text-muted); margin-bottom: 4px; }
+  .bar-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width .6s ease; }
+  .bar-blue   { background: var(--accent); }
+  .bar-green  { background: var(--live); }
+  .bar-warn   { background: var(--warn); }
+  .bar-danger { background: var(--danger); }
+
+  /* ─── Big status ─── */
+  .big-status { text-align: center; padding: 18px 0 10px; }
+  .big-status .status-text { font-size: 2.4rem; font-weight: 800; letter-spacing: .06em; transition: color .4s; }
+  .big-status.live .status-text { color: var(--live); text-shadow: 0 0 20px rgba(0,214,143,.35); }
+  .big-status.idle .status-text { color: var(--idle); }
+  .big-status .src-display { font-size: 1rem; color: var(--text-muted); margin-top: 4px; }
+  .big-status .src-display span { color: #fff; font-weight: 600; }
+
+  /* ─── Source list ─── */
+  .source-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; margin: 4px 0; background: var(--bg-card2); border: 1px solid var(--border); border-radius: 7px; transition: border-color .2s; }
+  .source-item:hover { border-color: var(--accent); }
+  .source-item.active-src { border-color: var(--live); background: rgba(0,214,143,.05); }
+  .src-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-right: 10px; }
+  .src-dot.on  { background: var(--live); box-shadow: 0 0 5px var(--live); }
+  .src-dot.off { background: var(--idle); }
+  .src-name { font-size: .88rem; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ─── Badges ─── */
+  .badge-live  { background: rgba(0,214,143,.15); color: var(--live); font-size: .7rem; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+  .badge-codec { background: rgba(61,142,245,.15); color: var(--accent); font-size: .7rem; padding: 2px 8px; border-radius: 10px; }
+
+  /* ─── Temps ─── */
+  .temp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .temp-chip { background: var(--bg-card2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; text-align: center; }
+  .temp-val { font-size: 1.15rem; font-weight: 700; }
+  .temp-lbl { font-size: .68rem; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .temp-ok   { color: var(--live); }
+  .temp-warm { color: var(--warn); }
+  .temp-hot  { color: var(--danger); }
+
+  /* ─── Form ─── */
+  .form-control, .form-select { background: var(--bg-card2); border-color: var(--border); color: var(--text); font-size: .88rem; }
+  .form-control:focus, .form-select:focus { background: var(--bg-card2); border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 2px rgba(61,142,245,.2); }
+  .form-label { font-size: .82rem; color: var(--text-muted); font-weight: 500; }
+  .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
+
+  .section-divider { border-color: var(--border); margin: 16px 0; }
+
+  /* ─── Toast ─── */
+  .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
+
+  /* ─── Responsive ─── */
+  @media (max-width: 768px) {
+    :root { --sidebar-w: 58px; }
+    .nav-item span { display: none; }
+    .nav-item { padding: 12px; justify-content: center; }
+    .topbar-detail { display: none !important; }
+    .content { padding: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ══ TOPBAR ══ -->
+<div class="topbar">
+  <div class="brand"><i class="bi bi-broadcast"></i>NDI Decoder</div>
+  <div id="topbar-pill" class="status-pill idle"><div class="dot"></div><span>IDLE</span></div>
+  <div class="topbar-detail d-flex align-items-center gap-2">
+    <span style="font-size:.82rem;color:var(--text-muted)">Source:</span>
+    <span id="topbar-src" style="font-size:.85rem;font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
+  </div>
+  <div id="topbar-res" class="ms-auto topbar-detail" style="font-size:.78rem;color:var(--text-muted)">—</div>
+</div>
+
+<!-- ══ SIDEBAR ══ -->
+<nav class="sidebar">
+  <div class="nav-item active" onclick="showPage('dashboard',this)"><i class="bi bi-speedometer2"></i><span>Dashboard</span></div>
+  <div class="nav-item" onclick="showPage('ndi',this)"><i class="bi bi-broadcast-pin"></i><span>NDI</span></div>
+  <div class="nav-item" onclick="showPage('settings',this)"><i class="bi bi-sliders"></i><span>Settings</span></div>
+  <div class="nav-item" onclick="showPage('system',this)"><i class="bi bi-cpu"></i><span>System</span></div>
+</nav>
+
+<!-- ══ CONTENT ══ -->
+<div class="content">
+
+  <!-- ─── DASHBOARD ─── -->
+  <div id="page-dashboard" class="page active">
+    <div class="row g-3">
+
+      <div class="col-lg-5 col-md-6">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-activity"></i>Stream Status</div>
+          <div class="card-body">
+            <div id="dash-big" class="big-status idle">
+              <div class="status-text" id="dash-st">IDLE</div>
+              <div class="src-display">Source: <span id="dash-src">None</span></div>
+            </div>
+            <hr class="section-divider">
+            <div class="stat-row"><span class="stat-label">Input Resolution</span><span class="stat-val" id="dash-inres">—</span></div>
+            <div class="stat-row"><span class="stat-label">Output Resolution</span><span class="stat-val" id="dash-outres">—</span></div>
+            <div class="stat-row"><span class="stat-label">Frame Rate</span><span class="stat-val" id="dash-fps">—</span></div>
+            <div class="stat-row"><span class="stat-label">Codec</span><span class="stat-val" id="dash-codec">—</span></div>
+            <div class="stat-row"><span class="stat-label">Platform</span><span class="stat-val" id="dash-plat">—</span></div>
+            <div class="stat-row"><span class="stat-label">Frames (total/drop)</span><span class="stat-val" id="dash-frames">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4 col-md-6">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-bar-chart-fill"></i>System Resources</div>
+          <div class="card-body">
+            <div class="metric-bar">
+              <div class="metric-label"><span>CPU</span><span id="dash-cpu-pct">—</span></div>
+              <div class="bar-track"><div id="dash-cpu-bar" class="bar-fill bar-blue" style="width:0%"></div></div>
+            </div>
+            <div class="metric-bar">
+              <div class="metric-label"><span>Memory</span><span id="dash-mem-pct">—</span></div>
+              <div class="bar-track"><div id="dash-mem-bar" class="bar-fill bar-green" style="width:0%"></div></div>
+            </div>
+            <div class="stat-row mt-2"><span class="stat-label">Uptime</span><span class="stat-val" id="dash-uptime">—</span></div>
+            <div class="stat-row"><span class="stat-label">Audio</span><span class="stat-val" id="dash-audio">—</span></div>
+            <hr class="section-divider">
+            <div class="temp-grid" id="dash-temps"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-3 col-md-12">
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-lightning-charge-fill"></i>Quick Actions</div>
+          <div class="card-body d-grid gap-2">
+            <button class="btn btn-outline-danger btn-sm" onclick="doDisconnect()"><i class="bi bi-x-circle me-1"></i>Disconnect</button>
+            <button class="btn btn-outline-primary btn-sm" onclick="gotoNDI()"><i class="bi bi-broadcast-pin me-1"></i>Change Source</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="refreshSources()"><i class="bi bi-arrow-repeat me-1"></i>Refresh Sources</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><i class="bi bi-list-ul"></i>NDI Sources (<span id="dash-src-count">0</span>)</div>
+          <div class="card-body" style="max-height:200px;overflow-y:auto;padding:8px">
+            <div id="dash-src-list" style="font-size:.8rem;color:var(--text-muted)">Scanning…</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── NDI ─── -->
+  <div id="page-ndi" class="page">
+    <div class="row g-3">
+
+      <div class="col-lg-5">
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-plug-fill"></i>Current Connection</div>
+          <div class="card-body">
+            <div class="stat-row"><span class="stat-label">Status</span><span id="ndi-badge">—</span></div>
+            <div class="stat-row"><span class="stat-label">Source</span><span class="stat-val" id="ndi-src">None</span></div>
+            <div class="stat-row"><span class="stat-label">Resolution</span><span class="stat-val" id="ndi-res">—</span></div>
+            <div class="stat-row"><span class="stat-label">FPS</span><span class="stat-val" id="ndi-fps">—</span></div>
+            <div class="stat-row"><span class="stat-label">Codec</span><span class="stat-val" id="ndi-codec">—</span></div>
+            <hr class="section-divider">
+            <div class="d-flex gap-2">
+              <button class="btn btn-danger btn-sm flex-fill" onclick="doDisconnect()"><i class="bi bi-x-circle me-1"></i>Disconnect</button>
+              <button class="btn btn-outline-secondary btn-sm" onclick="refreshSources()"><i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
+            </div>
+          </div>
+        </div>
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-input-cursor-text"></i>Manual Connect</div>
+          <div class="card-body">
+            <div class="mb-2">
+              <label class="form-label">Source Name</label>
+              <input type="text" class="form-control" id="man-name" placeholder="MACHINE (Source Name)">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">IP Address (optional)</label>
+              <input type="text" class="form-control" id="man-ip" placeholder="192.168.1.100">
+            </div>
+            <button class="btn btn-primary btn-sm w-100" onclick="doManualConnect()"><i class="bi bi-plug me-1"></i>Connect</button>
+          </div>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <div class="card">
+              <div class="card-header"><i class="bi bi-record-circle"></i>Tally</div>
+              <div class="card-body p-2">
+                <select class="form-select form-select-sm" id="tally-sel" onchange="saveTally()">
+                  <option value="TallyOff">Off</option>
+                  <option value="TallyOn">Program</option>
+                  <option value="VideoMode">Preview</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="col-6">
+            <div class="card">
+              <div class="card-header"><i class="bi bi-volume-up"></i>Audio</div>
+              <div class="card-body p-2">
+                <select class="form-select form-select-sm" id="ndi-audio-sel" onchange="saveAudioMode()">
+                  <option value="NDIAudioEn">Enabled</option>
+                  <option value="NDIAudioDis">Disabled</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-7">
+
+        <!-- Video Outputs (dynamically generated per output) -->
+        <div id="outputs-container">
+          <div class="card mb-3">
+            <div class="card-body text-center" style="color:var(--text-muted);font-size:.85rem">
+              <i class="bi bi-hourglass-split me-1"></i>Loading outputs…
+            </div>
+          </div>
+        </div>
+
+        <!-- NDI Discovery -->
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-wifi"></i>NDI Discovery</div>
+          <div class="card-body">
+            <div class="mb-3 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Discovery Server</label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="disc-en">
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Server IP</label>
+              <input type="text" class="form-control" id="disc-ip" placeholder="10.25.0.49">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">NDI Groups</label>
+              <input type="text" class="form-control" id="ndi-grps" placeholder="public">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Off-Subnet IPs <small>(comma separated)</small></label>
+              <input type="text" class="form-control" id="off-ips" placeholder="192.168.1.100,10.0.0.200">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Device Name <small class="text-muted">(prefix for NDI discovery)</small></label>
+              <input type="text" class="form-control" id="ndi-alias" placeholder="NDIMON-XXXX" oninput="updateNdiPreview()">
+              <div class="form-text">Leave blank to use the default (NDIMON + last 4 digits of MAC).</div>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveNetSettings()"><i class="bi bi-check-lg me-1"></i>Save Network Settings</button>
+          </div>
+        </div>
+
+        <!-- Decoder -->
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-film"></i>Decoder</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">Screensaver Mode</label>
+              <select class="form-select" id="ss-sel">
+                <option value="BlackSS">Black Screen</option>
+                <option value="BirdDogSS">Splash Screen</option>
+                <option value="CaptureSS">Last Frame</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Color Space</label>
+              <select class="form-select" id="cs-sel">
+                <option value="YUV">YUV (Recommended)</option>
+                <option value="RGB">RGB</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Transport Mode</label>
+              <select class="form-select" id="tp-sel">
+                <option value="TCP">TCP (Default)</option>
+                <option value="UDP">UDP</option>
+                <option value="Multicast">Multicast</option>
+                <option value="M-TCP">M-TCP</option>
+                <option value="RUDP">RUDP</option>
+              </select>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveDecoder()"><i class="bi bi-check-lg me-1"></i>Save Decoder Settings</button>
+          </div>
+        </div>
+
+        <!-- Audio -->
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-music-note-beamed"></i>Audio</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">NDI Audio</label>
+              <select class="form-select" id="aud-sel">
+                <option value="NDIAudioEn">Enabled</option>
+                <option value="NDIAudioDis">Disabled</option>
+              </select>
+            </div>
+            <div class="stat-row"><span class="stat-label">Sample Rate</span><span class="stat-val">48 kHz</span></div>
+            <div class="stat-row"><span class="stat-label">Channels</span><span class="stat-val">Stereo (2ch)</span></div>
+            <div class="stat-row mb-3"><span class="stat-label">Format</span><span class="stat-val">Float32→S16LE</span></div>
+            <button class="btn btn-primary btn-sm" onclick="saveAudioSetting()"><i class="bi bi-check-lg me-1"></i>Save Audio Settings</button>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── SETTINGS ─── -->
+  <div id="page-settings" class="page">
+    <div class="row g-3">
+
+      <div class="col-lg-7">
+
+        <!-- Splash Screen -->
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-image"></i>Splash Screen</div>
+          <div class="card-body">
+
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <label class="form-label">Background (no signal)</label>
+                <div class="d-flex gap-2 align-items-center">
+                  <input type="color" class="form-control form-control-color" id="sp-bg-idle" value="#0D1B2A" title="Background (no signal)">
+                  <input type="text" class="form-control form-control-sm" id="sp-bg-idle-hex" value="#0D1B2A" maxlength="7" style="font-family:monospace;font-size:.8rem" oninput="syncColorHex('sp-bg-idle','sp-bg-idle-hex')">
+                </div>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Background (signal)</label>
+                <div class="d-flex gap-2 align-items-center">
+                  <input type="color" class="form-control form-control-color" id="sp-bg-live" value="#0D2B1A" title="Background (signal)">
+                  <input type="text" class="form-control form-control-sm" id="sp-bg-live-hex" value="#0D2B1A" maxlength="7" style="font-family:monospace;font-size:.8rem" oninput="syncColorHex('sp-bg-live','sp-bg-live-hex')">
+                </div>
+              </div>
+            </div>
+
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <label class="form-label">Accent (no signal)</label>
+                <div class="d-flex gap-2 align-items-center">
+                  <input type="color" class="form-control form-control-color" id="sp-ac-idle" value="#4488CC">
+                  <input type="text" class="form-control form-control-sm" id="sp-ac-idle-hex" value="#4488CC" maxlength="7" style="font-family:monospace;font-size:.8rem" oninput="syncColorHex('sp-ac-idle','sp-ac-idle-hex')">
+                </div>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Accent (signal)</label>
+                <div class="d-flex gap-2 align-items-center">
+                  <input type="color" class="form-control form-control-color" id="sp-ac-live" value="#22FF88">
+                  <input type="text" class="form-control form-control-sm" id="sp-ac-live-hex" value="#22FF88" maxlength="7" style="font-family:monospace;font-size:.8rem" oninput="syncColorHex('sp-ac-live','sp-ac-live-hex')">
+                </div>
+              </div>
+            </div>
+
+            <hr class="section-divider">
+
+            <!-- Logo -->
+            <div class="mb-2" style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)"><i class="bi bi-image me-1"></i>Logo</div>
+            <div class="mb-3">
+              <label class="form-label">Logo Image <small>(PNG/JPEG)</small></label>
+              <div class="input-group">
+                <input type="text" class="form-control" id="sp-logo-path" placeholder="/etc/splash-logo.png" readonly>
+                <button class="btn btn-outline-secondary btn-sm" type="button" onclick="document.getElementById('sp-logo-file').click()"><i class="bi bi-upload me-1"></i>Upload</button>
+              </div>
+              <input type="file" id="sp-logo-file" accept="image/png,image/jpeg" style="display:none" onchange="uploadLogo(this)">
+              <div class="form-text">Upload replaces the logo on device and updates the path automatically.</div>
+            </div>
+            <div class="row g-2 mb-3">
+              <div class="col-4">
+                <label class="form-label">X Position <span id="sp-logo-x-val" class="text-white">50%</span></label>
+                <input type="range" class="form-range" id="sp-logo-x" min="0" max="100" value="50" oninput="document.getElementById('sp-logo-x-val').textContent=this.value+'%'">
+              </div>
+              <div class="col-4">
+                <label class="form-label">Y Position <span id="sp-logo-y-val" class="text-white">40%</span></label>
+                <input type="range" class="form-range" id="sp-logo-y" min="0" max="100" value="40" oninput="document.getElementById('sp-logo-y-val').textContent=this.value+'%'">
+              </div>
+              <div class="col-4">
+                <label class="form-label">Width <span id="sp-logo-w-val" class="text-white">30%</span></label>
+                <input type="range" class="form-range" id="sp-logo-w" min="5" max="80" value="30" oninput="document.getElementById('sp-logo-w-val').textContent=this.value+'%'">
+              </div>
+            </div>
+
+            <hr class="section-divider">
+
+            <!-- Text Overlay -->
+            <div class="mb-2" style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)"><i class="bi bi-type me-1"></i>Overlay Text</div>
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <label class="form-label">No Signal text</label>
+                <input type="text" class="form-control" id="sp-text-idle" placeholder="No Signal" maxlength="64">
+              </div>
+              <div class="col-6">
+                <label class="form-label">Signal text</label>
+                <input type="text" class="form-control" id="sp-text-live" placeholder="Signal Available" maxlength="64">
+              </div>
+            </div>
+            <div class="row g-2 mb-3">
+              <div class="col-12">
+                <label class="form-label">Text Size <small class="text-muted">(applies to centre label and top-right device info)</small></label>
+                <select class="form-select" id="sp-text-scale">
+                  <option value="1">Tiny (8px)</option>
+                  <option value="2">Small (16px)</option>
+                  <option value="3" selected>Medium (24px)</option>
+                  <option value="4">Large (32px)</option>
+                  <option value="5">XL (40px)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-text mb-3"><i class="bi bi-info-circle me-1"></i>NDI Alias and IP address are shown automatically in the top-right corner.</div>
+
+            <hr class="section-divider">
+
+            <div class="mb-3 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Show decorative box</label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="sp-show-box" checked>
+              </div>
+            </div>
+
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary btn-sm flex-fill" onclick="saveSplash()"><i class="bi bi-check-lg me-1"></i>Save Splash Settings</button>
+              <button class="btn btn-outline-secondary btn-sm" onclick="previewSplash(false)" title="Preview no-signal splash"><i class="bi bi-eye me-1"></i>Preview</button>
+              <button class="btn btn-outline-success btn-sm" onclick="previewSplash(true)" title="Preview signal-available splash"><i class="bi bi-eye-fill"></i></button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- OSD Card -->
+      <div class="col-12">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-tv"></i>On-Screen Display (OSD)</div>
+          <div class="card-body">
+            <p class="text-muted" style="font-size:.85rem">OSD text is overlaid on the live video feed at the top centre of the screen. Disabled by default.</p>
+            <div class="mb-3 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Enable OSD</label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="osd-enabled">
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Display Text</label>
+              <input type="text" class="form-control" id="osd-text" placeholder="e.g. Camera 1 — LIVE" maxlength="128">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveOsd()"><i class="bi bi-check-lg me-1"></i>Save OSD Settings</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ─── SYSTEM ─── -->
+  <div id="page-system" class="page">
+    <div class="row g-3">
+
+      <div class="col-lg-5">
+        <div class="card">
+          <div class="card-header"><i class="bi bi-info-circle"></i>Device Information</div>
+          <div class="card-body">
+            <div class="stat-row"><span class="stat-label">Model</span><span class="stat-val">NDI Decoder (RK3588)</span></div>
+            <div class="stat-row"><span class="stat-label">Hostname</span><span class="stat-val" id="sys-host">—</span></div>
+            <div class="stat-row"><span class="stat-label">IP Address</span><span class="stat-val" id="sys-ip">—</span></div>
+            <div class="stat-row"><span class="stat-label">Platform</span><span class="stat-val" id="sys-plat">—</span></div>
+            <div class="stat-row"><span class="stat-label">NDI SDK</span><span class="stat-val">v6</span></div>
+            <div class="stat-row"><span class="stat-label">Firmware</span><span class="stat-val" id="sys-fw">—</span></div>
+            <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-val" id="sys-up">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4">
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-bar-chart-fill"></i>System Health</div>
+          <div class="card-body">
+            <div class="metric-bar">
+              <div class="metric-label"><span>CPU</span><span id="sys-cpu-pct">—</span></div>
+              <div class="bar-track"><div id="sys-cpu-bar" class="bar-fill bar-blue" style="width:0%"></div></div>
+            </div>
+            <div class="metric-bar">
+              <div class="metric-label"><span>Memory</span><span id="sys-mem-pct">—</span></div>
+              <div class="bar-track"><div id="sys-mem-bar" class="bar-fill bar-green" style="width:0%"></div></div>
+            </div>
+            <div class="metric-label mt-1 mb-2" style="font-size:.78rem;font-weight:600;color:var(--text-muted)">Temperatures</div>
+            <div class="temp-grid" id="sys-temps"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-3">
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-terminal"></i>Services</div>
+          <div class="card-body">
+            <div class="stat-row"><span class="stat-label">ndi-decoder</span><span style="font-size:.75rem;color:var(--live)">● running</span></div>
+            <div class="stat-row"><span class="stat-label">ndi-api</span><span style="font-size:.75rem;color:var(--live)">● running</span></div>
+            <div class="stat-row"><span class="stat-label">ndi-finder</span><span style="font-size:.75rem;color:var(--live)">● running</span></div>
+            <hr class="section-divider">
+            <div class="d-grid gap-2">
+              <button class="btn btn-outline-warning btn-sm" onclick="softReboot()"><i class="bi bi-arrow-counterclockwise me-1"></i>Restart Services</button>
+              <button class="btn btn-outline-danger btn-sm" onclick="sysReboot()"><i class="bi bi-power me-1"></i>Reboot Device</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><i class="bi bi-code-slash"></i>BirdDog API</div>
+          <div class="card-body" style="font-size:.74rem;color:var(--text-muted)">
+            <div>BirdDog-compatible REST API</div>
+            <div class="mt-2" style="font-family:monospace">/v1/NDIDecode/decodestatus</div>
+            <div style="font-family:monospace">/v1/NDIFinder/List</div>
+            <div style="font-family:monospace">/v1/VideoOutput/modes</div>
+            <div style="font-family:monospace">/v1/AboutMe</div>
+            <div style="font-family:monospace">/api/status</div>
+            <div style="font-family:monospace">/api/events (SSE)</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- Toast -->
+<div class="toast-container">
+  <div id="toast" class="toast align-items-center text-bg-success border-0" role="alert">
+    <div class="d-flex"><div class="toast-body" id="toast-msg">Done</div>
+    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+'use strict';
+
+// ══ State ══════════════════════════════════════════════════════
+let S = { connected:false, source_name:'', platform:'', fps:0, codec:'none',
+  input_width:0, input_height:0, display_width:0, display_height:0, display_refresh:0, display_refresh_hz:0,
+  total_frames:0, dropped_frames:0, audio_enabled:true, scale_mode:'letterbox',
+  connector:'', output_alias:'', recv_name:'', device_name:'',
+  cpu_percent:0, memory:{}, temps:{}, uptime:'', sources:[], decoder:{}, discovery:{} };
+
+let modes = [];
+let toastInst;
+let sourceIPs = {}; // name → IP from NDI finder list
+
+document.addEventListener('DOMContentLoaded', () => {
+  toastInst = new bootstrap.Toast(document.getElementById('toast'), { delay:2500 });
+  initSSE();
+  loadInitialData();
+});
+
+// ══ Toast ═══════════════════════════════════════════════════════
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.className = `toast align-items-center text-bg-${type||'success'} border-0`;
+  document.getElementById('toast-msg').textContent = msg;
+  toastInst.show();
+}
+
+// ══ Navigation ══════════════════════════════════════════════════
+function showPage(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  if (el) el.classList.add('active');
+  if (name === 'settings') loadSettings();
+  if (name === 'system')   loadSysInfo();
+  if (name === 'ndi')      { loadSourceIPs().then(renderSrcList); }
+}
+
+function gotoNDI() {
+  showPage('ndi', document.querySelectorAll('.nav-item')[1]);
+}
+
+// ══ SSE ═════════════════════════════════════════════════════════
+function initSSE() {
+  const es = new EventSource('/api/events');
+  es.onmessage = e => {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.type === 'status') { mergeState(d); updateUI(); }
+    } catch {}
+  };
+  es.onerror = () => setTimeout(initSSE, 5000);
+}
+
+function mergeState(d) {
+  if (d.stream)    Object.assign(S, d.stream);
+  if (d.system)   { S.cpu_percent=d.system.cpu_percent; S.memory=d.system.memory; S.temps=d.system.temps; S.uptime=d.system.uptime; }
+  if (d.sources)  S.sources = d.sources;
+  if (d.decoder)  S.decoder = d.decoder;
+  if (d.discovery) S.discovery = d.discovery;
+  if (d.outputs)  S.outputs = d.outputs;
+}
+
+// ══ Initial load ════════════════════════════════════════════════
+async function loadInitialData() {
+  try { const d = await api('/api/status'); mergeState(d); updateUI(); } catch {}
+  loadSourceIPs();
+}
+
+async function loadSourceIPs() {
+  try {
+    const d = await api('/v1/NDIFinder/List');
+    if (d && d.list) {
+      sourceIPs = {};
+      for (const [name, ip] of Object.entries(d.list)) {
+        if (name !== 'None') sourceIPs[name] = ip;
+      }
+    }
+  } catch {}
+}
+
+function fmtHz(hz) {
+  // Show fractional rates nicely: 59.94, 29.97, 23.98 etc.
+  if (!hz) return '—';
+  const known = {23.98:23.98, 24:24, 25:25, 29.97:29.97, 30:30, 47.95:47.95, 48:48,
+                 50:50, 59.94:59.94, 60:60, 100:100, 119.88:119.88, 120:120};
+  // Round to 2dp and check known
+  const r = Math.round(hz * 100) / 100;
+  return r + ' Hz';
+}
+
+// Per-output modes cache: key = output_index
+const outputModes = {};
+
+async function loadOutputModes(cardIdx, outputIndex) {
+  try {
+    const d = await api(`/v1/VideoOutput/modes?output=${outputIndex}`);
+    outputModes[outputIndex] = d.modes || [];
+    const cur = d.current || {};
+    const resMap = new Map();
+    outputModes[outputIndex].forEach(m => {
+      const key = m.width+'x'+m.height;
+      if (!resMap.has(key)) resMap.set(key, { width: m.width, height: m.height, preferred: m.preferred });
+      else if (m.preferred) resMap.get(key).preferred = true;
+    });
+    const whSel = document.getElementById(`res-wh-${cardIdx}`);
+    if (!whSel) return;
+    whSel.innerHTML = '';
+    resMap.forEach((r) => {
+      const o = document.createElement('option');
+      o.value = r.width+'x'+r.height;
+      o.dataset.w = r.width; o.dataset.h = r.height;
+      o.textContent = `${r.width} × ${r.height}${r.preferred?' ★':''}`;
+      if (r.width === cur.width && r.height === cur.height) o.selected = true;
+      whSel.appendChild(o);
+    });
+    populateOutputRefreshRates(cardIdx, outputIndex, cur);
+  } catch {}
+}
+
+function populateOutputRefreshRates(cardIdx, outputIndex, cur) {
+  const whSel = document.getElementById(`res-wh-${cardIdx}`);
+  const fpsSel = document.getElementById(`res-fps-${cardIdx}`);
+  if (!whSel || !fpsSel) return;
+  const opt = whSel.options[whSel.selectedIndex];
+  if (!opt) return;
+  const w = parseInt(opt.dataset.w), h = parseInt(opt.dataset.h);
+  const rates = (outputModes[outputIndex] || []).filter(m => m.width === w && m.height === h);
+  fpsSel.innerHTML = '';
+  rates.forEach(m => {
+    const o = document.createElement('option');
+    o.value = m.refresh_hz || m.refresh;
+    o.dataset.hz = m.refresh_hz || m.refresh;
+    o.textContent = fmtHz(m.refresh_hz || m.refresh) + (m.preferred ? ' ★' : '');
+    const curHz = cur ? (cur.refresh_hz || cur.refresh) : 0;
+    if (curHz && Math.abs((m.refresh_hz || m.refresh) - curHz) < 0.02) o.selected = true;
+    fpsSel.appendChild(o);
+  });
+}
+
+function onResChange(cardIdx) {
+  const out = S.outputs[cardIdx];
+  populateOutputRefreshRates(cardIdx, out?.output_index ?? cardIdx, {});
+}
+
+function updateNdiPreview(cardIdx) {
+  const preview = document.getElementById(`ndi-preview-${cardIdx}`);
+  if (!preview) return;
+  const devName = (document.getElementById('ndi-alias')?.value.trim()) ||
+                  S.device_name || 'NDIMON-XXXX';
+  const out = S.outputs[cardIdx];
+  const outAlias = (document.getElementById(`output-alias-${cardIdx}`)?.value.trim()) ||
+                   out?.output_alias ||
+                   out?.connector?.replace('HDMI-A-','HDMI-') || `HDMI-${cardIdx+1}`;
+  preview.textContent = `NDI name: "${devName} (${outAlias})"`;
+}
+
+// Build output cards once; update status fields on each tick.
+let builtOutputCount = 0;
+
+function buildOutputCards() {
+  const container = document.getElementById('outputs-container');
+  if (!container || !S.outputs?.length) return;
+  builtOutputCount = S.outputs.length;
+
+  container.innerHTML = S.outputs.map((out, idx) => {
+    const alias = out.output_alias || out.connector?.replace('HDMI-A-','HDMI-') || `Output ${idx+1}`;
+    return `
+    <div class="card mb-3" data-card-idx="${idx}">
+      <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-display me-1"></i>Output ${idx+1} — ${esc(alias)}</span>
+        <span id="out-badge-${idx}" class="badge ${out.connected?'bg-success':'bg-secondary'}">${out.connected?'● LIVE':'○ IDLE'}</span>
+      </div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Output Name <small class="text-muted">(shown in NDI discovery)</small></label>
+          <input type="text" class="form-control" id="output-alias-${idx}"
+                 value="${esc(out.output_alias||'')}"
+                 placeholder="${esc(out.connector?.replace('HDMI-A-','HDMI-')||'HDMI-'+(idx+1))}"
+                 oninput="updateNdiPreview(${idx})">
+          <div class="form-text" id="ndi-preview-${idx}" style="color:var(--text-muted);font-size:.78rem"></div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">NDI Source</label>
+          <div class="d-flex gap-2">
+            <select class="form-select" id="src-sel-${idx}">
+              <option value="">— Select source —</option>
+            </select>
+            <button class="btn btn-success btn-sm" onclick="connectOutput(${idx})">Connect</button>
+            <button class="btn btn-outline-secondary btn-sm" onclick="disconnectOutput(${idx})">Disconnect</button>
+          </div>
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-7">
+            <label class="form-label">Resolution</label>
+            <select class="form-select" id="res-wh-${idx}" onchange="onResChange(${idx})"><option>Loading…</option></select>
+          </div>
+          <div class="col-5">
+            <label class="form-label">Refresh Rate</label>
+            <select class="form-select" id="res-fps-${idx}"><option>—</option></select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Scale Mode</label>
+          <select class="form-select" id="scale-sel-${idx}">
+            <option value="letterbox">Letterbox (preserve aspect ratio)</option>
+            <option value="stretch">Stretch (fill screen)</option>
+            <option value="crop">Crop (fill, no bars)</option>
+          </select>
+        </div>
+        <div class="stat-row mb-1"><span class="stat-label">Source</span><span class="stat-val" id="out-src-${idx}">${esc(out.source_name||'None')}</span></div>
+        <div class="stat-row mb-1"><span class="stat-label">Resolution</span><span class="stat-val" id="out-res-${idx}">${out.width?out.width+'×'+out.height+' @ '+fmtHz(out.refresh_hz||out.refresh):'—'}</span></div>
+        <div class="stat-row mb-3"><span class="stat-label">FPS / Codec</span><span class="stat-val" id="out-fps-${idx}">${out.fps>0?out.fps.toFixed(1)+' fps':'—'}</span></div>
+        <div class="d-flex gap-2 align-items-center">
+          <button class="btn btn-primary btn-sm" onclick="applyOutputSettings(${idx})"><i class="bi bi-check-lg me-1"></i>Save Output ${idx+1}</button>
+          <span id="out-msg-${idx}" style="font-size:.8rem;color:var(--text-muted)"></span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Init each card
+  S.outputs.forEach((out, idx) => {
+    setVal(`scale-sel-${idx}`, out.scale_mode || 'letterbox');
+    populateOutputSrcSelector(idx);
+    loadOutputModes(idx, out.output_index);
+    updateNdiPreview(idx);
+  });
+}
+
+function updateOutputCards() {
+  if (!S.outputs?.length) return;
+  // Rebuild if output count changed
+  if (builtOutputCount !== S.outputs.length) { buildOutputCards(); return; }
+  S.outputs.forEach((out, idx) => {
+    // Badge
+    const badge = document.getElementById(`out-badge-${idx}`);
+    if (badge) { badge.className = `badge ${out.connected?'bg-success':'bg-secondary'}`; badge.textContent = out.connected?'● LIVE':'○ IDLE'; }
+    // Status rows
+    setText(`out-src-${idx}`, out.source_name || 'None');
+    const resStr = out.width ? `${out.width}×${out.height} @ ${fmtHz(out.refresh_hz||out.refresh)}` : '—';
+    setText(`out-res-${idx}`, resStr);
+    setText(`out-fps-${idx}`, out.fps > 0 ? out.fps.toFixed(1)+' fps' : '—');
+    // Update source selector without clearing user selection
+    populateOutputSrcSelector(idx);
+  });
+}
+
+function populateOutputSrcSelector(cardIdx) {
+  const sel = document.getElementById(`src-sel-${cardIdx}`);
+  if (!sel) return;
+  const cur = S.outputs[cardIdx]?.source_name || '';
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— Select source —</option>';
+  S.sources.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    if (s === (prev || cur)) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+async function connectOutput(cardIdx) {
+  const out = S.outputs[cardIdx];
+  const sel = document.getElementById(`src-sel-${cardIdx}`);
+  if (!sel?.value) { toast('Select a source first', 'warning'); return; }
+  await post('/v1/NDIDecode/connectTo', { SourceName: sel.value, SourceIP: sourceIPs[sel.value]||'', Output: (out?.output_index??cardIdx)+1 });
+  toast(`Output ${cardIdx+1}: connecting to ${sel.value}…`);
+}
+
+async function disconnectOutput(cardIdx) {
+  const out = S.outputs[cardIdx];
+  await post('/v1/NDIDecode/connectTo', { SourceName: 'None', SourceIP: '', Output: (out?.output_index??cardIdx)+1 });
+  toast(`Output ${cardIdx+1}: disconnected`);
+}
+
+async function applyOutputSettings(cardIdx) {
+  const out = S.outputs[cardIdx];
+  const outputIndex = out?.output_index ?? cardIdx;
+  const msg = document.getElementById(`out-msg-${cardIdx}`);
+
+  const outAlias = (document.getElementById(`output-alias-${cardIdx}`)?.value || '').trim();
+  await post('/v1/DeviceSettings/output-alias', { ch: outputIndex+1, output_alias: outAlias });
+
+  const whSel  = document.getElementById(`res-wh-${cardIdx}`);
+  const fpsSel = document.getElementById(`res-fps-${cardIdx}`);
+  const whOpt  = whSel?.options[whSel.selectedIndex];
+  const fpsOpt = fpsSel?.options[fpsSel.selectedIndex];
+  if (whOpt?.dataset.w && fpsOpt) {
+    if (msg) msg.textContent = 'Applying…';
+    const hz = parseFloat(fpsOpt.dataset.hz || fpsOpt.value);
+    const d  = await post('/v1/VideoOutput/resolution', { width: +whOpt.dataset.w, height: +whOpt.dataset.h, refresh_hz: hz, output: outputIndex });
+    if (msg) msg.textContent = d.ok ? '✓ Saved' : '✗ Failed';
+  }
+
+  const scale = document.getElementById(`scale-sel-${cardIdx}`)?.value || 'letterbox';
+  await post('/v1/VideoOutput/scaleMode', { scale_mode: scale, output: outputIndex });
+  toast(`Output ${cardIdx+1} settings saved`);
+}
+
+// ══ UI update ════════════════════════════════════════════════════
+function updateUI() {
+  updateTopbar();
+  updateDash();
+  updateNDIState();
+  renderTemps('dash-temps');
+  renderTemps('sys-temps');
+  setText('sys-up', S.uptime||'—');
+  setText('sys-plat', S.platform||'—');
+  updateOutputCards();
+}
+
+function updateTopbar() {
+  const pill = document.getElementById('topbar-pill');
+  pill.className = 'status-pill '+(S.connected?'live':'idle');
+  pill.innerHTML = `<div class="dot"></div><span>${S.connected?'LIVE':'IDLE'}</span>`;
+  setText('topbar-src', S.source_name||'—');
+  const res = S.display_width ? `${S.display_width}×${S.display_height} @ ${fmtHz(S.display_refresh_hz||S.display_refresh)}` : '—';
+  setText('topbar-res', res);
+}
+
+function updateDash() {
+  const big = document.getElementById('dash-big');
+  big.className = 'big-status '+(S.connected?'live':'idle');
+  setText('dash-st', S.connected?'LIVE':'IDLE');
+  setText('dash-src', S.source_name||'None');
+  setText('dash-inres',  S.input_width  ? S.input_width+'×'+S.input_height : '—');
+  setText('dash-outres', S.display_width ? S.display_width+'×'+S.display_height+' @ '+fmtHz(S.display_refresh_hz||S.display_refresh) : '—');
+  setText('dash-fps',    S.fps>0 ? S.fps.toFixed(2)+' fps' : '—');
+  setText('dash-codec',  fmtCodec(S.codec));
+  setText('dash-plat',   S.platform||'—');
+  const dp = S.total_frames>0 ? (S.dropped_frames/S.total_frames*100).toFixed(1) : '0.0';
+  setText('dash-frames', S.total_frames+' / '+S.dropped_frames+' ('+dp+'% drop)');
+
+  const cpu=S.cpu_percent||0, mem=(S.memory||{}).percent||0;
+  setText('dash-cpu-pct', cpu+'%');
+  setBar('dash-cpu-bar', cpu);
+  setText('dash-mem-pct', mem+'% ('+(S.memory.used_mb||0)+'MB / '+(S.memory.total_mb||0)+'MB)');
+  setBar('dash-mem-bar', mem, true);
+  setText('dash-uptime', S.uptime||'—');
+  setText('dash-audio', S.audio_enabled?'Enabled':'Disabled');
+  // System health bars
+  setText('sys-cpu-pct', cpu+'%'); setBar('sys-cpu-bar', cpu);
+  setText('sys-mem-pct', mem+'%'); setBar('sys-mem-bar', mem, true);
+
+  // Source list summary
+  setText('dash-src-count', S.sources.length);
+  const sl = document.getElementById('dash-src-list');
+  if (sl) {
+    if (!S.sources.length) { sl.innerHTML='<span style="color:var(--text-muted)">No sources found</span>'; }
+    else sl.innerHTML = S.sources.map(s =>
+      `<div class="d-flex align-items-center mb-1 gap-1">
+        <span class="src-dot ${s===S.source_name&&S.connected?'on':'off'}"></span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem">${esc(s)}</span>
+      </div>`).join('');
+  }
+}
+
+function updateNDIState() {
+  const b = document.getElementById('ndi-badge');
+  if (b) b.innerHTML = S.connected
+    ? '<span class="badge-live">● LIVE</span>'
+    : '<span style="color:var(--text-muted);font-size:.85rem">Idle</span>';
+  setText('ndi-src',   S.source_name||'None');
+  setText('ndi-res',   S.input_width ? S.input_width+'×'+S.input_height : '—');
+  setText('ndi-fps',   S.fps>0 ? S.fps.toFixed(2)+' fps' : '—');
+  setText('ndi-codec', fmtCodec(S.codec));
+  if (S.decoder) {
+    setVal('tally-sel', S.decoder.tally);
+    setVal('ndi-audio-sel', S.decoder.audio);
+  }
+  setText('ndi-src-count', S.sources.length);
+  if (document.getElementById('page-ndi').classList.contains('active')) renderSrcList();
+}
+
+function renderSrcList() {
+  const el = document.getElementById('ndi-src-list');
+  if (!el) return;
+  if (!S.sources.length) {
+    el.innerHTML='<div style="color:var(--text-muted);text-align:center;padding:40px 0"><i class="bi bi-wifi-off" style="font-size:2rem"></i><div class="mt-2">No NDI sources found</div><div style="font-size:.8rem;margin-top:4px">Check network or use Manual Connect</div></div>';
+    return;
+  }
+  el.innerHTML = S.sources.map(s => {
+    const active = s===S.source_name && S.connected;
+    const ip = sourceIPs[s] || '';
+    return `<div class="source-item ${active?'active-src':''}">
+      <span class="src-dot ${active?'on':'off'}"></span>
+      <span class="src-name">${esc(s)}</span>
+      ${active
+        ? '<span class="badge-live">LIVE</span>'
+        : `<button class="btn btn-primary btn-sm" style="font-size:.78rem;padding:3px 10px" onclick="doConnect('${esc(s,1)}','${esc(ip,1)}')"><i class="bi bi-plug me-1"></i>Connect</button>`
+      }
+    </div>`;
+  }).join('');
+}
+
+function renderTemps(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const t = S.temps||{}, keys=Object.keys(t);
+  if (!keys.length) { el.innerHTML='<div style="color:var(--text-muted);font-size:.78rem">No sensors found</div>'; return; }
+  el.innerHTML = keys.map(k => {
+    const v=t[k], cls=v>75?'temp-hot':v>60?'temp-warm':'temp-ok';
+    const lbl=k.replace('thermal','').replace(/_/g,' ').trim()||k;
+    return `<div class="temp-chip"><div class="temp-val ${cls}">${v.toFixed(0)}°C</div><div class="temp-lbl">${esc(lbl)}</div></div>`;
+  }).join('');
+}
+
+// ══ Settings ════════════════════════════════════════════════════
+async function loadSettings() {
+  try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('ss-sel',d.ScreenSaverMode); setVal('cs-sel',d.ColorSpace); setVal('aud-sel',d.NDIAudio); } catch {}
+  try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
+  try { const d=await api('/v1/NDIFinder/NDIDisServer'); setCheck('disc-en',d.NDIDisServ==='NDIDisServEn'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
+  try { const g=await fetch('/v1/NDIFinder/NdiGrpName').then(r=>r.text()); setVal('ndi-grps',g.replace(/"/g,'')); } catch {}
+  try { const ips=await fetch('/v1/NDIFinder/NdiOffSnSrc').then(r=>r.text()); setVal('off-ips',ips.replace(/"/g,'')); } catch {}
+  try { const d=await api('/v1/DeviceSettings/ndi-alias'); setVal('ndi-alias',d.ndi_recv_name||''); } catch {}
+  loadSplashSettings();
+  loadOsd();
+}
+
+async function loadSplashSettings() {
+  try {
+    const d = await api('/v1/Splash/config');
+    setColorField('sp-bg-idle',   'sp-bg-idle-hex',  d.bg_idle);
+    setColorField('sp-bg-live',   'sp-bg-live-hex',  d.bg_live);
+    setColorField('sp-ac-idle',   'sp-ac-idle-hex',  d.accent_idle);
+    setColorField('sp-ac-live',   'sp-ac-live-hex',  d.accent_live);
+    setVal('sp-logo-path', d.logo_path||'');
+    setSlider('sp-logo-x', 'sp-logo-x-val', d.logo_x_pct, '%');
+    setSlider('sp-logo-y', 'sp-logo-y-val', d.logo_y_pct, '%');
+    setSlider('sp-logo-w', 'sp-logo-w-val', d.logo_w_pct, '%');
+    setVal('sp-text-idle', d.text_idle||'');
+    setVal('sp-text-live', d.text_live||'');
+    setVal('sp-text-scale', String(d.text_scale||3));
+    setCheck('sp-show-box', d.show_box !== false);
+  } catch(e) { console.warn('splash config load failed', e); }
+}
+
+function setColorField(pickerId, hexId, val) {
+  if (!val) return;
+  const picker = document.getElementById(pickerId);
+  const hex    = document.getElementById(hexId);
+  if (picker) picker.value = val;
+  if (hex)    hex.value    = val;
+}
+
+function setSlider(sliderId, labelId, val, suffix) {
+  const sl = document.getElementById(sliderId);
+  const lb = document.getElementById(labelId);
+  if (sl) sl.value = Math.round(val);
+  if (lb) lb.textContent = Math.round(val) + (suffix||'');
+}
+
+function syncColorHex(pickerId, hexId) {
+  const hex = document.getElementById(hexId);
+  const picker = document.getElementById(pickerId);
+  if (!hex || !picker) return;
+  const v = hex.value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) picker.value = v;
+}
+
+// Keep hex field in sync when color picker changes
+document.addEventListener('DOMContentLoaded', () => {
+  const pairs = [
+    ['sp-bg-idle','sp-bg-idle-hex'],['sp-bg-live','sp-bg-live-hex'],
+    ['sp-ac-idle','sp-ac-idle-hex'],['sp-ac-live','sp-ac-live-hex'],
+  ];
+  for (const [pid, hid] of pairs) {
+    const p = document.getElementById(pid);
+    if (p) p.addEventListener('input', () => {
+      const h = document.getElementById(hid);
+      if (h) h.value = p.value;
+    });
+  }
+});
+
+async function loadSysInfo() {
+  try {
+    const d = await api('/v1/AboutMe');
+    setText('sys-host', d.HostName||d.DeviceName||'—');
+    setText('sys-ip',   Array.isArray(d.IPAddresses)?d.IPAddresses[0]:d.IPAddress||'—');
+    setText('sys-fw',   d.FirmwareVersion||'—');
+  } catch {}
+}
+
+// ══ Actions ══════════════════════════════════════════════════════
+async function doConnect(name, ip) {
+  await post('/v1/NDIDecode/connectTo', { SourceName:name, SourceIP:ip||'' });
+  toast('Connecting to '+name+'…');
+}
+
+async function doDisconnect() {
+  await post('/v1/NDIDecode/connectTo', { SourceName:'None', SourceIP:'' });
+  toast('Disconnected');
+}
+
+function doManualConnect() {
+  const n = document.getElementById('man-name').value.trim();
+  const ip= document.getElementById('man-ip').value.trim();
+  if (!n) { toast('Enter a source name','warning'); return; }
+  doConnect(n, ip);
+}
+
+async function refreshSources() {
+  await fetch('/v1/NDIFinder/refresh',{method:'POST'});
+  toast('Refreshing NDI sources…');
+  setTimeout(() => loadSourceIPs().then(renderSrcList), 3000);
+}
+
+async function saveTally() {
+  await post('/v1/NDIDecode/decodesetup',{TallyMode:document.getElementById('tally-sel').value});
+  toast('Tally saved');
+}
+
+async function saveAudioMode() {
+  await post('/v1/NDIDecode/decodesetup',{NDIAudio:document.getElementById('ndi-audio-sel').value});
+  toast('Audio saved');
+}
+
+async function saveDecoder() {
+  await post('/v1/NDIDecode/decodesetup',{
+    ScreenSaverMode: document.getElementById('ss-sel').value,
+    ColorSpace:      document.getElementById('cs-sel').value,
+  });
+  await post('/v1/NDIDecode/decodeTransport',{Rxpm:document.getElementById('tp-sel').value});
+  toast('Decoder settings saved');
+}
+
+async function saveAudioSetting() {
+  await post('/v1/NDIDecode/decodesetup',{NDIAudio:document.getElementById('aud-sel').value});
+  toast('Audio settings saved');
+}
+
+// Legacy stub — real saves now go through applyOutputSettings(cardIdx)
+async function applyVideoOutput() { await applyOutputSettings(0); }
+
+async function saveSplash() {
+  const cfg = {
+    bg_idle:     document.getElementById('sp-bg-idle').value,
+    bg_live:     document.getElementById('sp-bg-live').value,
+    accent_idle: document.getElementById('sp-ac-idle').value,
+    accent_live: document.getElementById('sp-ac-live').value,
+    logo_path:   document.getElementById('sp-logo-path').value.trim(),
+    logo_x_pct:  +document.getElementById('sp-logo-x').value,
+    logo_y_pct:  +document.getElementById('sp-logo-y').value,
+    logo_w_pct:  +document.getElementById('sp-logo-w').value,
+    text_idle:   document.getElementById('sp-text-idle').value,
+    text_live:   document.getElementById('sp-text-live').value,
+    text_scale:  +document.getElementById('sp-text-scale').value,
+    show_box:    document.getElementById('sp-show-box').checked,
+  };
+  await post('/v1/Splash/config', cfg);
+  toast('Splash settings saved');
+}
+
+async function previewSplash(sourceAvailable) {
+  await saveSplash();
+  await post('/v1/Splash/preview', { source_available: sourceAvailable });
+  toast('Splash preview sent to display');
+}
+
+async function uploadLogo(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+    const base64  = dataUrl.split(',')[1];
+    try {
+      const r = await post('/v1/Splash/uploadLogo', { data: base64, filename: file.name });
+      if (r.ok) {
+        document.getElementById('sp-logo-path').value = r.path;
+        toast('Logo uploaded: ' + r.path);
+      } else {
+        toast('Upload failed: ' + (r.error || 'unknown'));
+      }
+    } catch (err) {
+      toast('Upload error: ' + err.message);
+    }
+  };
+  reader.readAsDataURL(file);
+  input.value = '';  // reset so same file can be re-uploaded
+}
+
+async function loadOsd() {
+  try {
+    const d = await fetch('/v1/Splash/osd').then(r => r.json());
+    document.getElementById('osd-enabled').checked = !!d.enabled;
+    document.getElementById('osd-text').value = d.text || '';
+  } catch {}
+}
+
+async function saveOsd() {
+  const enabled = document.getElementById('osd-enabled').checked;
+  const text    = document.getElementById('osd-text').value.trim();
+  await post('/v1/Splash/osd', { enabled, text });
+  toast('OSD settings saved');
+}
+
+async function saveNetSettings() {
+  const en = document.getElementById('disc-en').checked ? 'NDIDisServEn' : 'NDIDisServDis';
+  const ip = document.getElementById('disc-ip').value.trim();
+  await post('/v1/NDIFinder/NDIDisServer',{NDIDisServ:en,NDIDisServIP:ip});
+  const g = document.getElementById('ndi-grps').value.trim()||'public';
+  await fetch('/v1/NDIFinder/NdiGrpName',{method:'POST',headers:{'Content-Type':'text/plain'},body:g});
+  const ips = document.getElementById('off-ips').value.trim();
+  await fetch('/v1/NDIFinder/NdiOffSnSrc',{method:'POST',headers:{'Content-Type':'text/plain'},body:ips});
+  const alias = document.getElementById('ndi-alias').value.trim();
+  await post('/v1/DeviceSettings/ndi-alias',{ndi_recv_name:alias});
+  toast('Network settings saved');
+  refreshSources();
+}
+
+
+async function softReboot() {
+  if (!confirm('Restart all NDI services?')) return;
+  await post('/v1/System/softreboot',{});
+  toast('Restarting services…','warning');
+}
+
+async function sysReboot() {
+  if (!confirm('Reboot the device?')) return;
+  await post('/v1/System/reboot',{});
+  toast('Rebooting…','warning');
+}
+
+// ══ Helpers ══════════════════════════════════════════════════════
+async function api(url) { return fetch(url).then(r=>r.json()); }
+async function post(url,body) { return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).catch(()=>({})); }
+
+function setText(id,v) { const el=document.getElementById(id); if(el) el.textContent=v; }
+function setVal(id,v)  { const el=document.getElementById(id); if(el&&v!=null) el.value=v; }
+function setCheck(id,v){ const el=document.getElementById(id); if(el) el.checked=v; }
+
+function setBar(id, pct, isGreen) {
+  const el=document.getElementById(id); if(!el) return;
+  el.style.width = Math.min(100,Math.max(0,pct))+'%';
+  el.className = 'bar-fill ' + (pct>85?'bar-danger':pct>65?'bar-warn':isGreen?'bar-green':'bar-blue');
+}
+
+function fmtCodec(c) {
+  if(!c||c==='none') return '—';
+  if(c==='uncompressed') return 'Uncompressed (NDI)';
+  return c;
+}
+
+function esc(s,forAttr) {
+  if(forAttr) return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

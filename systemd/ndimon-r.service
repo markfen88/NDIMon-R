@@ -1,0 +1,22 @@
+[Unit]
+Description=NDIMon-R (Hardware NDI Decoder)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+# Unbind all framebuffer consoles so DRM app can take display master
+ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon0/bind'
+ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon1/bind'
+ExecStartPre=-/bin/sh -c 'echo 1 > /sys/class/graphics/fb0/blank'
+ExecStart=/usr/local/bin/ndimon-r
+ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon0/bind'
+ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon1/bind'
+Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/aarch64-linux-gnu
+# High priority for real-time video
+Nice=-10
+
+[Install]
+WantedBy=default.target

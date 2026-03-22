@@ -1,0 +1,15 @@
+[Unit]
+Description=NDIMon-R REST API
+After=network-online.target ndimon-r.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=NDIMON_INSTALL_DIR/api
+ExecStart=/usr/bin/node server.js
+Environment=PORT=80
+
+[Install]
+WantedBy=default.target
