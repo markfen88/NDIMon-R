@@ -747,6 +747,11 @@ private:
         connected_ = connected;
         if (connected) {
             last_source_ = src;
+            // Keep source_name_ in sync with the actual connected source.
+            // When DS routes a new source, the SDK auto-switches and fires
+            // on_connection with the real source — update source_name_ so
+            // get_status() returns the correct value (not the stale config value).
+            { std::lock_guard<std::mutex> lk(source_mutex_); source_name_ = src; }
             std::cout << "[Worker" << ch_num_ << "] Connected to: " << src << "\n";
             auto& cfg = Config::instance();
             bool tally = cfg.decoder.tally_mode == "TallyOn";
@@ -766,6 +771,7 @@ private:
             ev["output"]    = ch_num_ - 1;
             ev["connected"] = connected;
             ev["source"]    = src;
+            ev["drm_ready"] = drm_ready();
             ipc_->push_event(ev);
         }
 
