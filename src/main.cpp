@@ -22,8 +22,10 @@
 #include <map>
 #include <chrono>
 #include <fstream>
+#include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -221,7 +223,8 @@ public:
         // Create audio (only one worker gets audio)
         if (has_audio_ && !audio_in_use_.exchange(true)) {
             auto audio = std::make_unique<AlsaAudio>();
-            if (audio->init("default", 48000, 2)) {
+            std::string hdmi_dev = AlsaAudio::find_hdmi_device(connector_name_);
+            if (audio->init(hdmi_dev, 48000, 2)) {
                 audio_ = std::move(audio);
                 std::cout << "[Worker" << ch_num_ << "] ALSA audio initialized\n";
             } else {
@@ -305,7 +308,15 @@ public:
         display_running_ = false;
         frame_cv_.notify_all();
         if (display_thr_.joinable()) display_thr_.join();
-        { std::lock_guard<std::mutex> lk(frame_mtx_); while (!frame_queue_.empty()) frame_queue_.pop(); }
+        {
+            std::lock_guard<std::mutex> lk(frame_mtx_);
+            while (!frame_queue_.empty()) {
+                auto& rf = frame_queue_.front();
+                if (rf.owns_ndi_frame && recv_)
+                    recv_->free_video(&rf.ndi_frame);
+                frame_queue_.pop();
+            }
+        }
 
         if (recv_) {
             recv_->disconnect();
@@ -610,6 +621,15 @@ public:
         if (scale_mode_ == ScaleMode::Stretch) sm = "stretch";
         else if (scale_mode_ == ScaleMode::Crop) sm = "crop";
         s["scale_mode"] = sm;
+        // Stream type: Standard (SpeedHQ/UYVY) vs HX (H.264/H.265)
+        if (recv_) {
+            auto st = recv_->stream_type();
+            s["stream_type"] = (st == NDIStreamType::HX)       ? "HX"
+                             : (st == NDIStreamType::Standard)  ? "Standard"
+                             :                                    "unknown";
+        } else {
+            s["stream_type"] = "unknown";
+        }
         return s;
     }
 
@@ -722,17 +742,29 @@ private:
                 codec_name_ = "uncompressed";
             }
 
-            // Copy frame to owned buffer and hand off to the display thread.
-            // This returns immediately — the recv thread is never blocked on vsync
-            // or software color conversion, keeping the NDI queue drained.
+            // Zero-copy: hold the SDK frame reference and free it from the
+            // display thread after rendering. Avoids copying ~4MB/frame at 1080p.
+            // Cross-thread free_video is explicitly supported by the NDI SDK.
             RawFrame rf;
-            rf.data.assign(vf.data, vf.data + vf.size);
+            if (vf.ndi_frame) {
+                rf.ndi_frame = *vf.ndi_frame;  // copy struct (~100 bytes), not pixel data
+                rf.owns_ndi_frame = true;
+                vf.ndi_frame = nullptr;        // take ownership from recv_thread
+            } else {
+                // Fallback: copy data if no NDI frame to hold
+                rf.copied_data.assign(vf.data, vf.data + vf.size);
+            }
             rf.width = vf.width; rf.height = vf.height;
             rf.stride = vf.stride; rf.drm_format = drm_fmt;
             {
                 std::lock_guard<std::mutex> lk(frame_mtx_);
                 // Drop oldest frame if display thread can't keep up
-                while (frame_queue_.size() >= 2) frame_queue_.pop();
+                while (frame_queue_.size() >= 2) {
+                    auto& old = frame_queue_.front();
+                    if (old.owns_ndi_frame && recv_)
+                        recv_->free_video(&old.ndi_frame);
+                    frame_queue_.pop();
+                }
                 frame_queue_.push(std::move(rf));
             }
             frame_cv_.notify_one();
@@ -743,14 +775,12 @@ private:
         auto& cfg = Config::instance();
         if (!audio_) return;
         if (ch_num_ == 1 && cfg.decoder.ndi_audio == "NDIAudioDis") return;
-        if (af.channel_data && af.channel_data[0]) {
-            // NDI audio is planar float: all channels in one buffer.
-            // channel_data[0] is the base; channel c starts at base + c * channel_stride.
-            // DO NOT index af.channel_data[c] for c>0 — it reads past the single p_data pointer.
-            const float* base = af.channel_data[0];
+        if (af.data) {
+            // NDI audio is planar float: all channels in one contiguous buffer.
+            // Channel c starts at base + c * channel_stride.
             std::vector<const float*> ch_ptrs(af.channels);
             for (int c = 0; c < af.channels; c++) {
-                ch_ptrs[c] = (const float*)((const uint8_t*)base
+                ch_ptrs[c] = (const float*)((const uint8_t*)af.data
                               + (size_t)c * (size_t)af.channel_stride);
             }
             audio_->write_audio(ch_ptrs.data(), af.channels, af.num_samples, af.channel_stride);
@@ -789,7 +819,7 @@ private:
             ipc_->push_event(ev);
         }
 
-        // Update status file for ch1 (BirdDog compatibility)
+        // Update status file for ch1
         if (ch_num_ == 1) {
             try {
                 nlohmann::json status;
@@ -826,13 +856,29 @@ private:
     }
 
     // -------------------------------------------------------------------------
-    // Raw uncompressed frame queue — recv thread copies and returns immediately;
+    // Uncompressed frame queue — recv thread enqueues and returns immediately;
     // display_loop() drains the queue on a dedicated thread (avoids blocking
     // the NDI recv thread on vsync / software color conversion).
+    // Zero-copy: we hold the SDK frame reference and free it from the display
+    // thread after rendering (cross-thread free is SDK-supported).
     struct RawFrame {
-        std::vector<uint8_t> data;
+        // Zero-copy path: hold SDK frame, free after display
+        NDIlib_video_frame_v2_t ndi_frame{};
+        bool owns_ndi_frame = false;
+        // Fallback: copied data (only if zero-copy unavailable)
+        std::vector<uint8_t> copied_data;
+
         int width{}, height{}, stride{};
         uint32_t drm_format{};
+
+        const uint8_t* data() const {
+            return owns_ndi_frame ? ndi_frame.p_data : copied_data.data();
+        }
+        size_t size() const {
+            return owns_ndi_frame
+                ? (size_t)ndi_frame.line_stride_in_bytes * ndi_frame.yres
+                : copied_data.size();
+        }
     };
     std::mutex              frame_mtx_;
     std::condition_variable frame_cv_;
@@ -854,8 +900,19 @@ private:
                 frame_queue_.pop();
             }
             if (drm_ && drm_->is_initialized())
-                drm_->show_frame_memory(rf.data.data(), rf.data.size(),
+                drm_->show_frame_memory(rf.data(), rf.size(),
                                         rf.width, rf.height, rf.stride, rf.drm_format);
+            // Free SDK frame after rendering (cross-thread free is supported)
+            if (rf.owns_ndi_frame && recv_)
+                recv_->free_video(&rf.ndi_frame);
+        }
+        // Drain remaining frames on shutdown
+        std::lock_guard<std::mutex> lk(frame_mtx_);
+        while (!frame_queue_.empty()) {
+            auto& rf = frame_queue_.front();
+            if (rf.owns_ndi_frame && recv_)
+                recv_->free_video(&rf.ndi_frame);
+            frame_queue_.pop();
         }
     }
 
@@ -935,9 +992,19 @@ int main(int argc, char* argv[]) {
         cfg.device.ndi_recv_name = "NDIMON-" + get_primary_mac_suffix();
         std::cout << "[NDIMon-R] NDI alias (default): " << cfg.device.ndi_recv_name << "\n";
         cfg.save();
-        // Set OS hostname so NDI discovery shows the right device name
-        std::string cmd = "hostnamectl set-hostname \"" + cfg.device.ndi_recv_name + "\" 2>/dev/null";
-        (void)system(cmd.c_str());
+        // Set OS hostname so NDI discovery shows the right device name.
+        // Use fork/exec to avoid command injection via device name.
+        {
+            pid_t pid = fork();
+            if (pid == 0) {
+                execlp("hostnamectl", "hostnamectl", "set-hostname",
+                       cfg.device.ndi_recv_name.c_str(), nullptr);
+                _exit(127);
+            } else if (pid > 0) {
+                int status = 0;
+                waitpid(pid, &status, 0);
+            }
+        }
         std::cout << "[NDIMon-R] Set hostname to: " << cfg.device.ndi_recv_name << "\n";
     }
 

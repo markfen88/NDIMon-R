@@ -1,7 +1,7 @@
 {
   "name": "ndi-decoder-api",
   "version": "1.0.0",
-  "description": "NDI Decoder REST API - BirdDog Play compatible",
+  "description": "NDIMon-R NDI Decoder REST API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

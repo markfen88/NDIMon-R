@@ -48,7 +48,7 @@ router.post('/scaleMode', async (req, res) => {
     res.json({ ok: true, scale_mode });
 });
 
-// GET /setresolution via query string (BirdDog-style legacy)
+// GET /setresolution via query string (legacy)
 router.get('/setresolution', async (req, res) => {
     const { width, height, refresh, output = 0 } = req.query;
     if (!width || !height) {

@@ -15,7 +15,7 @@ router.get('/', (req, res) => {
         if (a) { ip = a.address; break; }
     }
     let firmware = '1.0.0';
-    try { firmware = fs.readFileSync('/etc/birddog-firmware-version-common','utf8').trim(); } catch {}
+    try { firmware = fs.readFileSync('/etc/ndimon-firmware-version','utf8').trim(); } catch {}
 
     res.json({
         DeviceName: 'NDI Decoder',

@@ -9,7 +9,7 @@
 #include <Processing.NDI.Lib.h>
 #include <Processing.NDI.RecvAdvertiser.h>
 
-enum class NDIStreamType { Standard, HX };
+enum class NDIStreamType { Unknown, Standard, HX };
 
 struct NDIVideoFrame {
     int            width  = 0;
@@ -33,8 +33,8 @@ struct NDIAudioFrame {
     int      sample_rate = 0;
     int      channels    = 0;
     int      num_samples = 0;
-    float**  channel_data = nullptr;
-    int      channel_stride = 0;
+    float*   data = nullptr;            // base pointer to planar float audio
+    int      channel_stride = 0;        // bytes between channel planes
     NDIlib_audio_frame_v3_t* ndi_frame = nullptr;
 };
 
@@ -87,6 +87,9 @@ public:
     // as a receiver in the NDI discovery server.
     bool init_recv();
 
+    // Stream type detected from first frame (Unknown until first frame)
+    NDIStreamType stream_type() const { return stream_type_; }
+
     // Enable/disable audio
     void set_audio_enabled(bool enable) { audio_enabled_ = enable; }
 
@@ -103,6 +106,7 @@ public:
     void set_routing_callback(NDIRoutingCallback cb)     { routing_cb_ = std::move(cb); }
 
     void free_video(NDIVideoFrame& f);
+    void free_video(NDIlib_video_frame_v2_t* frame);   // free raw SDK frame (cross-thread safe)
     void free_audio(NDIAudioFrame& f);
 
     // Performance stats
@@ -113,13 +117,15 @@ private:
     bool create_recv();                               // create without source (discovery only)
     void destroy_recv();                              // only called on full shutdown
     void stop_thread();                               // stop recv thread, keep recv_ alive
-    NDIlib_source_t find_source(const std::string& name, const std::string& ip);
+    std::string find_source_url(const std::string& name);
 
     NDIlib_recv_instance_t recv_           = nullptr;
     NDIlib_recv_advertiser_instance_t advertiser_ = nullptr;
+    NDIlib_framesync_instance_t framesync_ = nullptr;
     std::thread recv_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> audio_enabled_{true};
+    std::atomic<NDIStreamType> stream_type_{NDIStreamType::Unknown};
 
     std::string current_source_;
     std::string current_ip_;

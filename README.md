@@ -11,7 +11,7 @@
 
 NDIMon-R turns a low-cost ARM single-board computer into a dedicated NDI decoder that outputs live video over HDMI or DisplayPort. It uses the hardware video engine on Rockchip and Raspberry Pi SoCs for zero-CPU H.264/H.265 decode, and falls back to software (FFmpeg) decode on any aarch64 board.
 
-A Node.js REST API and web UI run alongside the C++ decoder core. The API is compatible with the BirdDog management protocol, so NDIMon-R can be managed by existing BirdDog-aware control systems without modification.
+A Node.js REST API and web UI run alongside the C++ decoder core, providing source selection, output configuration, and status monitoring.
 
 ---
 
@@ -19,9 +19,9 @@ A Node.js REST API and web UI run alongside the C++ decoder core. The API is com
 
 - **Hardware H.264/H.265 decode** — Rockchip MPP (RK3588/RK3399) and V4L2 M2M (Raspberry Pi 4/5)
 - **Multi-output support** — independent NDI sources on HDMI-A-1, HDMI-A-2, and DP-1 simultaneously
-- **BirdDog API compatibility** — all `/v1/` REST routes match the BirdDog Play 4K protocol
+- **REST API** — `/v1/` routes for source control, output config, and status
 - **Web UI** — source selection, output config, resolution control, status monitoring
-- **NDI Discovery Server support** — works with centralised NDI routing
+- **NDI Discovery Server** — full integration with centralised NDI routing and discovery
 - **Auto-reconnect** — exponential backoff reconnect on signal loss
 - **Splash screen** — customisable idle/live backgrounds with logo and OSD overlay
 - **Hotplug** — display workers initialise on hotplug when no monitor is connected at boot
@@ -142,7 +142,7 @@ From the web UI you can:
 | `/v1/DeviceSettings/ndi-alias` | GET/POST | NDI receiver name |
 | `/v1/Splash/config` | GET/POST | Splash screen appearance |
 
-All `/v1/` routes are compatible with the BirdDog Play 4K management protocol.
+All `/v1/` routes are part of the NDIMon-R REST API.
 
 ---
 
@@ -235,7 +235,7 @@ This rebuilds the binaries and reinstalls services without touching existing con
          │
 ┌────────┴──────────────────────┐
 │  ndimon-api (Node.js, port 80) │
-│  Express + BirdDog /v1/ routes │
+│  Express + /v1/ REST API       │
 │  Web UI (public/)              │
 └────────────────────────────────┘
 

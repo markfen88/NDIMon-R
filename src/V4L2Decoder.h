@@ -29,10 +29,13 @@ private:
     bool configure_output(VideoCodec codec);
     bool configure_capture();
     bool alloc_buffers();
+    bool alloc_capture_buffers();
+    void free_capture_buffers();
     void free_buffers();
     bool start_streaming();
     void stop_streaming();
     void capture_thread_fn();
+    void handle_resolution_change();
 
     int fd_ = -1;
 

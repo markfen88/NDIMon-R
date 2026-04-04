@@ -128,7 +128,13 @@ bool V4L2Decoder::alloc_buffers() {
     }
 
     // --- CAPTURE buffers ---
-    req = {};
+    if (!alloc_capture_buffers()) return false;
+
+    return true;
+}
+
+bool V4L2Decoder::alloc_capture_buffers() {
+    struct v4l2_requestbuffers req = {};
     req.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     req.memory = V4L2_MEMORY_MMAP;
     req.count  = cap_buf_count_;
@@ -307,10 +313,10 @@ void V4L2Decoder::capture_thread_fn() {
                 continue;
             }
 
-            // Check for resolution change event
+            // V4L2_BUF_FLAG_LAST signals EOS or resolution change.
+            // The decoder has flushed — reconfigure CAPTURE for the new size.
             if (buf.flags & V4L2_BUF_FLAG_LAST) {
-                // EOS or resolution change; requeue and continue
-                xioctl(fd_, VIDIOC_QBUF, &buf);
+                handle_resolution_change();
                 continue;
             }
 
@@ -368,6 +374,46 @@ void V4L2Decoder::flush() {
     buf.length   = 1;
     plane.bytesused = 0;
     xioctl(fd_, VIDIOC_QBUF, &buf);
+}
+
+void V4L2Decoder::free_capture_buffers() {
+    for (auto& b : cap_bufs_) {
+        if (b.data && b.data != MAP_FAILED) { munmap(b.data, b.length); b.data = nullptr; }
+        if (b.dma_fd >= 0) { close(b.dma_fd); b.dma_fd = -1; }
+    }
+    cap_bufs_.clear();
+    // Release kernel buffers
+    struct v4l2_requestbuffers req = {};
+    req.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    req.memory = V4L2_MEMORY_MMAP;
+    req.count  = 0;
+    xioctl(fd_, VIDIOC_REQBUFS, &req);
+}
+
+void V4L2Decoder::handle_resolution_change() {
+    std::cout << "[V4L2Dec] Resolution change detected, reconfiguring CAPTURE\n";
+
+    // 1. Stop CAPTURE streaming
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    xioctl(fd_, VIDIOC_STREAMOFF, &type);
+
+    // 2. Free old CAPTURE buffers
+    free_capture_buffers();
+
+    // 3. Get new format from decoder
+    configure_capture();
+
+    // 4. Allocate new CAPTURE buffers
+    cap_buf_count_ = 8;  // reset to default count
+    alloc_capture_buffers();
+
+    // 5. Restart CAPTURE streaming
+    type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    if (xioctl(fd_, VIDIOC_STREAMON, &type) < 0)
+        std::cerr << "[V4L2Dec] STREAMON CAPTURE failed after resolution change\n";
+    else
+        std::cout << "[V4L2Dec] Reconfigured: " << cap_width_ << "x" << cap_height_
+                  << " stride=" << cap_stride_ << "\n";
 }
 
 void V4L2Decoder::free_buffers() {

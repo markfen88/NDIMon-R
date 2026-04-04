@@ -25,7 +25,7 @@ router.get('/decodesetup', (req, res) => {
     if (NDIAudio && ['NDIAudioEn','NDIAudioDis'].includes(NDIAudio) && NDIAudio !== cfg.NDIAudio) {
         cfg.NDIAudio = NDIAudio; write = true;
     }
-    if (ScreenSaverMode && ['BirdDogSS','BlackSS','CaptureSS'].includes(ScreenSaverMode) && ScreenSaverMode !== cfg.ScreenSaverMode) {
+    if (ScreenSaverMode && ['SplashSS','BlackSS','CaptureSS'].includes(ScreenSaverMode) && ScreenSaverMode !== cfg.ScreenSaverMode) {
         cfg.ScreenSaverMode = ScreenSaverMode; write = true;
     }
     if (TallyMode && ['TallyOn','TallyOff','VideoMode'].includes(TallyMode) && TallyMode !== cfg.TallyMode) {
@@ -49,7 +49,7 @@ router.post('/decodesetup', (req, res) => {
 
     const fields = {
         NDIAudio: ['NDIAudioEn','NDIAudioDis'],
-        ScreenSaverMode: ['BirdDogSS','BlackSS','CaptureSS'],
+        ScreenSaverMode: ['SplashSS','BlackSS','CaptureSS'],
         TallyMode: ['TallyOn','TallyOff','VideoMode'],
         ColorSpace: ['RGB','YUV'],
     };
@@ -142,7 +142,7 @@ router.get('/capture', (req, res) => {
     res.header('Content-Type', 'text/plain');
     // Trigger a frame capture (write flag file)
     const fs = require('fs');
-    try { fs.writeFileSync('/tmp/birddog-dec1-cap', ''); } catch {}
+    try { fs.writeFileSync('/tmp/ndimon-dec1-cap', ''); } catch {}
     res.send('Capture Success');
 });
 

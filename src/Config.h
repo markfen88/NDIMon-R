@@ -6,7 +6,7 @@
 struct DecoderConfig {
     int ch_num = 1;
     std::string ndi_audio = "NDIAudioEn";    // NDIAudioEn | NDIAudioDis
-    std::string screensaver_mode = "BlackSS"; // BirdDogSS | BlackSS | CaptureSS
+    std::string screensaver_mode = "BlackSS"; // SplashSS | BlackSS | CaptureSS
     std::string tally_mode = "TallyOff";      // TallyOn | TallyOff | VideoMode
     std::string color_space = "YUV";          // YUV | RGB
     std::string source_selection = "NDI";

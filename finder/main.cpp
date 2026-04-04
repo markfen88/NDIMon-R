@@ -1,5 +1,4 @@
 // NDI Source Finder - discovers NDI sources on the network and writes JSON files
-// Compatible with BirdDog NDI Finder API format
 
 #include <cstddef>
 #include <Processing.NDI.Lib.h>

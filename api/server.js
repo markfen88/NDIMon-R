@@ -35,7 +35,7 @@ app.use('/v1/Splash',       require('./routes/Splash'));
 // --- New unified API routes ---
 app.use('/api',             require('./routes/Status').router);
 
-// Legacy routes (BirdDog compatibility without /v1 prefix)
+// Legacy routes (without /v1 prefix)
 app.use('/NDIDecode',    require('./routes/NDIDecode'));
 app.use('/NDIEncoder',   require('./routes/NDIEncode'));
 app.use('/NDIFinder',    require('./routes/NDIFinder'));
