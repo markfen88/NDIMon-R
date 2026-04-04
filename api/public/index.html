@@ -298,7 +298,11 @@
             </div>
             <div class="mb-3">
               <label class="form-label">NDI Groups</label>
-              <input type="text" class="form-control" id="ndi-grps" placeholder="public">
+              <div class="input-group input-group-sm mb-2">
+                <input type="text" class="form-control" id="ndi-grp-input" placeholder="Enter group name">
+                <button class="btn btn-outline-primary" type="button" onclick="addNdiGroup()">Add</button>
+              </div>
+              <div id="ndi-grp-tags" class="d-flex flex-wrap gap-1"></div>
             </div>
             <div class="mb-3">
               <label class="form-label">Off-Subnet IPs <small>(comma separated)</small></label>
@@ -1020,7 +1024,7 @@ async function loadSettings() {
   try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('ss-sel',d.ScreenSaverMode); setVal('cs-sel',d.ColorSpace); setVal('aud-sel',d.NDIAudio); } catch {}
   try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
   try { const d=await api('/v1/NDIFinder/NDIDisServer'); setCheck('disc-en',d.NDIDisServ==='NDIDisServEn'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
-  try { const g=await fetch('/v1/NDIFinder/NdiGrpName').then(r=>r.text()); setVal('ndi-grps',g.replace(/"/g,'')); } catch {}
+  try { const g=await api('/v1/NDIFinder/NdiGrpName'); setNdiGroupsFromString(g.ndi_groups||'public'); } catch {}
   try { const ips=await fetch('/v1/NDIFinder/NdiOffSnSrc').then(r=>r.text()); setVal('off-ips',ips.replace(/"/g,'')); } catch {}
   try { const d=await api('/v1/DeviceSettings/ndi-alias'); setVal('ndi-alias',d.ndi_recv_name||''); } catch {}
   loadSplashSettings();
@@ -1210,8 +1214,7 @@ async function saveNetSettings() {
   const en = document.getElementById('disc-en').checked ? 'NDIDisServEn' : 'NDIDisServDis';
   const ip = document.getElementById('disc-ip').value.trim();
   await post('/v1/NDIFinder/NDIDisServer',{NDIDisServ:en,NDIDisServIP:ip});
-  const g = document.getElementById('ndi-grps').value.trim()||'public';
-  await fetch('/v1/NDIFinder/NdiGrpName',{method:'POST',headers:{'Content-Type':'text/plain'},body:g});
+  await post('/v1/NDIFinder/NdiGrpName',{ndi_groups:getNdiGroupsString()});
   const ips = document.getElementById('off-ips').value.trim();
   await fetch('/v1/NDIFinder/NdiOffSnSrc',{method:'POST',headers:{'Content-Type':'text/plain'},body:ips});
   const alias = document.getElementById('ndi-alias').value.trim();
@@ -1232,6 +1235,50 @@ async function sysReboot() {
   await post('/v1/System/reboot',{});
   toast('Rebooting…','warning');
 }
+
+// ══ NDI Group Tags ══════════════════════════════════════════════
+let ndiGroups = [];
+
+function renderNdiGroups() {
+  const container = document.getElementById('ndi-grp-tags');
+  if (!container) return;
+  container.innerHTML = ndiGroups.map((g, i) =>
+    `<span class="badge bg-primary d-inline-flex align-items-center gap-1" style="font-size:.8rem;padding:.35em .6em">
+      ${g}<span style="cursor:pointer;opacity:.7;margin-left:2px" onclick="removeNdiGroup(${i})">&times;</span>
+    </span>`
+  ).join('');
+}
+
+function addNdiGroup() {
+  const input = document.getElementById('ndi-grp-input');
+  const val = (input.value || '').trim().toLowerCase();
+  if (!val || ndiGroups.includes(val)) { input.value = ''; return; }
+  ndiGroups.push(val);
+  input.value = '';
+  renderNdiGroups();
+}
+
+function removeNdiGroup(idx) {
+  ndiGroups.splice(idx, 1);
+  if (ndiGroups.length === 0) ndiGroups.push('public');
+  renderNdiGroups();
+}
+
+function getNdiGroupsString() {
+  return ndiGroups.length ? ndiGroups.join(',') : 'public';
+}
+
+function setNdiGroupsFromString(s) {
+  ndiGroups = (s || 'public').split(',').map(g => g.trim().toLowerCase()).filter(Boolean);
+  if (ndiGroups.length === 0) ndiGroups.push('public');
+  renderNdiGroups();
+}
+
+// Allow Enter key in group input to add
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('ndi-grp-input');
+  if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNdiGroup(); } });
+});
 
 // ══ Helpers ══════════════════════════════════════════════════════
 async function api(url) { return fetch(url).then(r=>r.json()); }

@@ -58,16 +58,25 @@ router.post('/NdiOffSnSrc', (req, res) => {
     res.send('success');
 });
 
-// GET|POST /NdiGrpName (NDI groups)
+// GET|POST /NdiGrpName (NDI groups — comma-separated, stored as {"ndi_groups":"..."})
 router.get('/NdiGrpName', (req, res) => {
-    res.header('Content-Type','text/plain');
-    try { res.send(fs.readFileSync(NDI_GROUP, 'utf8')); } catch { res.send(''); }
+    const grp = readJson(NDI_GROUP);
+    const groups = (grp && grp.ndi_groups) ? grp.ndi_groups : 'public';
+    res.json({ ndi_groups: groups });
 });
 router.post('/NdiGrpName', (req, res) => {
-    res.header('Content-Type','text/plain');
-    const groups = (req.body || '').replace(/['"]/g,'');
-    fs.writeFileSync(NDI_GROUP, JSON.stringify(groups));
-    res.send('success');
+    let groups;
+    if (typeof req.body === 'string') {
+        groups = req.body.replace(/['"]/g, '').trim();
+    } else if (req.body && req.body.ndi_groups != null) {
+        groups = String(req.body.ndi_groups).trim();
+    } else {
+        groups = 'public';
+    }
+    if (!groups) groups = 'public';
+    writeJson(NDI_GROUP, { ndi_groups: groups });
+    sendIPC({ action: 'reload_config' });
+    res.json({ ndi_groups: groups });
 });
 
 // GET|POST /NDIDisServer (discovery server)
