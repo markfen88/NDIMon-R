@@ -534,8 +534,9 @@ void NDIReceiver::recv_thread() {
             NDIlib_framesync_free_video(framesync_, &video_frame);
 
             // Pull audio (48kHz stereo, 1024 samples = ~21ms, matches ALSA period)
+            // FrameSync uses v2 audio frames, not v3
             if (audio_enabled_ && audio_cb_) {
-                NDIlib_audio_frame_v3_t audio_frame{};
+                NDIlib_audio_frame_v2_t audio_frame{};
                 NDIlib_framesync_capture_audio(framesync_, &audio_frame,
                                                48000, 2, 1024);
                 if (audio_frame.p_data) {
@@ -544,7 +545,7 @@ void NDIReceiver::recv_thread() {
                     af.channels       = audio_frame.no_channels;
                     af.num_samples    = audio_frame.no_samples;
                     af.channel_stride = audio_frame.channel_stride_in_bytes;
-                    af.data           = (float*)audio_frame.p_data;
+                    af.data           = audio_frame.p_data;
                     af.ndi_frame      = nullptr;  // framesync frames use separate free
                     audio_cb_(af);
                 }
