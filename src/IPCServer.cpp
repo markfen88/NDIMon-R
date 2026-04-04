@@ -124,7 +124,7 @@ bool IPCServer::handle_client(int client_fd) {
         }
 
         // Fire-and-forget commands
-        // set_scale_mode, set_output_source, connect, disconnect, set_tally, reload_config
+        // set_scale_mode, set_output_source, auto_resolution, connect, disconnect, set_tally, reload_config
         if (cmd_cb_) {
             cmd_cb_(cmd);
         }

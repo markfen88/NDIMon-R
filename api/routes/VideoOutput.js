@@ -19,10 +19,21 @@ router.get('/resolution', async (req, res) => {
     res.json(data.current || {});
 });
 
-// POST /resolution  — set resolution
-// Body: { "width": 1920, "height": 1080, "refresh_hz": 59.94, "output": 0 }
+// POST /resolution  — set resolution (or auto mode)
+// Body: { "auto": true, "output": 0 }  — enable auto mode
+// Body: { "width": 1920, "height": 1080, "refresh_hz": 59.94, "output": 0 }  — manual
 router.post('/resolution', async (req, res) => {
-    const { width, height, refresh, refresh_hz, output = 0 } = req.body || {};
+    const body = req.body || {};
+    const output = parseInt(body.output || 0, 10);
+
+    if (body.auto) {
+        await sendIPC({ action: 'auto_resolution', output });
+        const data = await sendIPC({ action: 'get_modes', output });
+        data.ok = true;
+        return res.json(data);
+    }
+
+    const { width, height, refresh, refresh_hz } = body;
     if (!width || !height) {
         return res.status(400).json({ ok: false, error: 'width and height required' });
     }
@@ -32,7 +43,7 @@ router.post('/resolution', async (req, res) => {
         height:     parseInt(height, 10),
         refresh:    parseInt(refresh || 0, 10),
         refresh_hz: parseFloat(refresh_hz || 0),
-        output:     parseInt(output, 10),
+        output,
     });
     res.json(data);
 });

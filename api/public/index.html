@@ -705,15 +705,24 @@ async function loadOutputModes(cardIdx, outputIndex) {
     const whSel = document.getElementById(`res-wh-${cardIdx}`);
     if (!whSel) return;
     whSel.innerHTML = '';
+    // Auto option — matches source resolution dynamically
+    const autoOpt = document.createElement('option');
+    autoOpt.value = 'auto'; autoOpt.dataset.auto = '1';
+    autoOpt.textContent = 'Auto (match source)';
+    if (d.auto_resolution) autoOpt.selected = true;
+    whSel.appendChild(autoOpt);
     resMap.forEach((r) => {
       const o = document.createElement('option');
       o.value = r.width+'x'+r.height;
       o.dataset.w = r.width; o.dataset.h = r.height;
       o.textContent = `${r.width} × ${r.height}${r.preferred?' ★':''}`;
-      if (r.width === cur.width && r.height === cur.height) o.selected = true;
+      if (!d.auto_resolution && r.width === cur.width && r.height === cur.height) o.selected = true;
       whSel.appendChild(o);
     });
     populateOutputRefreshRates(cardIdx, outputIndex, cur);
+    // Hide refresh rate column when auto mode is active
+    const fpsCol = document.getElementById(`res-fps-${cardIdx}`)?.parentElement;
+    if (fpsCol && d.auto_resolution) fpsCol.style.display = 'none';
   } catch {}
 }
 
@@ -739,7 +748,11 @@ function populateOutputRefreshRates(cardIdx, outputIndex, cur) {
 
 function onResChange(cardIdx) {
   const out = S.outputs[cardIdx];
-  populateOutputRefreshRates(cardIdx, out?.output_index ?? cardIdx, {});
+  const whSel = document.getElementById(`res-wh-${cardIdx}`);
+  const fpsCol = document.getElementById(`res-fps-${cardIdx}`)?.parentElement;
+  const isAuto = whSel?.options[whSel.selectedIndex]?.dataset.auto === '1';
+  if (fpsCol) fpsCol.style.display = isAuto ? 'none' : '';
+  if (!isAuto) populateOutputRefreshRates(cardIdx, out?.output_index ?? cardIdx, {});
 }
 
 function updateNdiPreview(cardIdx) {
@@ -891,7 +904,11 @@ async function applyOutputSettings(cardIdx) {
   const fpsSel = document.getElementById(`res-fps-${cardIdx}`);
   const whOpt  = whSel?.options[whSel.selectedIndex];
   const fpsOpt = fpsSel?.options[fpsSel.selectedIndex];
-  if (whOpt?.dataset.w && fpsOpt) {
+  if (whOpt?.dataset.auto === '1') {
+    if (msg) msg.textContent = 'Applying…';
+    const d = await post('/v1/VideoOutput/resolution', { auto: true, output: outputIndex });
+    if (msg) msg.textContent = d.ok ? '✓ Auto' : '✗ Failed';
+  } else if (whOpt?.dataset.w && fpsOpt) {
     if (msg) msg.textContent = 'Applying…';
     const hz = parseFloat(fpsOpt.dataset.hz || fpsOpt.value);
     const d  = await post('/v1/VideoOutput/resolution', { width: +whOpt.dataset.w, height: +whOpt.dataset.h, refresh_hz: hz, output: outputIndex });

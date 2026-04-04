@@ -160,6 +160,7 @@ public:
         : connector_name_(connector_name)
         , device_(device)
         , preferred_mode_(preferred_mode)
+        , auto_resolution_(preferred_mode.empty() || preferred_mode == "auto")
         , scale_mode_(scale)
         , has_audio_(has_audio)
         , ch_num_(ch_num)
@@ -585,17 +586,32 @@ public:
         if (!drm_ || !drm_->is_initialized()) return false;
         bool ok = drm_->set_mode(w, h, refresh_hz);
         if (ok) {
+            // Manual resolution change — disable auto mode and persist
+            auto_resolution_ = false;
             auto& cfg = Config::instance();
             OutputConfig oc = cfg.get_output(ch_num_);
             oc.preferred_mode = std::to_string(w) + "x" + std::to_string(h);
             cfg.set_output(ch_num_, oc);
+            std::cout << "[Worker" << ch_num_ << "] Resolution set (manual): "
+                      << w << "x" << h << "@" << refresh_hz << "\n";
         }
         return ok;
+    }
+
+    // Reset to auto mode — output will match source resolution/framerate
+    void set_auto_resolution() {
+        auto_resolution_ = true;
+        auto& cfg = Config::instance();
+        OutputConfig oc = cfg.get_output(ch_num_);
+        oc.preferred_mode = "";
+        cfg.set_output(ch_num_, oc);
+        std::cout << "[Worker" << ch_num_ << "] Resolution set to auto\n";
     }
 
     nlohmann::json get_modes() const {
         nlohmann::json j;
         j["modes"] = nlohmann::json::array();
+        j["auto_resolution"] = auto_resolution_;
         j["current"]["width"]      = drm_ ? drm_->width()      : 0;
         j["current"]["height"]     = drm_ ? drm_->height()     : 0;
         j["current"]["refresh"]    = drm_ ? drm_->refresh()    : 0;
@@ -846,6 +862,69 @@ private:
         }
     }
 
+    // Auto-resolution: match output mode to source resolution/framerate
+    void try_match_source_mode(uint32_t src_w, uint32_t src_h,
+                                int frame_rate_n = 0, int frame_rate_d = 0) {
+        if (!auto_resolution_ || !drm_ || !drm_->is_initialized()) return;
+        // Only switch if source resolution actually changed
+        if (src_w == matched_src_w_ && src_h == matched_src_h_) return;
+
+        auto modes = drm_->list_modes();
+        if (modes.empty()) return;
+
+        // Compute source refresh rate
+        double src_hz = 0.0;
+        if (frame_rate_n > 0 && frame_rate_d > 0)
+            src_hz = (double)frame_rate_n / (double)frame_rate_d;
+
+        // Find best matching mode:
+        // 1. Prefer exact resolution match
+        // 2. Among exact matches, prefer closest refresh rate
+        // 3. If no exact match, pick closest resolution (prefer >= source)
+        const DRMMode* best = nullptr;
+        double best_score = 1e9;
+
+        for (const auto& m : modes) {
+            double score = 0.0;
+            // Resolution distance (prefer exact, then closest >=)
+            int dw = (int)m.width  - (int)src_w;
+            int dh = (int)m.height - (int)src_h;
+            if (dw == 0 && dh == 0) {
+                score = 0.0;  // exact resolution match
+            } else if (dw >= 0 && dh >= 0) {
+                score = 1000.0 + dw + dh;  // larger resolution, acceptable
+            } else {
+                score = 2000.0 + std::abs(dw) + std::abs(dh);  // smaller, less preferred
+            }
+            // Refresh rate closeness (weighted less than resolution)
+            if (src_hz > 0.0)
+                score += std::abs(m.refresh_hz - src_hz) * 10.0;
+
+            if (score < best_score) {
+                best_score = score;
+                best = &m;
+            }
+        }
+
+        if (best) {
+            // Don't switch if we're already at this mode
+            if (best->width == drm_->width() && best->height == drm_->height() &&
+                std::abs(best->refresh_hz - drm_->refresh_hz()) < 0.05) {
+                matched_src_w_ = src_w;
+                matched_src_h_ = src_h;
+                return;
+            }
+            std::cout << "[Worker" << ch_num_ << "] Auto-resolution: source "
+                      << src_w << "x" << src_h;
+            if (src_hz > 0) std::cout << "@" << src_hz;
+            std::cout << " → output " << best->width << "x" << best->height
+                      << "@" << best->refresh_hz << "\n";
+            drm_->set_mode(best->width, best->height, best->refresh_hz);
+            matched_src_w_ = src_w;
+            matched_src_h_ = src_h;
+        }
+    }
+
     // Build the NDI receiver name: "DeviceAlias (OutputAlias)"
     std::string build_recv_name() const {
         auto out_cfg = Config::instance().get_output(ch_num_);
@@ -884,6 +963,8 @@ private:
             if (decoder_initialized_) {
                 input_w_ = vf.width;
                 input_h_ = vf.height;
+                try_match_source_mode(vf.width, vf.height,
+                                       vf.frame_rate_n, vf.frame_rate_d);
                 int64_t pts_us = vf.timestamp / 100;
                 decoder_->decode(vf.data, vf.size, pts_us);
             }
@@ -900,6 +981,8 @@ private:
 
             input_w_ = vf.width;
             input_h_ = vf.height;
+            try_match_source_mode(vf.width, vf.height,
+                                   vf.frame_rate_n, vf.frame_rate_d);
             {
                 std::lock_guard<std::mutex> lk(decoder_mutex_);
                 codec_name_ = "uncompressed";
@@ -1093,6 +1176,9 @@ private:
     std::string connector_name_;
     std::string device_;
     std::string preferred_mode_;
+    bool        auto_resolution_ = false;
+    uint32_t    matched_src_w_ = 0;  // source resolution we last matched to
+    uint32_t    matched_src_h_ = 0;
     ScaleMode   scale_mode_;
     bool        has_audio_;
     int         ch_num_;
@@ -1338,6 +1424,10 @@ int main(int argc, char* argv[]) {
         } else if (cmd.action == "set_output_source") {
             auto* w = get_worker(cmd.output_index);
             if (w) w->connect_source(cmd.source_name, cmd.source_ip);
+
+        } else if (cmd.action == "auto_resolution") {
+            auto* w = get_worker(cmd.output_index);
+            if (w) w->set_auto_resolution();
 
         } else if (cmd.action == "show_splash") {
             cfg.load();  // pick up new splash config written by API
