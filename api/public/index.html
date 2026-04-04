@@ -230,20 +230,6 @@
             </div>
           </div>
         </div>
-        <div class="card mb-3">
-          <div class="card-header"><i class="bi bi-input-cursor-text"></i>Manual Connect</div>
-          <div class="card-body">
-            <div class="mb-2">
-              <label class="form-label">Source Name</label>
-              <input type="text" class="form-control" id="man-name" placeholder="MACHINE (Source Name)">
-            </div>
-            <div class="mb-3">
-              <label class="form-label">IP Address (optional)</label>
-              <input type="text" class="form-control" id="man-ip" placeholder="192.168.1.100">
-            </div>
-            <button class="btn btn-primary btn-sm w-100" onclick="doManualConnect()"><i class="bi bi-plug me-1"></i>Connect</button>
-          </div>
-        </div>
         <div class="row g-2">
           <div class="col-6">
             <div class="card">
@@ -794,13 +780,15 @@ function buildOutputCards() {
         </div>
         <div class="mb-3">
           <label class="form-label">NDI Source</label>
-          <div class="d-flex gap-2">
-            <select class="form-select" id="src-sel-${idx}">
-              <option value="">— Select source —</option>
-            </select>
-            <button class="btn btn-success btn-sm" onclick="connectOutput(${idx})">Connect</button>
-            <button class="btn btn-outline-secondary btn-sm" onclick="disconnectOutput(${idx})">Disconnect</button>
-          </div>
+          <select class="form-select" id="src-sel-${idx}" onchange="onSrcChange(${idx})">
+            <option value="">— Select source —</option>
+          </select>
+        </div>
+        <div class="mb-3" id="manual-ip-row-${idx}" style="display:none">
+          <label class="form-label">Source Name</label>
+          <input type="text" class="form-control mb-2" id="manual-name-${idx}" placeholder="MACHINE (Source Name)">
+          <label class="form-label">IP Address <small class="text-muted">(optional)</small></label>
+          <input type="text" class="form-control" id="manual-ip-${idx}" placeholder="192.168.1.100">
         </div>
         <div class="row g-2 mb-3">
           <div class="col-7">
@@ -863,61 +851,86 @@ function populateOutputSrcSelector(cardIdx) {
   if (!sel) return;
   const cur = S.outputs[cardIdx]?.source_name || '';
   const prev = sel.value;
-  sel.innerHTML = '<option value="">— Select source —</option>';
-  // "None" always appears first so the user can explicitly disconnect/save as unconnected
+  const isManual = prev === '__manual__';
+  sel.innerHTML = '';
+  // "None" disconnects the output
   const noneOpt = document.createElement('option');
-  noneOpt.value = 'None'; noneOpt.textContent = 'None';
-  if ((prev || cur) === 'None' || (!prev && !cur)) noneOpt.selected = true;
+  noneOpt.value = 'None'; noneOpt.textContent = 'None (Disconnect)';
+  if (!isManual && ((prev || cur) === 'None' || (!prev && !cur))) noneOpt.selected = true;
   sel.appendChild(noneOpt);
+  // Discovered sources
+  let foundCur = false;
   S.sources.forEach(s => {
     const o = document.createElement('option');
     o.value = s; o.textContent = s;
-    if (s === (prev || cur)) o.selected = true;
+    if (!isManual && s === (prev || cur)) { o.selected = true; foundCur = true; }
     sel.appendChild(o);
   });
+  // Manual entry option
+  const manOpt = document.createElement('option');
+  manOpt.value = '__manual__'; manOpt.textContent = 'Manual...';
+  if (isManual) manOpt.selected = true;
+  sel.appendChild(manOpt);
+  // If current source isn't in list and isn't None, select it as manual
+  if (!foundCur && cur && cur !== 'None' && !isManual) {
+    // Source not discovered — keep showing it but don't force manual
+    const curOpt = document.createElement('option');
+    curOpt.value = cur; curOpt.textContent = cur + ' (not discovered)';
+    curOpt.selected = true;
+    sel.insertBefore(curOpt, manOpt);
+  }
+  onSrcChange(cardIdx);
 }
 
-async function connectOutput(cardIdx) {
-  const out = S.outputs[cardIdx];
+function onSrcChange(cardIdx) {
   const sel = document.getElementById(`src-sel-${cardIdx}`);
-  if (!sel?.value) { toast('Select a source first', 'warning'); return; }
-  await post('/v1/NDIDecode/connectTo', { SourceName: sel.value, SourceIP: sourceIPs[sel.value]||'', Output: (out?.output_index??cardIdx)+1 });
-  if (sel.value === 'None') toast(`Output ${cardIdx+1}: disconnected`);
-  else toast(`Output ${cardIdx+1}: connecting to ${sel.value}…`);
+  const manRow = document.getElementById(`manual-ip-row-${cardIdx}`);
+  if (manRow) manRow.style.display = (sel?.value === '__manual__') ? '' : 'none';
 }
 
-async function disconnectOutput(cardIdx) {
-  const out = S.outputs[cardIdx];
-  await post('/v1/NDIDecode/connectTo', { SourceName: 'None', SourceIP: '', Output: (out?.output_index??cardIdx)+1 });
-  toast(`Output ${cardIdx+1}: disconnected`);
-}
+
 
 async function applyOutputSettings(cardIdx) {
   const out = S.outputs[cardIdx];
   const outputIndex = out?.output_index ?? cardIdx;
   const msg = document.getElementById(`out-msg-${cardIdx}`);
+  if (msg) msg.textContent = 'Applying…';
 
+  // 1. Output alias
   const outAlias = (document.getElementById(`output-alias-${cardIdx}`)?.value || '').trim();
   await post('/v1/DeviceSettings/output-alias', { ch: outputIndex+1, output_alias: outAlias });
 
+  // 2. Source connection
+  const srcSel = document.getElementById(`src-sel-${cardIdx}`);
+  const srcVal = srcSel?.value || 'None';
+  if (srcVal === '__manual__') {
+    const manName = (document.getElementById(`manual-name-${cardIdx}`)?.value || '').trim();
+    const manIP = (document.getElementById(`manual-ip-${cardIdx}`)?.value || '').trim();
+    if (!manName) { toast('Enter a source name for manual connect', 'warning'); if (msg) msg.textContent = ''; return; }
+    await post('/v1/NDIDecode/connectTo', { SourceName: manName, SourceIP: manIP, Output: outputIndex+1 });
+  } else {
+    await post('/v1/NDIDecode/connectTo', { SourceName: srcVal, SourceIP: sourceIPs[srcVal]||'', Output: outputIndex+1 });
+  }
+
+  // 3. Resolution
   const whSel  = document.getElementById(`res-wh-${cardIdx}`);
   const fpsSel = document.getElementById(`res-fps-${cardIdx}`);
   const whOpt  = whSel?.options[whSel.selectedIndex];
   const fpsOpt = fpsSel?.options[fpsSel.selectedIndex];
   if (whOpt?.dataset.auto === '1') {
-    if (msg) msg.textContent = 'Applying…';
-    const d = await post('/v1/VideoOutput/resolution', { auto: true, output: outputIndex });
-    if (msg) msg.textContent = d.ok ? '✓ Auto' : '✗ Failed';
+    await post('/v1/VideoOutput/resolution', { auto: true, output: outputIndex });
   } else if (whOpt?.dataset.w && fpsOpt) {
-    if (msg) msg.textContent = 'Applying…';
     const hz = parseFloat(fpsOpt.dataset.hz || fpsOpt.value);
-    const d  = await post('/v1/VideoOutput/resolution', { width: +whOpt.dataset.w, height: +whOpt.dataset.h, refresh_hz: hz, output: outputIndex });
-    if (msg) msg.textContent = d.ok ? '✓ Saved' : '✗ Failed';
+    await post('/v1/VideoOutput/resolution', { width: +whOpt.dataset.w, height: +whOpt.dataset.h, refresh_hz: hz, output: outputIndex });
   }
 
+  // 4. Scale mode
   const scale = document.getElementById(`scale-sel-${cardIdx}`)?.value || 'letterbox';
   await post('/v1/VideoOutput/scaleMode', { scale_mode: scale, output: outputIndex });
-  toast(`Output ${cardIdx+1} settings saved`);
+
+  if (msg) msg.textContent = '✓ Saved';
+  if (srcVal === 'None') toast(`Output ${cardIdx+1}: settings saved, disconnected`);
+  else toast(`Output ${cardIdx+1}: settings saved`);
 }
 
 // ══ UI update ════════════════════════════════════════════════════
@@ -1124,12 +1137,7 @@ async function doDisconnect() {
   toast('Disconnected');
 }
 
-function doManualConnect() {
-  const n = document.getElementById('man-name').value.trim();
-  const ip= document.getElementById('man-ip').value.trim();
-  if (!n) { toast('Enter a source name','warning'); return; }
-  doConnect(n, ip);
-}
+
 
 async function refreshSources() {
   await fetch('/v1/NDIFinder/refresh',{method:'POST'});
