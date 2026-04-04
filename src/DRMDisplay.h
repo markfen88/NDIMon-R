@@ -98,6 +98,9 @@ public:
     // Hotplug: returns true if just reconnected (init was deferred)
     bool check_hotplug();
 
+    // Reset stuck flip state (called by health monitor on display freeze)
+    void reset_flip_pending() { flip_pending_ = false; }
+
     void set_hdmi_enabled(bool enable);
 
     // Enumerate all connectors on a device (static utility)

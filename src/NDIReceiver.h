@@ -112,6 +112,14 @@ public:
     // Performance stats
     void get_performance(int& total_frames, int& dropped_frames);
 
+    // Recv thread heartbeat (monotonic ms, for health monitoring)
+    int64_t recv_heartbeat_ms() const { return recv_heartbeat_ms_.load(); }
+
+    // Status metadata callback — called every 30s from recv thread to build
+    // device telemetry XML for Discovery Server
+    using NDIStatusMetadataCallback = std::function<std::string()>;
+    void set_status_metadata_callback(NDIStatusMetadataCallback cb) { status_meta_cb_ = std::move(cb); }
+
 private:
     void recv_thread();
     bool create_recv();                               // create without source (discovery only)
@@ -138,6 +146,9 @@ private:
     NDIAudioCallback      audio_cb_;
     NDIConnectionCallback conn_cb_;
     NDIRoutingCallback    routing_cb_;
+    NDIStatusMetadataCallback status_meta_cb_;
+
+    std::atomic<int64_t> recv_heartbeat_ms_{0};
 
     bool first_frame_logged_ = false;  // log FourCC/size of very first frame for diagnostics
 

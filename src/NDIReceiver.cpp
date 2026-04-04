@@ -421,6 +421,9 @@ void NDIReceiver::recv_thread() {
 
     try {
     while (running_) {
+        recv_heartbeat_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+
         if (!recv_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -481,13 +484,24 @@ void NDIReceiver::recv_thread() {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 clock::now() - last_meta_send).count();
             if (elapsed >= 30) {
+                // Routing ACK
                 std::string routing = "<ndi_routing><source name=\"" + current_source_
                                     + "\" url=\"" + current_ip_ + "\"/></ndi_routing>";
                 NDIlib_metadata_frame_t meta = {};
                 meta.p_data = const_cast<char*>(routing.c_str());
                 NDIlib_recv_send_metadata(recv_, &meta);
+
+                // Device status telemetry for DS
+                if (status_meta_cb_) {
+                    std::string status_xml = status_meta_cb_();
+                    if (!status_xml.empty()) {
+                        NDIlib_metadata_frame_t smeta = {};
+                        smeta.p_data = const_cast<char*>(status_xml.c_str());
+                        NDIlib_recv_send_metadata(recv_, &smeta);
+                    }
+                }
+
                 last_meta_send = clock::now();
-                std::cout << "[NDIRecv] Routing ACK refreshed for DS\n";
             }
         }
 

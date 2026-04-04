@@ -33,7 +33,16 @@
 #include <xf86drm.h>
 #include <Processing.NDI.Lib.h>
 
+#ifdef HAVE_SYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
+
 static std::atomic<bool> g_running{true};
+
+static int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 // Write ~/.ndi/ndi-config.v1.json so the NDI SDK uses the discovery server
 // and correct groups for BOTH finding sources AND registering this receiver.
@@ -244,6 +253,42 @@ public:
         });
         recv_->set_connection_callback([this](bool connected, const std::string& src) {
             on_connection(connected, src);
+        });
+        recv_->set_status_metadata_callback([this]() -> std::string {
+            // Build device telemetry XML for Discovery Server
+            int w = input_w_.load(), h = input_h_.load();
+            std::string res = std::to_string(w) + "x" + std::to_string(h);
+
+            // Read SoC temperature
+            int soc_temp = 0;
+            {
+                std::ifstream tf("/sys/class/thermal/thermal_zone0/temp");
+                if (tf) { tf >> soc_temp; soc_temp /= 1000; }
+            }
+
+            // Build XML
+            char buf[512];
+            snprintf(buf, sizeof(buf),
+                "<ndi_device_status"
+                " fps=\"%.2f\""
+                " resolution=\"%s\""
+                " codec=\"%s\""
+                " stream_type=\"%s\""
+                " connected=\"%s\""
+                " health=\"%s\""
+                " soc_temp_c=\"%d\""
+                " stall_count=\"%d\""
+                "/>",
+                fps_.load(),
+                res.c_str(),
+                codec_name_.c_str(),
+                (recv_ && recv_->stream_type() == NDIStreamType::HX) ? "HX" :
+                (recv_ && recv_->stream_type() == NDIStreamType::Standard) ? "Standard" : "unknown",
+                connected_.load() ? "true" : "false",
+                health_state().c_str(),
+                soc_temp,
+                stall_count_);
+            return std::string(buf);
         });
         recv_->set_routing_callback([this](const std::string& name, const std::string& url) {
             // Discovery server assigned a new source — push event to Node.js,
@@ -635,9 +680,37 @@ public:
 
     std::string conn_name() const { return connector_name_; }
     int         ch_num()    const { return ch_num_; }
+    bool is_connected()     const { return connected_.load(); }
+    double get_fps()        const { return fps_.load(); }
 
     bool drm_ready() const {
         return drm_ && drm_->is_initialized();
+    }
+
+    // Health accessors for IPC health endpoint
+    int64_t video_stale_ms() const {
+        auto t = last_video_frame_ms_.load();
+        return t > 0 ? now_ms() - t : -1;
+    }
+    int64_t decoded_stale_ms() const {
+        auto t = last_decoded_frame_ms_.load();
+        return t > 0 ? now_ms() - t : -1;
+    }
+    int64_t display_stale_ms() const {
+        auto t = last_display_commit_ms_.load();
+        return t > 0 ? now_ms() - t : -1;
+    }
+    int64_t recv_stale_ms() const {
+        auto t = last_recv_alive_ms_.load();
+        return t > 0 ? now_ms() - t : -1;
+    }
+    int stall_count() const { return stall_count_; }
+
+    std::string health_state() const {
+        if (!connected_.load()) return "idle";
+        if (stall_count_ >= 60) return "stalled";
+        if (stall_count_ > 0) return "degraded";
+        return "ok";
     }
 
     void tick() {
@@ -667,6 +740,10 @@ public:
             }
         }
 
+        // Copy recv thread heartbeat
+        if (recv_)
+            last_recv_alive_ms_ = recv_->recv_heartbeat_ms();
+
         // FPS calculation (~1s)
         auto now = std::chrono::steady_clock::now();
         auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -681,9 +758,94 @@ public:
             }
             fps_last_time_ = now;
         }
+
+        // Health check — detect and recover from frozen subsystems
+        health_check();
     }
 
 private:
+    void health_check() {
+        if (!connected_.load() || !recv_) {
+            stall_count_ = 0;
+            return;
+        }
+
+        auto t = now_ms();
+        auto connected_duration = t - connect_time_ms_.load();
+
+        // Give 10s grace period after connection before checking health
+        if (connected_duration < 10000) return;
+
+        bool healthy = true;
+
+        // 1. Recv thread stall: heartbeat older than 5s
+        auto recv_age = recv_stale_ms();
+        if (recv_age > 5000) {
+            healthy = false;
+            if (stall_count_ == 10) // log once at 5s mark
+                std::cerr << "[Worker" << ch_num_ << "] HEALTH: recv thread stalled ("
+                          << recv_age << "ms)\n";
+        }
+
+        // 2. No video frames arriving despite being connected
+        auto video_age = video_stale_ms();
+        if (video_age < 0 && connected_duration > 10000) {
+            // Never received a frame despite being connected 10s
+            healthy = false;
+            if (stall_count_ == 20)
+                std::cerr << "[Worker" << ch_num_ << "] HEALTH: no video frames received\n";
+        }
+
+        // 3. Decoder hang: video arriving but no decoded output for 5s
+        auto decoded_age = decoded_stale_ms();
+        if (video_age >= 0 && video_age < 2000 && decoded_age > 5000) {
+            healthy = false;
+            if (stall_count_ == 10) {
+                std::cerr << "[Worker" << ch_num_ << "] HEALTH: decoder stall, restarting decoder\n";
+                std::lock_guard<std::mutex> lk(decoder_mutex_);
+                if (decoder_ && decoder_initialized_) {
+                    decoder_->destroy();
+                    decoder_initialized_ = false;
+                    // Next compressed frame will re-init automatically
+                }
+            }
+        }
+
+        // 4. Display freeze: decoded frames arriving but no display commit for 3s
+        auto display_age = display_stale_ms();
+        if (decoded_age >= 0 && decoded_age < 2000 && display_age > 3000) {
+            healthy = false;
+            if (stall_count_ == 6) {
+                std::cerr << "[Worker" << ch_num_ << "] HEALTH: display freeze, resetting\n";
+                if (drm_) {
+                    drm_->reset_flip_pending();
+                    drm_->show_black();
+                }
+            }
+        }
+
+        if (healthy) {
+            stall_count_ = 0;
+        } else {
+            stall_count_++;
+            // Escalation: 30s of continuous stall → full pipeline reconnect
+            if (stall_count_ == 60) {
+                std::cerr << "[Worker" << ch_num_
+                          << "] HEALTH: 30s stall, full pipeline reconnect\n";
+                std::string sname, sip;
+                {
+                    std::lock_guard<std::mutex> lk(source_mutex_);
+                    sname = source_name_;
+                    sip   = source_ip_;
+                }
+                disconnect_source();
+                if (!sname.empty() && sname != "None")
+                    connect_source(sname, sip);
+                stall_count_ = 0;
+            }
+        }
+    }
+
     // Build the NDI receiver name: "DeviceAlias (OutputAlias)"
     std::string build_recv_name() const {
         auto out_cfg = Config::instance().get_output(ch_num_);
@@ -694,6 +856,7 @@ private:
 
     // -------------------------------------------------------------------------
     void on_video(NDIVideoFrame& vf) {
+        last_video_frame_ms_ = now_ms();
         bool is_compressed = (vf.stride == 0 && vf.size > 0);
 
         if (is_compressed) {
@@ -790,6 +953,12 @@ private:
     void on_connection(bool connected, const std::string& src) {
         connected_ = connected;
         if (connected) {
+            connect_time_ms_ = now_ms();
+            // Reset health timestamps so stale values don't trigger false alarms
+            last_video_frame_ms_   = 0;
+            last_decoded_frame_ms_ = 0;
+            last_display_commit_ms_ = 0;
+            stall_count_ = 0;
             last_source_ = src;
             // Keep source_name_ in sync with the actual connected source.
             // When DS routes a new source, the SDK auto-switches and fires
@@ -833,6 +1002,7 @@ private:
     }
 
     void on_decoded(DecodedFrame& f) {
+        last_decoded_frame_ms_ = now_ms();
         // NOTE: called from decode() → drain_frames() → frame_cb_(),
         // which means decoder_mutex_ is already held by on_video().
         // Do NOT attempt to re-lock decoder_mutex_ here — it will deadlock.
@@ -848,6 +1018,7 @@ private:
                                         f.width, f.height,
                                         f.hor_stride, f.drm_format);
             }
+            last_display_commit_ms_ = now_ms();
         }
         // release_frame clears f.opaque so MppDecoder::drain_frames()
         // skips its own release. decoder_ is guaranteed non-null here
@@ -899,9 +1070,11 @@ private:
                 rf = std::move(frame_queue_.front());
                 frame_queue_.pop();
             }
-            if (drm_ && drm_->is_initialized())
+            if (drm_ && drm_->is_initialized()) {
                 drm_->show_frame_memory(rf.data(), rf.size(),
                                         rf.width, rf.height, rf.stride, rf.drm_format);
+                last_display_commit_ms_ = now_ms();
+            }
             // Free SDK frame after rendering (cross-thread free is supported)
             if (rf.owns_ndi_frame && recv_)
                 recv_->free_video(&rf.ndi_frame);
@@ -941,6 +1114,14 @@ private:
     std::atomic<bool>    connected_{false};
     std::atomic<int>     input_w_{0}, input_h_{0};
     std::atomic<double>  fps_{0.0};
+
+    // Health tracking timestamps (monotonic ms)
+    std::atomic<int64_t> last_video_frame_ms_{0};
+    std::atomic<int64_t> last_decoded_frame_ms_{0};
+    std::atomic<int64_t> last_display_commit_ms_{0};
+    std::atomic<int64_t> last_recv_alive_ms_{0};
+    std::atomic<int64_t> connect_time_ms_{0};
+    int                  stall_count_{0};
 
     IPCServer*        ipc_ = nullptr;
     nlohmann::json    last_routing_event_;   // buffered for subscriber reconnect
@@ -1190,6 +1371,27 @@ int main(int argc, char* argv[]) {
             for (auto& w : workers) j.push_back(w->get_status());
             return j;
         }
+        if (cmd.action == "health") {
+            static auto start_time = now_ms();
+            nlohmann::json j;
+            j["alive"] = true;
+            j["uptime_s"] = (now_ms() - start_time) / 1000;
+            j["outputs"] = nlohmann::json::array();
+            for (auto& w : workers) {
+                nlohmann::json h;
+                h["output"]        = w->ch_num() - 1;
+                h["connected"]     = w->is_connected();
+                h["fps"]           = w->get_fps();
+                h["health"]        = w->health_state();
+                h["recv_stale_ms"]    = w->recv_stale_ms();
+                h["video_stale_ms"]   = w->video_stale_ms();
+                h["decoded_stale_ms"] = w->decoded_stale_ms();
+                h["display_stale_ms"] = w->display_stale_ms();
+                h["stall_count"]      = w->stall_count();
+                j["outputs"].push_back(h);
+            }
+            return j;
+        }
         return nlohmann::json{{"ok", false}, {"error", "unknown query"}};
     });
 
@@ -1207,6 +1409,11 @@ int main(int argc, char* argv[]) {
     });
 
     ipc->start("/tmp/ndi-decoder.sock");
+
+#ifdef HAVE_SYSTEMD
+    sd_notify(0, "READY=1");
+    std::cout << "[NDIMon-R] sd_notify READY\n";
+#endif
 
     // Wire IPC pointer into workers so they can push events
     for (auto& w : workers) w->set_ipc(ipc.get());
@@ -1227,9 +1434,15 @@ int main(int argc, char* argv[]) {
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         for (auto& w : workers) w->tick();
+#ifdef HAVE_SYSTEMD
+        sd_notify(0, "WATCHDOG=1");
+#endif
     }
 
     // Cleanup
+#ifdef HAVE_SYSTEMD
+    sd_notify(0, "STOPPING=1");
+#endif
     std::cout << "[NDIMon-R] Shutting down...\n";
     ipc->stop();
     for (auto& w : workers) w->stop();

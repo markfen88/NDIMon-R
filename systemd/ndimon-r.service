@@ -4,9 +4,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
-Restart=on-failure
-RestartSec=5
+Type=notify
+WatchdogSec=30
+Restart=always
+RestartSec=3
 # Unbind all framebuffer consoles so DRM app can take display master
 ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon0/bind'
 ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon1/bind'

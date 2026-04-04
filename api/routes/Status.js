@@ -284,6 +284,16 @@ router.get('/status', async (req, res) => {
     res.json(await buildStatus());
 });
 
+// GET /api/health  — lightweight health check for monitoring tools
+router.get('/health', async (req, res) => {
+    try {
+        const data = await sendIPC({ action: 'health' });
+        res.json(data);
+    } catch (err) {
+        res.status(503).json({ alive: false, error: 'IPC timeout' });
+    }
+});
+
 // GET /api/events  — Server-Sent Events for real-time updates
 router.get('/events', (req, res) => {
     res.setHeader('Content-Type',  'text/event-stream');

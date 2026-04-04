@@ -117,7 +117,7 @@ bool IPCServer::handle_client(int client_fd) {
         }
 
         if ((action == "get_status_all" || action == "get_modes" ||
-             action == "set_resolution") && query_cb_) {
+             action == "set_resolution" || action == "health") && query_cb_) {
             auto resp = query_cb_(cmd).dump() + "\n";
             write(client_fd, resp.c_str(), resp.size());
             return true;

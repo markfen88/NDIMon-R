@@ -28,6 +28,12 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBDRM REQUIRED libdrm)
 pkg_check_modules(ALSA   REQUIRED alsa)
 
+# systemd notify (optional, for watchdog integration)
+pkg_check_modules(SYSTEMD libsystemd)
+if(SYSTEMD_FOUND)
+    message(STATUS "libsystemd found: watchdog integration enabled")
+endif()
+
 # LibRGA (optional, Rockchip only)
 pkg_check_modules(LIBRGA librga)
 
@@ -125,6 +131,11 @@ if(HAVE_FFMPEG)
     list(APPEND DECODER_DEFINES HAVE_FFMPEG)
     list(APPEND DECODER_INCLUDES ${FFMPEG_INCLUDE_DIRS})
     list(APPEND DECODER_LIBS ${FFMPEG_LIBRARIES})
+endif()
+
+if(SYSTEMD_FOUND)
+    list(APPEND DECODER_DEFINES HAVE_SYSTEMD)
+    list(APPEND DECODER_LIBS ${SYSTEMD_LIBRARIES})
 endif()
 
 if(LIBRGA_FOUND)

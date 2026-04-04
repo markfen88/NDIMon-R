@@ -88,6 +88,43 @@ systemd/             — Service files
 - **DRM leases** — each output connector gets independent DRM master rights
 - **Node.js owns reconnect logic** — C++ pushes IPC events, API handles retry scheduling
 
+## Reliability / Appliance Operation
+
+**Design target:** Set-it-and-forget-it. Source selection persists across reboots
+and network failures. The device recovers from any failure without human intervention.
+
+### Source persistence:
+- Selected source saved per-output in `/etc/ndimon-dec{N}-settings.json`
+- Survives reboots — auto-connect on startup to last source
+- Survives network failures — exponential backoff reconnect (5s→30s cap)
+- `disconnect_source()` preserves saved source for auto-reconnect
+- `forget_source()` explicitly clears saved source (user action only)
+
+### Recovery hierarchy (fastest to slowest):
+1. **Targeted component restart** — decoder re-init, display flip reset (~100ms)
+2. **Full pipeline reconnect** — disconnect + connect cycle (~3-5s)
+3. **Systemd watchdog restart** — process killed and restarted (~5s)
+4. **Systemd Restart=always** — covers crashes, OOM, unexpected exit
+
+### Health monitoring (`DisplayWorker::tick()` at 500ms):
+- Recv thread heartbeat — detect NDI SDK thread hang
+- Video frame timestamp — detect source/network stall
+- Decoder output timestamp — detect hardware decoder hang
+- Display commit timestamp — detect HDMI output freeze
+- FPS tracking — cosmetic + health assessment
+
+### Thresholds:
+- Recv stall: >5s since last heartbeat → full reconnect at 15s
+- Decoder hang: >5s video arriving but no decoded output → decoder restart
+- Display freeze: >3s decoded but no commit → flip reset + show_black
+- Escalation: 30s continuous stall → full pipeline reconnect
+
+### systemd integration:
+- `Type=notify` with `sd_notify("READY=1")` on startup
+- `WatchdogSec=30` with `sd_notify("WATCHDOG=1")` from main loop (500ms cadence)
+- `Restart=always`, `RestartSec=3`
+- Guarded by `#ifdef HAVE_SYSTEMD` — builds without libsystemd still work
+
 ## NDI SDK Usage Notes
 
 - `ndi-config.v1.json` must be written **before** `NDIlib_initialize()` for discovery server and codec passthrough
@@ -100,6 +137,12 @@ systemd/             — Service files
 - `color_format_fastest` implies `allow_video_fields = true` — always set explicitly
 - NDI audio is planar float: `p_data` is a single base pointer, channel N starts at `p_data + N * channel_stride_in_bytes`
 - `find_source` pointers are owned by the finder — copy strings before destroying the finder instance
+
+### Discovery Server Telemetry
+- Device sends `<ndi_device_status>` metadata every 30s with FPS, resolution, codec, health state, SoC temperature, and stall count
+- DS routing accepted via `allow_controlling=true` and `allow_monitoring=true`
+- Routing ACKs sent every 30s to keep DS in sync
+- Connection metadata includes `<ndi_product>`, `<ndi_routing>`, `<ndi_audio_setup>`, `<ndi_video_setup>`, `<ndi_general_setup>`
 
 ### Dual-Mode Capture (Standard vs HX)
 
