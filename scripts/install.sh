@@ -59,6 +59,18 @@ if [ "$(id -u)" = "0" ] && [ ! -e /dev/rga ]; then
     fi
 fi
 
+# --- Install C++ binaries ---
+if [ -f "$PROJECT_DIR/build/ndimon-r" ]; then
+    echo "[install] Installing ndimon-r binary to /usr/local/bin..."
+    $SUDO cp "$PROJECT_DIR/build/ndimon-r" /usr/local/bin/ndimon-r.new
+    $SUDO mv /usr/local/bin/ndimon-r.new /usr/local/bin/ndimon-r
+fi
+if [ -f "$PROJECT_DIR/build/ndimon-finder" ]; then
+    echo "[install] Installing ndimon-finder binary to /usr/local/bin..."
+    $SUDO cp "$PROJECT_DIR/build/ndimon-finder" /usr/local/bin/ndimon-finder.new
+    $SUDO mv /usr/local/bin/ndimon-finder.new /usr/local/bin/ndimon-finder
+fi
+
 # --- Install API to stable location ---
 # The API is installed to /opt/ndimon-r/api so its path is independent of
 # where the source was cloned (avoids WorkingDirectory pointing at a temp dir).
