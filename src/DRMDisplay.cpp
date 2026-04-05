@@ -2115,15 +2115,16 @@ bool DRMDisplay::show_splash(bool source_available) {
     float pct = std::max(1.0f, std::min(sc.text_height_pct, 20.0f));
     int font_scale = std::max(1, (int)(pct / 100.0f * height_ / 8.0f));
     int font_h = 8 * font_scale;
-    // 2% of screen height as margin, minimum one glyph height
-    uint32_t margin = std::max((uint32_t)font_h, (uint32_t)(height_ * 0.02f));
+    // 5% title-safe margin (standard broadcast safe area)
+    uint32_t margin_x = (uint32_t)(width_  * 0.05f);
+    uint32_t margin_y = (uint32_t)(height_ * 0.05f);
 
     // ── Signal status label — top-left corner ────────────────────────────────
     if (sc.show_signal_text) {
         const std::string& label = source_available ? sc.text_live : sc.text_idle;
         if (!label.empty()) {
             draw_text_left(pixels, stride_u32, label,
-                           margin, margin,
+                           margin_x, margin_y,
                            accent_color, font_scale, width_, height_);
         }
     }
@@ -2132,8 +2133,8 @@ bool DRMDisplay::show_splash(bool source_available) {
     {
         const auto& dev = Config::instance().device;
         int line_h = font_h + 4;
-        uint32_t rx = width_ - margin;
-        uint32_t ty = margin;
+        uint32_t rx = width_ - margin_x;
+        uint32_t ty = margin_y;
 
         if (sc.show_device_name && !dev.device_name.empty()) {
             draw_text_right(pixels, stride_u32, dev.device_name,
