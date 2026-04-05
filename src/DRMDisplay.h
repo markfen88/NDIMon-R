@@ -5,6 +5,7 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
@@ -118,6 +119,8 @@ private:
 
     // Commit a framebuffer: SetCrtc on first call, PageFlip thereafter
     bool commit_fb(uint32_t fb_id);
+    // Atomic commit with plane SRC/CRTC rects for zero-copy DMA-BUF scaling
+    bool atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst);
     void wait_for_flip();
     static void flip_handler(int fd, unsigned seq,
                              unsigned tv_sec, unsigned tv_usec, void* user);
@@ -165,6 +168,7 @@ private:
 
     uint32_t connector_id_ = 0;
     uint32_t crtc_id_      = 0;
+    uint32_t plane_id_     = 0;   // primary plane for atomic commits
     drmModeModeInfo mode_  = {};
     uint32_t width_     = 0;
     uint32_t height_    = 0;
@@ -197,5 +201,14 @@ private:
     uint32_t import_fb_id_ = 0;
     uint32_t import_bo_    = 0;
 
+    // Atomic plane commit state
+    int  atomic_plane_state_ = 0;  // 0=untried, 1=ok, -1=unsupported
+
     bool rga_available_ = false;
+    int  rga_fail_count_ = 0;
+
+    // DMA-BUF mmap cache (avoids per-frame mmap/munmap in software fallback)
+    struct MmapEntry { void* ptr = nullptr; size_t size = 0; };
+    std::unordered_map<int, MmapEntry> dma_mmap_cache_;
+    void clear_dma_mmap_cache();
 };

@@ -226,22 +226,47 @@ bool AlsaAudio::write_audio(const float** channel_data, int num_channels,
                               int num_samples, int channel_stride_bytes) {
     if (!pcm_ || num_samples <= 0) return false;
 
-    // Convert planar float to interleaved S16LE in a single pass
-    int src_channels = std::min(num_channels, channels_);
     pcm_buf_.resize(num_samples * channels_);
 
-    for (int s = 0; s < num_samples; s++) {
-        for (int c = 0; c < channels_; c++) {
-            float v;
-            if (c < src_channels && channel_data[c]) {
-                v = channel_data[c][s];
-            } else {
-                v = 0.0f;
+    // 5.1 surround → stereo downmix (ITU-R BS.775)
+    // Layout: FL=0, FR=1, C=2, LFE=3, SL=4, SR=5
+    // L = FL + 0.707*C + 0.707*SL (+0.5*LFE optional)
+    // R = FR + 0.707*C + 0.707*SR (+0.5*LFE optional)
+    if (num_channels >= 6 && channels_ == 2) {
+        const float* fl  = channel_data[0];
+        const float* fr  = channel_data[1];
+        const float* c   = channel_data[2];
+        const float* lfe = channel_data[3];
+        const float* sl  = channel_data[4];
+        const float* sr  = channel_data[5];
+        constexpr float k = 0.707f;  // -3dB
+        constexpr float lfe_k = 0.5f;
+        for (int s = 0; s < num_samples; s++) {
+            float center = c ? c[s] : 0.0f;
+            float sub    = lfe ? lfe[s] : 0.0f;
+            float lv = (fl ? fl[s] : 0.0f) + k * center + k * (sl ? sl[s] : 0.0f) + lfe_k * sub;
+            float rv = (fr ? fr[s] : 0.0f) + k * center + k * (sr ? sr[s] : 0.0f) + lfe_k * sub;
+            // Clamp
+            if (lv >  1.0f) lv =  1.0f; if (lv < -1.0f) lv = -1.0f;
+            if (rv >  1.0f) rv =  1.0f; if (rv < -1.0f) rv = -1.0f;
+            pcm_buf_[s * 2]     = (int16_t)(lv * 32767.0f);
+            pcm_buf_[s * 2 + 1] = (int16_t)(rv * 32767.0f);
+        }
+    } else {
+        // Generic: copy up to channels_ from source, zero-fill the rest
+        int src_channels = std::min(num_channels, channels_);
+        for (int s = 0; s < num_samples; s++) {
+            for (int c = 0; c < channels_; c++) {
+                float v;
+                if (c < src_channels && channel_data[c]) {
+                    v = channel_data[c][s];
+                } else {
+                    v = 0.0f;
+                }
+                if (v >  1.0f) v =  1.0f;
+                if (v < -1.0f) v = -1.0f;
+                pcm_buf_[s * channels_ + c] = (int16_t)(v * 32767.0f);
             }
-            // Clamp and convert
-            if (v >  1.0f) v =  1.0f;
-            if (v < -1.0f) v = -1.0f;
-            pcm_buf_[s * channels_ + c] = (int16_t)(v * 32767.0f);
         }
     }
 

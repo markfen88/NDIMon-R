@@ -533,12 +533,12 @@ void NDIReceiver::recv_thread() {
             }
             NDIlib_framesync_free_video(framesync_, &video_frame);
 
-            // Pull audio (48kHz stereo, 1024 samples = ~21ms, matches ALSA period)
-            // FrameSync uses v2 audio frames, not v3
+            // Pull audio at native channel count (48kHz, 1024 samples = ~21ms)
+            // Requesting 0 channels = native format; downmix to stereo in ALSA sink
             if (audio_enabled_ && audio_cb_) {
                 NDIlib_audio_frame_v2_t audio_frame{};
                 NDIlib_framesync_capture_audio(framesync_, &audio_frame,
-                                               48000, 2, 1024);
+                                               48000, 0, 1024);
                 if (audio_frame.p_data) {
                     NDIAudioFrame af;
                     af.sample_rate    = audio_frame.sample_rate;
