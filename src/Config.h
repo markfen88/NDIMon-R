@@ -28,6 +28,7 @@ struct DeviceConfig {
     std::string host_name = "";
     std::string device_ip = "";          // populated at runtime, not persisted
     std::string ndi_recv_name = "";      // NDI alias shown in discovery tools (empty = auto)
+    std::string watchdog_mode = "passive"; // "disabled" | "passive" (log only) | "active" (take action)
 };
 
 struct NDIGroupConfig {

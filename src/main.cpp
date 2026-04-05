@@ -858,6 +858,14 @@ private:
             return;
         }
 
+        const auto& wd_mode = Config::instance().device.watchdog_mode;
+        if (wd_mode == "disabled") {
+            stall_count_ = 0;
+            return;
+        }
+        bool active = (wd_mode == "active");
+        // passive mode: detect + log + count, but never take corrective action
+
         auto t = now_ms();
         auto connected_duration = t - connect_time_ms_.load();
 
@@ -870,18 +878,22 @@ private:
         auto recv_age = recv_stale_ms();
         if (recv_age > 5000) {
             healthy = false;
-            if (stall_count_ == 10) // log once at 5s mark
-                std::cerr << "[Worker" << ch_num_ << "] HEALTH: recv thread stalled ("
-                          << recv_age << "ms)\n";
+            if (stall_count_ == 10) {
+                wd_recv_stalls_++;
+                std::cerr << "[Worker" << ch_num_ << "] WATCHDOG: recv thread stalled ("
+                          << recv_age << "ms)" << (active ? "" : " [passive]") << "\n";
+            }
         }
 
         // 2. No video frames arriving despite being connected
         auto video_age = video_stale_ms();
         if (video_age < 0 && connected_duration > 10000) {
-            // Never received a frame despite being connected 10s
             healthy = false;
-            if (stall_count_ == 20)
-                std::cerr << "[Worker" << ch_num_ << "] HEALTH: no video frames received\n";
+            if (stall_count_ == 20) {
+                wd_video_stalls_++;
+                std::cerr << "[Worker" << ch_num_ << "] WATCHDOG: no video frames received"
+                          << (active ? "" : " [passive]") << "\n";
+            }
         }
 
         // 3. Decoder hang: video arriving but no decoded output for 5s
@@ -889,12 +901,16 @@ private:
         if (video_age >= 0 && video_age < 2000 && decoded_age > 5000) {
             healthy = false;
             if (stall_count_ == 10) {
-                std::cerr << "[Worker" << ch_num_ << "] HEALTH: decoder stall, restarting decoder\n";
-                std::lock_guard<std::mutex> lk(decoder_mutex_);
-                if (decoder_ && decoder_initialized_) {
-                    decoder_->destroy();
-                    decoder_initialized_ = false;
-                    // Next compressed frame will re-init automatically
+                wd_decoder_stalls_++;
+                std::cerr << "[Worker" << ch_num_ << "] WATCHDOG: decoder stall detected"
+                          << (active ? ", restarting decoder" : " [passive]") << "\n";
+                if (active) {
+                    wd_decoder_restarts_++;
+                    std::lock_guard<std::mutex> lk(decoder_mutex_);
+                    if (decoder_ && decoder_initialized_) {
+                        decoder_->destroy();
+                        decoder_initialized_ = false;
+                    }
                 }
             }
         }
@@ -904,10 +920,15 @@ private:
         if (decoded_age >= 0 && decoded_age < 2000 && display_age > 3000) {
             healthy = false;
             if (stall_count_ == 6) {
-                std::cerr << "[Worker" << ch_num_ << "] HEALTH: display freeze, resetting\n";
-                if (drm_) {
-                    drm_->reset_flip_pending();
-                    drm_->show_black();
+                wd_display_freezes_++;
+                std::cerr << "[Worker" << ch_num_ << "] WATCHDOG: display freeze detected"
+                          << (active ? ", resetting" : " [passive]") << "\n";
+                if (active) {
+                    wd_display_resets_++;
+                    if (drm_) {
+                        drm_->reset_flip_pending();
+                        drm_->show_black();
+                    }
                 }
             }
         }
@@ -919,16 +940,20 @@ private:
             // Escalation: 30s of continuous stall → full pipeline reconnect
             if (stall_count_ == 60) {
                 std::cerr << "[Worker" << ch_num_
-                          << "] HEALTH: 30s stall, full pipeline reconnect\n";
-                std::string sname, sip;
-                {
-                    std::lock_guard<std::mutex> lk(source_mutex_);
-                    sname = source_name_;
-                    sip   = source_ip_;
+                          << "] WATCHDOG: 30s stall"
+                          << (active ? ", full pipeline reconnect" : " [passive]") << "\n";
+                if (active) {
+                    wd_reconnects_++;
+                    std::string sname, sip;
+                    {
+                        std::lock_guard<std::mutex> lk(source_mutex_);
+                        sname = source_name_;
+                        sip   = source_ip_;
+                    }
+                    disconnect_source();
+                    if (!sname.empty() && sname != "None")
+                        connect_source(sname, sip);
                 }
-                disconnect_source();
-                if (!sname.empty() && sname != "None")
-                    connect_source(sname, sip);
                 stall_count_ = 0;
             }
         }
@@ -1286,6 +1311,15 @@ private:
     std::atomic<int64_t> connect_time_ms_{0};
     int                  stall_count_{0};
 
+    // Watchdog statistics
+    int  wd_recv_stalls_{0};       // times recv thread stall detected
+    int  wd_video_stalls_{0};      // times no video frames detected
+    int  wd_decoder_stalls_{0};    // times decoder hang detected
+    int  wd_decoder_restarts_{0};  // times decoder was restarted
+    int  wd_display_freezes_{0};   // times display freeze detected
+    int  wd_display_resets_{0};    // times display was reset
+    int  wd_reconnects_{0};        // times full pipeline reconnect triggered
+
     IPCServer*        ipc_ = nullptr;
     nlohmann::json    last_routing_event_;   // buffered for subscriber reconnect
     mutable std::mutex routing_event_mutex_;
@@ -1547,6 +1581,7 @@ int main(int argc, char* argv[]) {
             nlohmann::json j;
             j["alive"] = true;
             j["uptime_s"] = (now_ms() - start_time) / 1000;
+            j["watchdog_mode"] = Config::instance().device.watchdog_mode;
             j["outputs"] = nlohmann::json::array();
             for (auto& w : workers) {
                 nlohmann::json h;
@@ -1559,6 +1594,14 @@ int main(int argc, char* argv[]) {
                 h["decoded_stale_ms"] = w->decoded_stale_ms();
                 h["display_stale_ms"] = w->display_stale_ms();
                 h["stall_count"]      = w->stall_count();
+                // Watchdog statistics
+                h["wd_recv_stalls"]      = w->wd_recv_stalls_;
+                h["wd_video_stalls"]     = w->wd_video_stalls_;
+                h["wd_decoder_stalls"]   = w->wd_decoder_stalls_;
+                h["wd_decoder_restarts"] = w->wd_decoder_restarts_;
+                h["wd_display_freezes"]  = w->wd_display_freezes_;
+                h["wd_display_resets"]   = w->wd_display_resets_;
+                h["wd_reconnects"]       = w->wd_reconnects_;
                 j["outputs"].push_back(h);
             }
             return j;

@@ -574,6 +574,57 @@
         </div>
       </div>
 
+      <!-- Watchdog -->
+      <div class="col-12">
+        <div class="card mt-3">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span><i class="bi bi-shield-check me-1"></i>Watchdog</span>
+            <span id="wd-badge" class="badge bg-secondary">—</span>
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label">Watchdog Mode</label>
+                <select class="form-select" id="wd-mode" onchange="saveWatchdogMode()">
+                  <option value="disabled">Disabled</option>
+                  <option value="passive" selected>Passive (logging only)</option>
+                  <option value="active">Active (auto-recover)</option>
+                </select>
+                <div class="form-text">Passive detects and logs issues. Active also takes corrective action (decoder restart, display reset, pipeline reconnect).</div>
+              </div>
+              <div class="col-md-8">
+                <div class="row g-2" id="wd-stats">
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Health</span><span class="stat-val" id="wd-health">—</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Stall Count</span><span class="stat-val" id="wd-stall">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Recv Stalls</span><span class="stat-val" id="wd-recv">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Video Stalls</span><span class="stat-val" id="wd-video">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Decoder Stalls</span><span class="stat-val" id="wd-dec-stall">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Decoder Restarts</span><span class="stat-val" id="wd-dec-restart">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Display Freezes</span><span class="stat-val" id="wd-disp-freeze">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Reconnects</span><span class="stat-val" id="wd-reconnect">0</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -623,7 +674,7 @@ function showPage(name, el) {
   document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
   if (name === 'settings') loadSettings();
-  if (name === 'system')   loadSysInfo();
+  if (name === 'system')   { loadSysInfo(); loadWatchdog(); }
   if (name === 'ndi')      { loadSourceIPs().then(renderSrcList); }
 }
 
@@ -660,7 +711,7 @@ let _svcInterval = null;
 function startSvcPolling() {
   if (_svcInterval) return;
   _svcInterval = setInterval(() => {
-    if (document.getElementById('page-system')?.classList.contains('active')) loadServices();
+    if (document.getElementById('page-system')?.classList.contains('active')) { loadServices(); refreshWatchdogStats(); }
   }, 10000);
 }
 
@@ -1208,6 +1259,56 @@ async function loadSysInfo() {
     setText('sys-fw',   d.FirmwareVersion||'—');
   } catch {}
   loadServices();
+}
+
+// ══ Watchdog ═════════════════════════════════════════════════════
+async function loadWatchdog() {
+  try {
+    const d = await api('/v1/DeviceSettings/watchdog-mode');
+    setVal('wd-mode', d.watchdog_mode || 'passive');
+  } catch {}
+  refreshWatchdogStats();
+}
+
+async function saveWatchdogMode() {
+  const mode = document.getElementById('wd-mode').value;
+  await post('/v1/DeviceSettings/watchdog-mode', { watchdog_mode: mode });
+  toast('Watchdog mode: ' + mode);
+}
+
+async function refreshWatchdogStats() {
+  try {
+    const d = await api('/api/health');
+    const badge = document.getElementById('wd-badge');
+    const mode = d.watchdog_mode || 'passive';
+    if (badge) {
+      const colors = { disabled: 'bg-secondary', passive: 'bg-info', active: 'bg-success' };
+      badge.className = 'badge ' + (colors[mode] || 'bg-secondary');
+      badge.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
+    }
+    // Aggregate stats from all outputs
+    let health = 'healthy', stall = 0;
+    let recv = 0, video = 0, decStall = 0, decRestart = 0, dispFreeze = 0, reconnect = 0;
+    if (d.outputs) for (const o of d.outputs) {
+      if (o.health !== 'healthy') health = o.health;
+      stall = Math.max(stall, o.stall_count || 0);
+      recv       += o.wd_recv_stalls || 0;
+      video      += o.wd_video_stalls || 0;
+      decStall   += o.wd_decoder_stalls || 0;
+      decRestart += o.wd_decoder_restarts || 0;
+      dispFreeze += o.wd_display_freezes || 0;
+      reconnect  += o.wd_reconnects || 0;
+    }
+    const hColor = health === 'healthy' ? 'color:#22FF88' : health === 'degraded' ? 'color:#FFAA00' : 'color:#FF4444';
+    setText('wd-health', health); const hEl = document.getElementById('wd-health'); if (hEl) hEl.style.cssText = hColor;
+    setText('wd-stall', stall);
+    setText('wd-recv', recv);
+    setText('wd-video', video);
+    setText('wd-dec-stall', decStall);
+    setText('wd-dec-restart', decRestart);
+    setText('wd-disp-freeze', dispFreeze);
+    setText('wd-reconnect', reconnect);
+  } catch {}
 }
 
 // ══ Actions ══════════════════════════════════════════════════════

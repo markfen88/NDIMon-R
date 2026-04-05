@@ -81,4 +81,23 @@ router.post('/output-alias', (req, res) => {
     res.json({ output_alias: cfg.output_alias, ch: chNum });
 });
 
+// GET /watchdog-mode
+router.get('/watchdog-mode', (req, res) => {
+    const cfg = readJson(DEVICE_SETTINGS);
+    res.json({ watchdog_mode: cfg.watchdog_mode || 'passive' });
+});
+
+// POST /watchdog-mode  — body: { watchdog_mode: "disabled"|"passive"|"active" }
+router.post('/watchdog-mode', (req, res) => {
+    const mode = ((req.body && req.body.watchdog_mode) || '').trim();
+    const allowed = ['disabled', 'passive', 'active'];
+    if (!allowed.includes(mode))
+        return res.status(400).json({ ok: false, error: 'must be disabled, passive, or active' });
+    const cfg = readJson(DEVICE_SETTINGS);
+    cfg.watchdog_mode = mode;
+    writeJson(DEVICE_SETTINGS, cfg);
+    sendIPC({ action: 'reload_config' });
+    res.json({ ok: true, watchdog_mode: mode });
+});
+
 module.exports = router;
