@@ -2,19 +2,18 @@
 # NDIMon-R Watchdog — independent service that monitors all NDIMon components
 # and restarts them if they become unresponsive.
 #
-# Checks every 10 seconds:
-#   1. ndimon-r      — must respond to IPC health check within 5s
-#   2. ndimon-api    — must respond to HTTP /api/health within 5s
-#   3. ndimon-finder — must be running (systemd active state)
+# Checks every 15 seconds using systemd process state (not HTTP — avoids
+# false positives under CPU load). Only restarts if the process is actually
+# dead/failed, not just slow.
 #
-# Each service gets 3 consecutive failures before restart (30s tolerance).
-# After restart, a 30s cooldown prevents restart storms.
+# Each service gets 5 consecutive failures before restart (75s tolerance).
+# After restart, a 60s cooldown prevents restart storms.
 
 set -euo pipefail
 
-INTERVAL=10
-MAX_FAILURES=3
-COOLDOWN=30
+INTERVAL=15
+MAX_FAILURES=5
+COOLDOWN=60
 
 declare -A fail_count
 declare -A last_restart
@@ -26,24 +25,29 @@ done
 
 log() { echo "[$(date '+%H:%M:%S')] [watchdog] $*"; }
 
-check_ndimon_r() {
-    # Try IPC health check via the API (fastest path)
-    local resp
-    resp=$(curl -s --max-time 5 http://127.0.0.1/api/health 2>/dev/null) || return 1
-    echo "$resp" | grep -q '"alive":true' && return 0
-    # API might be down but ndimon-r might be fine — check process directly
-    systemctl is-active --quiet ndimon-r.service && return 0
+# Check if a service's main process is alive. Uses systemctl + /proc
+# rather than HTTP to avoid false positives under heavy CPU load.
+check_service() {
+    local svc=$1
+
+    # 1. Is systemd happy with it?
+    if ! systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+        return 1
+    fi
+
+    # 2. Is the main PID actually alive?
+    local pid
+    pid=$(systemctl show -p MainPID --value "${svc}.service" 2>/dev/null)
+    if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+        return 1
+    fi
+    [ -d "/proc/$pid" ] && return 0
     return 1
 }
 
-check_ndimon_api() {
-    # HTTP health check — if this fails, the web UI is down
-    curl -s --max-time 5 -o /dev/null http://127.0.0.1/api/health 2>/dev/null
-}
-
-check_ndimon_finder() {
-    systemctl is-active --quiet ndimon-finder.service
-}
+check_ndimon_r()      { check_service ndimon-r; }
+check_ndimon_api()    { check_service ndimon-api; }
+check_ndimon_finder() { check_service ndimon-finder; }
 
 restart_service() {
     local svc=$1
@@ -77,7 +81,7 @@ while true; do
             fail_count[$svc]=0
         else
             fail_count[$svc]=$((${fail_count[$svc]} + 1))
-            log "$svc: health check FAILED (${fail_count[$svc]}/$MAX_FAILURES)"
+            log "$svc: process check FAILED (${fail_count[$svc]}/$MAX_FAILURES)"
 
             if [ "${fail_count[$svc]}" -ge "$MAX_FAILURES" ]; then
                 restart_service "$svc"
