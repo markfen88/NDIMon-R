@@ -2,7 +2,6 @@
 const express    = require('express');
 const bodyParser = require('body-parser');
 const path       = require('path');
-const dgram      = require('dgram');
 
 const app = express();
 const PORT = process.env.PORT || 80;
@@ -53,19 +52,4 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
     console.log(`[NDIMon-R] API running on port ${PORT}`);
 
-    // systemd watchdog: send READY=1 then WATCHDOG=1 every 10s
-    // WatchdogSec=30 in the service file, so 10s interval is safe
-    const notifyAddr = process.env.NOTIFY_SOCKET;
-    if (notifyAddr) {
-        const sock = dgram.createSocket('unix_dgram');
-        const addr = notifyAddr.startsWith('@')
-            ? '\0' + notifyAddr.slice(1) : notifyAddr;
-        const send = msg => {
-            const buf = Buffer.from(msg);
-            sock.send(buf, 0, buf.length, addr);
-        };
-        send('READY=1');
-        setInterval(() => send('WATCHDOG=1'), 10000);
-        console.log('[NDIMon-R] systemd watchdog active');
-    }
 });

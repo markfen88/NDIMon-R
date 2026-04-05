@@ -5,6 +5,7 @@ Wants=network-online.target ndimon-r.service ndimon-api.service ndimon-finder.se
 
 [Service]
 Type=notify
+NotifyAccess=all
 WatchdogSec=60
 Restart=always
 RestartSec=5

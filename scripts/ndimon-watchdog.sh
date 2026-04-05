@@ -65,6 +65,9 @@ restart_service() {
 
 log "starting — monitoring ndimon-r, ndimon-api, ndimon-finder"
 
+# Tell systemd we're ready
+systemd-notify --ready 2>/dev/null || true
+
 while true; do
     for svc in ndimon-r ndimon-api ndimon-finder; do
         if "check_$svc" 2>/dev/null; then

@@ -4,8 +4,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-WatchdogSec=60
+Type=simple
 Restart=always
 RestartSec=5
 ExecStart=/usr/local/bin/ndimon-finder
