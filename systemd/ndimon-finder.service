@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Restart=on-failure
+Restart=always
 RestartSec=5
 ExecStart=/usr/local/bin/ndimon-finder
 Environment=LD_LIBRARY_PATH=/usr/local/lib
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

@@ -5,11 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Restart=on-failure
+Restart=always
 RestartSec=3
 WorkingDirectory=NDIMON_INSTALL_DIR/api
 ExecStart=/usr/bin/node server.js
 Environment=PORT=80
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

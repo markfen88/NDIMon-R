@@ -543,13 +543,14 @@
       <div class="col-lg-3">
         <div class="card mb-3">
           <div class="card-header"><i class="bi bi-terminal"></i>Services</div>
+          <div class="card-body" id="svc-list">
+            <div class="text-muted" style="font-size:.8rem">Loading…</div>
+          </div>
+        </div>
+        <div class="card mb-3">
           <div class="card-body">
-            <div class="stat-row"><span class="stat-label">ndi-decoder</span><span style="font-size:.75rem;color:var(--live)">● running</span></div>
-            <div class="stat-row"><span class="stat-label">ndi-api</span><span style="font-size:.75rem;color:var(--live)">● running</span></div>
-            <div class="stat-row"><span class="stat-label">ndi-finder</span><span style="font-size:.75rem;color:var(--live)">● running</span></div>
-            <hr class="section-divider">
             <div class="d-grid gap-2">
-              <button class="btn btn-outline-warning btn-sm" onclick="softReboot()"><i class="bi bi-arrow-counterclockwise me-1"></i>Restart Services</button>
+              <button class="btn btn-outline-warning btn-sm" onclick="restartAllServices()"><i class="bi bi-arrow-counterclockwise me-1"></i>Restart All Services</button>
               <button class="btn btn-outline-danger btn-sm" onclick="sysReboot()"><i class="bi bi-power me-1"></i>Reboot Device</button>
             </div>
           </div>
@@ -646,10 +647,20 @@ function mergeState(d) {
   if (d.outputs)  S.outputs = d.outputs;
 }
 
+// Refresh service status every 10s when system page is visible
+let _svcInterval = null;
+function startSvcPolling() {
+  if (_svcInterval) return;
+  _svcInterval = setInterval(() => {
+    if (document.getElementById('page-system')?.classList.contains('active')) loadServices();
+  }, 10000);
+}
+
 // ══ Initial load ════════════════════════════════════════════════
 async function loadInitialData() {
   try { const d = await api('/api/status'); mergeState(d); updateUI(); } catch {}
   loadSourceIPs();
+  startSvcPolling();
 }
 
 async function loadSourceIPs() {
@@ -1124,6 +1135,7 @@ async function loadSysInfo() {
     setText('sys-ip',   Array.isArray(d.IPAddresses)?d.IPAddresses[0]:d.IPAddress||'—');
     setText('sys-fw',   d.FirmwareVersion||'—');
   } catch {}
+  loadServices();
 }
 
 // ══ Actions ══════════════════════════════════════════════════════
@@ -1249,10 +1261,49 @@ async function saveNetSettings() {
 }
 
 
-async function softReboot() {
+// ══ Services ═══════════════════════════════════════════════════
+const SVC_LABELS = { 'ndimon-r':'Decoder', 'ndimon-finder':'Finder', 'ndimon-api':'API' };
+
+async function loadServices() {
+  try {
+    const d = await api('/api/services');
+    const el = document.getElementById('svc-list');
+    if (!el || !d.services) return;
+    el.innerHTML = d.services.map(s => {
+      const label = SVC_LABELS[s.name] || s.name;
+      const running = s.active === 'active';
+      const color = running ? 'var(--live)' : 'var(--danger, #dc3545)';
+      const stateText = running ? s.sub : s.active;
+      return `<div class="stat-row" style="align-items:center">
+        <span class="stat-label">${label}</span>
+        <span style="display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:.75rem;color:${color}">● ${stateText}</span>
+          <button class="btn btn-outline-secondary" style="padding:1px 6px;font-size:.65rem;line-height:1.2" onclick="restartService('${s.name}')" title="Restart ${label}"><i class="bi bi-arrow-clockwise"></i></button>
+        </span>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+async function restartService(name) {
+  const label = SVC_LABELS[name] || name;
+  if (!confirm(`Restart ${label} service?`)) return;
+  toast(`Restarting ${label}…`, 'warning');
+  try {
+    await post(`/api/services/${name}/restart`, {});
+    toast(`${label} restarted`);
+  } catch { toast(`Failed to restart ${label}`, 'danger'); }
+  setTimeout(loadServices, 2000);
+}
+
+async function restartAllServices() {
   if (!confirm('Restart all NDI services?')) return;
-  await post('/v1/System/softreboot',{});
-  toast('Restarting services…','warning');
+  toast('Restarting all services…', 'warning');
+  for (const name of ['ndimon-finder', 'ndimon-r']) {
+    try { await post(`/api/services/${name}/restart`, {}); } catch {}
+  }
+  toast('Services restarted');
+  setTimeout(loadServices, 3000);
 }
 
 async function sysReboot() {

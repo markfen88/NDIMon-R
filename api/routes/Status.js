@@ -3,6 +3,7 @@ const express = require('express');
 const router  = express.Router();
 const os      = require('os');
 const fs      = require('fs');
+const { execSync } = require('child_process');
 const { sendIPC, readJson, writeJson, corsHeaders, ipcEvents } = require('./lib');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
@@ -305,6 +306,54 @@ router.get('/events', (req, res) => {
 
     sseClients.add(res);
     req.on('close', () => sseClients.delete(res));
+});
+
+// ---------------------------------------------------------------------------
+// Service management — real systemd status + per-service restart
+// ---------------------------------------------------------------------------
+const MANAGED_SERVICES = ['ndimon-r', 'ndimon-finder', 'ndimon-api'];
+
+function getServiceStatus(name) {
+    try {
+        const raw = execSync(
+            `systemctl show ${name}.service --no-pager --property=ActiveState,SubState,MainPID,ExecMainStartTimestamp`,
+            { timeout: 3000, encoding: 'utf8' }
+        );
+        const props = {};
+        for (const line of raw.split('\n')) {
+            const eq = line.indexOf('=');
+            if (eq > 0) props[line.slice(0, eq)] = line.slice(eq + 1);
+        }
+        return {
+            name,
+            active:  props.ActiveState  || 'unknown',
+            sub:     props.SubState     || 'unknown',
+            pid:     parseInt(props.MainPID) || 0,
+            started: props.ExecMainStartTimestamp || '',
+        };
+    } catch {
+        return { name, active: 'unknown', sub: 'unknown', pid: 0, started: '' };
+    }
+}
+
+// GET /api/services — list all managed services with live systemd status
+router.get('/services', (req, res) => {
+    const services = MANAGED_SERVICES.map(getServiceStatus);
+    res.json({ services });
+});
+
+// POST /api/services/:name/restart — restart a single service
+router.post('/services/:name/restart', (req, res) => {
+    const name = req.params.name;
+    if (!MANAGED_SERVICES.includes(name)) {
+        return res.status(400).json({ ok: false, error: `Unknown service: ${name}` });
+    }
+    try {
+        execSync(`systemctl restart ${name}.service`, { timeout: 10000 });
+        res.json({ ok: true, message: `${name} restarted` });
+    } catch (err) {
+        res.status(500).json({ ok: false, error: `Failed to restart ${name}: ${err.message}` });
+    }
 });
 
 module.exports = { router, stopReconnectLoop, notifyManualConnect };
