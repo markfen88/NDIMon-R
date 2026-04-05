@@ -610,13 +610,13 @@
                     <div class="stat-row"><span class="stat-label">Decoder Stalls</span><span class="stat-val" id="wd-dec-stall">0</span></div>
                   </div>
                   <div class="col-6 col-lg-3">
-                    <div class="stat-row"><span class="stat-label">Decoder Restarts</span><span class="stat-val" id="wd-dec-restart">0</span></div>
-                  </div>
-                  <div class="col-6 col-lg-3">
                     <div class="stat-row"><span class="stat-label">Display Freezes</span><span class="stat-val" id="wd-disp-freeze">0</span></div>
                   </div>
                   <div class="col-6 col-lg-3">
                     <div class="stat-row"><span class="stat-label">Reconnects</span><span class="stat-val" id="wd-reconnect">0</span></div>
+                  </div>
+                  <div class="col-6 col-lg-3">
+                    <div class="stat-row"><span class="stat-label">Svc Restarts</span><span class="stat-val" id="wd-svc-restart">0</span></div>
                   </div>
                 </div>
               </div>
@@ -1278,36 +1278,33 @@ async function saveWatchdogMode() {
 
 async function refreshWatchdogStats() {
   try {
-    const d = await api('/api/health');
+    // Live health state from ndimon-r
+    const h = await api('/api/health');
+    let health = 'ok', stall = 0;
+    if (h.outputs) for (const o of h.outputs) {
+      if (o.health !== 'ok' && o.health !== 'idle') health = o.health;
+      stall = Math.max(stall, o.stall_count || 0);
+    }
+    const hColor = health === 'ok' ? 'color:#22FF88' : health === 'degraded' ? 'color:#FFAA00' : 'color:#FF4444';
+    setText('wd-health', health);
+    const hEl = document.getElementById('wd-health'); if (hEl) hEl.style.cssText = hColor;
+    setText('wd-stall', stall);
+
+    // Action stats from watchdog service
+    const w = await api('/api/watchdog-stats');
     const badge = document.getElementById('wd-badge');
-    const mode = d.watchdog_mode || 'passive';
+    const mode = w.watchdog_mode || 'unknown';
     if (badge) {
-      const colors = { disabled: 'bg-secondary', passive: 'bg-info', active: 'bg-success' };
+      const colors = { disabled: 'bg-secondary', passive: 'bg-info', active: 'bg-success', unknown: 'bg-warning' };
       badge.className = 'badge ' + (colors[mode] || 'bg-secondary');
       badge.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
     }
-    // Aggregate stats from all outputs
-    let health = 'healthy', stall = 0;
-    let recv = 0, video = 0, decStall = 0, decRestart = 0, dispFreeze = 0, reconnect = 0;
-    if (d.outputs) for (const o of d.outputs) {
-      if (o.health !== 'healthy') health = o.health;
-      stall = Math.max(stall, o.stall_count || 0);
-      recv       += o.wd_recv_stalls || 0;
-      video      += o.wd_video_stalls || 0;
-      decStall   += o.wd_decoder_stalls || 0;
-      decRestart += o.wd_decoder_restarts || 0;
-      dispFreeze += o.wd_display_freezes || 0;
-      reconnect  += o.wd_reconnects || 0;
-    }
-    const hColor = health === 'healthy' ? 'color:#22FF88' : health === 'degraded' ? 'color:#FFAA00' : 'color:#FF4444';
-    setText('wd-health', health); const hEl = document.getElementById('wd-health'); if (hEl) hEl.style.cssText = hColor;
-    setText('wd-stall', stall);
-    setText('wd-recv', recv);
-    setText('wd-video', video);
-    setText('wd-dec-stall', decStall);
-    setText('wd-dec-restart', decRestart);
-    setText('wd-disp-freeze', dispFreeze);
-    setText('wd-reconnect', reconnect);
+    setText('wd-recv', w.recv_stalls || 0);
+    setText('wd-video', w.video_stalls || 0);
+    setText('wd-dec-stall', w.decoder_stalls || 0);
+    setText('wd-disp-freeze', w.display_freezes || 0);
+    setText('wd-reconnect', w.reconnects || 0);
+    setText('wd-svc-restart', w.service_restarts || 0);
   } catch {}
 }
 

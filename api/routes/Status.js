@@ -295,6 +295,18 @@ router.get('/health', async (req, res) => {
     }
 });
 
+// GET /api/watchdog-stats — stats from ndimon-watchdog service
+router.get('/watchdog-stats', (req, res) => {
+    const fs = require('fs');
+    try {
+        const data = JSON.parse(fs.readFileSync('/tmp/ndimon-watchdog-stats.json', 'utf8'));
+        res.json(data);
+    } catch {
+        res.json({ watchdog_mode: 'unknown', recv_stalls: 0, video_stalls: 0,
+                   decoder_stalls: 0, display_freezes: 0, reconnects: 0, service_restarts: 0 });
+    }
+});
+
 // GET /api/events  — Server-Sent Events for real-time updates
 router.get('/events', (req, res) => {
     res.setHeader('Content-Type',  'text/event-stream');
@@ -311,7 +323,7 @@ router.get('/events', (req, res) => {
 // ---------------------------------------------------------------------------
 // Service management — real systemd status + per-service restart
 // ---------------------------------------------------------------------------
-const MANAGED_SERVICES = ['ndimon-r', 'ndimon-finder', 'ndimon-api'];
+const MANAGED_SERVICES = ['ndimon-r', 'ndimon-finder', 'ndimon-api', 'ndimon-watchdog'];
 
 function getServiceStatus(name) {
     try {
