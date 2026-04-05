@@ -178,7 +178,7 @@ private:
     ScaleMode scale_mode_ = ScaleMode::Letterbox;
     std::vector<DRMMode> available_modes_;
 
-    static constexpr int kNumBuffers = 2;
+    static constexpr int kNumBuffers = 3;
     DRMBuffer fb_[kNumBuffers];
     int cur_buf_ = 0;
 
@@ -186,11 +186,17 @@ private:
     int       cur_yuv_buf_  = 0;
     int       yuv_fb_state_ = 0;   // 0=untried, 1=ok, -1=unsupported by plane
 
+    // Staging buffer — parallel NEON threads convert into RAM first,
+    // then a single memcpy writes to the DRM buffer. Eliminates tearing
+    // caused by multiple threads writing directly to the scanout buffer.
+    std::vector<uint8_t> stage_buf_;
+    uint32_t stage_stride_ = 0;
+
     // Per-buffer fill cache — prevents overwriting bars every frame,
-    // but must be tracked independently for each buffer in the double-buffer pair.
+    // but must be tracked independently for each buffer in the triple-buffer set.
     uint32_t  last_bg_fill_w_[kNumBuffers]   = {};
     uint32_t  last_bg_fill_h_[kNumBuffers]   = {};
-    ScaleMode last_bg_scale_[kNumBuffers]    = { ScaleMode::Stretch, ScaleMode::Stretch };
+    ScaleMode last_bg_scale_[kNumBuffers]    = { ScaleMode::Stretch, ScaleMode::Stretch, ScaleMode::Stretch };
     void invalidate_fill_cache();   // invalidates all buffers
 
     bool        streaming_   = false;    // true while video frames are being rendered

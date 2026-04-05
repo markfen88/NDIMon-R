@@ -345,29 +345,53 @@ static inline void neon_yuv_to_xrgb_8px(const uint8_t* y_ptr, const uint8_t* u_p
 }
 
 // NEON row converter: UYVY source → XRGB destination (1:1, no scaling)
+// Fully NEON — no scalar extraction loops inside the hot path.
+// UYVY layout: [U0 Y0 V0 Y1] [U2 Y2 V2 Y3] ... (4 bytes per macro-pixel, 2 pixels each)
+// vld4_u8 loads 32 bytes and deinterleaves into 4 x uint8x8 registers:
+//   val[0]=U, val[1]=Y_even, val[2]=V, val[3]=Y_odd   (8 macro-pixels = 16 pixels)
 static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t width) {
     uint32_t x = 0;
-    // Process 8 pixels (16 bytes UYVY = 4 macro-pixels) at a time
-    for (; x + 8 <= width; x += 8) {
-        // UYVY: U0 Y0 V0 Y1 | U2 Y2 V2 Y3 | U4 Y4 V4 Y5 | U6 Y6 V6 Y7
-        uint8x16x2_t raw = vld2q_u8(src + x * 2);
-        // raw.val[0] = U0 V0 U2 V2 U4 V4 U6 V6 U8 V8 ... (even bytes)
-        // raw.val[1] = Y0 Y1 Y2 Y3 Y4 Y5 Y6 Y7 ...       (odd bytes)
-        uint8x8_t y8 = vget_low_u8(raw.val[1]);
-        // Deinterleave U and V from even bytes
-        uint8x8x2_t uv = vuzp_u8(vget_low_u8(raw.val[0]), vget_low_u8(raw.val[0]));
-        // uv.val[0] = U0 U2 U4 U6 U0 U2 U4 U6 (need to expand to per-pixel)
-        // Actually we need per-pixel U/V. For UYVY, each U/V pair covers 2 pixels.
-        // Simpler approach: extract U and V manually
-        uint8_t ubuf[8], vbuf[8];
-        const uint8_t* p = src + x * 2;
-        for (int i = 0; i < 8; i += 2) {
-            ubuf[i] = ubuf[i+1] = p[i*2];      // U shared by pair
-            vbuf[i] = vbuf[i+1] = p[i*2 + 2];  // V shared by pair
-        }
-        neon_yuv_to_xrgb_8px(&raw.val[1][0], ubuf, vbuf, dst + x);
+    // Process 16 pixels (32 bytes UYVY = 8 macro-pixels) per iteration
+    for (; x + 16 <= width; x += 16) {
+        uint8x8x4_t uyvy = vld4_u8(src + x * 2);
+        // uyvy.val[0] = U0 U2 U4 U6 U8 U10 U12 U14  (8 U values, one per macro-pixel)
+        // uyvy.val[1] = Y0 Y2 Y4 Y6 Y8 Y10 Y12 Y14  (8 even Y values)
+        // uyvy.val[2] = V0 V2 V4 V6 V8 V10 V12 V14  (8 V values)
+        // uyvy.val[3] = Y1 Y3 Y5 Y7 Y9 Y11 Y13 Y15  (8 odd Y values)
+
+        // Interleave even/odd Y to get per-pixel Y order
+        uint8x8x2_t y_zip = vzip_u8(uyvy.val[1], uyvy.val[3]);
+        // y_zip.val[0] = Y0 Y1 Y2 Y3 Y4 Y5 Y6 Y7      (first 8 pixels)
+        // y_zip.val[1] = Y8 Y9 Y10 Y11 Y12 Y13 Y14 Y15 (next 8 pixels)
+
+        // Duplicate U/V so each pixel in the pair gets the same chroma
+        uint8x8x2_t u_zip = vzip_u8(uyvy.val[0], uyvy.val[0]);
+        uint8x8x2_t v_zip = vzip_u8(uyvy.val[2], uyvy.val[2]);
+
+        // Convert first 8 pixels
+        neon_yuv_to_xrgb_8px((const uint8_t*)&y_zip.val[0],
+                              (const uint8_t*)&u_zip.val[0],
+                              (const uint8_t*)&v_zip.val[0], dst + x);
+        // Convert next 8 pixels
+        neon_yuv_to_xrgb_8px((const uint8_t*)&y_zip.val[1],
+                              (const uint8_t*)&u_zip.val[1],
+                              (const uint8_t*)&v_zip.val[1], dst + x + 8);
     }
-    // Scalar tail
+    // Process remaining 8 pixels if any
+    if (x + 8 <= width) {
+        // Partial load — need exactly 4 macro-pixels (16 bytes)
+        uint8_t ubuf[8], vbuf[8], ybuf[8];
+        const uint8_t* p = src + x * 2;
+        for (int i = 0; i < 4; i++) {
+            ubuf[i*2] = ubuf[i*2+1] = p[i*4];
+            ybuf[i*2] = p[i*4+1];
+            vbuf[i*2] = vbuf[i*2+1] = p[i*4+2];
+            ybuf[i*2+1] = p[i*4+3];
+        }
+        neon_yuv_to_xrgb_8px(ybuf, ubuf, vbuf, dst + x);
+        x += 8;
+    }
+    // Scalar tail (< 8 pixels)
     for (; x < width; x++) {
         uint32_t pair = x & ~1u;
         int u = src[pair * 2 + 0];
@@ -378,16 +402,30 @@ static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t wi
 }
 
 // NEON row converter: NV12 Y+UV → XRGB (1:1, no scaling)
+// NV12 UV plane is interleaved: U0 V0 U1 V1 ... each pair covers 2 pixels.
 static void neon_nv12_row_to_xrgb(const uint8_t* y_row, const uint8_t* uv_row,
                                     uint32_t* dst, uint32_t width) {
     uint32_t x = 0;
+    for (; x + 16 <= width; x += 16) {
+        // Load 16 UV bytes → 8 U/V pairs for 16 pixels
+        uint8x8x2_t uv = vld2_u8(uv_row + (x & ~1u));
+        // uv.val[0] = U0 U1 U2 U3 U4 U5 U6 U7 (one per pair)
+        // uv.val[1] = V0 V1 V2 V3 V4 V5 V6 V7
+
+        // Duplicate each U/V for both pixels in the pair
+        uint8x8x2_t u_zip = vzip_u8(uv.val[0], uv.val[0]);
+        uint8x8x2_t v_zip = vzip_u8(uv.val[1], uv.val[1]);
+
+        neon_yuv_to_xrgb_8px(y_row + x, (const uint8_t*)&u_zip.val[0],
+                              (const uint8_t*)&v_zip.val[0], dst + x);
+        neon_yuv_to_xrgb_8px(y_row + x + 8, (const uint8_t*)&u_zip.val[1],
+                              (const uint8_t*)&v_zip.val[1], dst + x + 8);
+    }
     for (; x + 8 <= width; x += 8) {
-        // NV12 UV plane is interleaved: U0 V0 U1 V1 ...
-        // Each U/V pair covers 2 horizontal pixels
         uint8_t ubuf[8], vbuf[8];
         for (int i = 0; i < 8; i++) {
-            ubuf[i] = uv_row[(i & ~1)];
-            vbuf[i] = uv_row[(i & ~1) + 1];
+            ubuf[i] = uv_row[(x + i) & ~1u];
+            vbuf[i] = uv_row[((x + i) & ~1u) + 1];
         }
         neon_yuv_to_xrgb_8px(y_row + x, ubuf, vbuf, dst + x);
     }
@@ -1742,16 +1780,15 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
 
     if (!buf.map) return false;
 
-    fill_bg(buf);
-
     Rect dr = compute_dst_rect(frame_w, frame_h);
 
     uint32_t src_stride = stride ? stride : frame_w;
 
-    // Try RGA first
+    // Try RGA first (writes directly to DRM buffer — single-threaded, no tearing)
     bool rga_ok = false;
 #ifdef HAVE_RGA
     if (rga_available_ && data) {
+        fill_bg(buf);  // RGA writes directly to DRM buffer, needs letterbox bars
         uint32_t rga_fmt = 0;
         bool rga_supported = true;
         if (drm_format == DRM_FORMAT_NV12)
@@ -1773,37 +1810,74 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
 #endif
 
     if (!rga_ok && data) {
-        // Software fallback
+        // Software fallback — convert into a RAM staging buffer first, then
+        // single memcpy to the DRM framebuffer. This eliminates tearing caused
+        // by parallel NEON threads writing directly to the scanout buffer while
+        // the display controller is reading it.
+        uint32_t stage_stride_needed = width_ * 4;
+        size_t stage_size = (size_t)stage_stride_needed * height_;
+        if (stage_buf_.size() < stage_size) {
+            stage_buf_.resize(stage_size);
+            stage_stride_ = stage_stride_needed;
+        }
+
+        // Clear letterbox bars in staging buffer
+        if (dr.x > 0 || dr.y > 0 ||
+            dr.x + dr.w < width_ || dr.y + dr.h < height_) {
+            memset(stage_buf_.data(), 0, stage_size);
+        }
+
+        uint8_t* stage = stage_buf_.data();
+
         if (drm_format == DRM_FORMAT_NV12 ||
             drm_format == DRM_FORMAT_NV15 ||
             drm_format == DRM_FORMAT_NV16) {
             sw_nv12_to_xrgb(data, frame_w, frame_h,
                              src_stride,
-                             (uint8_t*)buf.map, buf.stride,
+                             stage, stage_stride_,
                              dr, width_, height_);
         } else if (drm_format == DRM_FORMAT_UYVY) {
             sw_uyvy_to_xrgb(data, frame_w, frame_h,
                              stride ? stride : frame_w * 2,
-                             (uint8_t*)buf.map, buf.stride,
+                             stage, stage_stride_,
                              dr, width_, height_);
         } else {
-            // YUYV / default packed YUV
             uint32_t src_row_bytes = stride ? stride : frame_w * 2u;
             sw_uyvy_to_xrgb(data, frame_w, frame_h, src_row_bytes,
-                             (uint8_t*)buf.map, buf.stride,
+                             stage, stage_stride_,
                              dr, width_, height_);
+        }
+
+        // OSD overlay on staging buffer (before copy to DRM)
+        if (osd_enabled_ && !osd_text_.empty()) {
+            uint32_t* px = (uint32_t*)stage;
+            draw_text_centred(px, stage_stride_ / 4, osd_text_,
+                              width_ / 2, (uint32_t)(0.04f * height_),
+                              0xFFFFFFFFu, 2, width_, height_);
+        }
+
+        // Single bulk copy to DRM buffer — fast, no tearing
+        if (stage_stride_ == buf.stride) {
+            memcpy(buf.map, stage, stage_size);
+        } else {
+            // Stride mismatch — copy row by row
+            for (uint32_t y = 0; y < height_; y++) {
+                memcpy((uint8_t*)buf.map + (size_t)y * buf.stride,
+                       stage + (size_t)y * stage_stride_,
+                       width_ * 4);
+            }
+        }
+    } else if (rga_ok) {
+        // RGA handled it — just do OSD if needed
+        if (osd_enabled_ && !osd_text_.empty()) {
+            uint32_t* px = (uint32_t*)buf.map;
+            draw_text_centred(px, buf.stride / 4, osd_text_,
+                              width_ / 2, (uint32_t)(0.04f * height_),
+                              0xFFFFFFFFu, 2, width_, height_);
         }
     }
 
     streaming_ = true;
-
-    // OSD overlay (optional — disabled by default)
-    if (osd_enabled_ && !osd_text_.empty()) {
-        uint32_t* px = (uint32_t*)buf.map;
-        draw_text_centred(px, buf.stride / 4, osd_text_,
-                          width_ / 2, (uint32_t)(0.04f * height_),
-                          0xFFFFFFFFu, 2, width_, height_);
-    }
 
     bool ok = commit_fb(buf.fb_id);
     if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
@@ -1903,12 +1977,22 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
         }
 #endif
         if (!rga_ok) {
-            // RGA unavailable — use cached mmap of DMA-BUF for software conversion.
+            // RGA unavailable — software conversion via staging buffer.
+            uint32_t stage_stride_needed = width_ * 4;
+            size_t stage_size = (size_t)stage_stride_needed * height_;
+            if (stage_buf_.size() < stage_size) {
+                stage_buf_.resize(stage_size);
+                stage_stride_ = stage_stride_needed;
+            }
+            if (dr.x > 0 || dr.y > 0 ||
+                dr.x + dr.w < width_ || dr.y + dr.h < height_) {
+                memset(stage_buf_.data(), 0, stage_size);
+            }
+
             if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV16) {
                 size_t uv_rows = (format == DRM_FORMAT_NV12) ? (frame_h / 2) : frame_h;
                 size_t map_size = (size_t)stride_y * frame_h
                                 + (size_t)stride_uv * uv_rows;
-                // Cache mmap by fd to avoid per-frame mmap/munmap overhead
                 auto it = dma_mmap_cache_.find(dma_fd);
                 void* mapped = nullptr;
                 if (it != dma_mmap_cache_.end() && it->second.size == map_size) {
@@ -1918,7 +2002,6 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
                         ::munmap(it->second.ptr, it->second.size);
                         dma_mmap_cache_.erase(it);
                     }
-                    // Evict old entries if cache grows beyond MPP buffer pool size
                     if (dma_mmap_cache_.size() >= 8) clear_dma_mmap_cache();
                     mapped = ::mmap(nullptr, map_size, PROT_READ, MAP_SHARED, dma_fd, 0);
                     if (mapped != MAP_FAILED)
@@ -1927,24 +2010,40 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
                 if (mapped && mapped != MAP_FAILED) {
                     sw_nv12_to_xrgb((const uint8_t*)mapped,
                                     frame_w, frame_h, stride_y,
-                                    (uint8_t*)buf.map, buf.stride,
+                                    stage_buf_.data(), stage_stride_,
                                     dr, width_, height_);
-                } else {
-                    if (buf.map) memset(buf.map, 0, buf.size);
                 }
+            }
+
+            // OSD on staging buffer
+            if (osd_enabled_ && !osd_text_.empty()) {
+                uint32_t* px = (uint32_t*)stage_buf_.data();
+                draw_text_centred(px, stage_stride_ / 4, osd_text_,
+                                  width_ / 2, (uint32_t)(0.04f * height_),
+                                  0xFFFFFFFFu, 2, width_, height_);
+            }
+
+            // Bulk copy to DRM buffer
+            if (stage_stride_ == buf.stride) {
+                memcpy(buf.map, stage_buf_.data(), stage_size);
             } else {
-                if (buf.map) memset(buf.map, 0, buf.size);
+                for (uint32_t y = 0; y < height_; y++) {
+                    memcpy((uint8_t*)buf.map + (size_t)y * buf.stride,
+                           stage_buf_.data() + (size_t)y * stage_stride_,
+                           width_ * 4);
+                }
+            }
+        } else {
+            // RGA handled it — OSD directly
+            if (osd_enabled_ && !osd_text_.empty()) {
+                uint32_t* px = (uint32_t*)buf.map;
+                draw_text_centred(px, buf.stride / 4, osd_text_,
+                                  width_ / 2, (uint32_t)(0.04f * height_),
+                                  0xFFFFFFFFu, 2, width_, height_);
             }
         }
 
         streaming_ = true;
-
-        if (osd_enabled_ && !osd_text_.empty()) {
-            uint32_t* px = (uint32_t*)buf.map;
-            draw_text_centred(px, buf.stride / 4, osd_text_,
-                              width_ / 2, (uint32_t)(0.04f * height_),
-                              0xFFFFFFFFu, 2, width_, height_);
-        }
 
         bool ok = commit_fb(buf.fb_id);
         if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
@@ -2266,6 +2365,9 @@ void DRMDisplay::clear_dma_mmap_cache() {
 }
 
 void DRMDisplay::destroy() {
+    stage_buf_.clear();
+    stage_buf_.shrink_to_fit();
+    stage_stride_ = 0;
     clear_dma_mmap_cache();
     if (import_fb_id_) {
         drmModeRmFB(drm_fd_, import_fb_id_);
