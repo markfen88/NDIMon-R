@@ -974,7 +974,11 @@ private:
 
             uint32_t drm_fmt = DRM_FORMAT_YUYV;
             uint32_t fcc = (uint32_t)vf.fourcc;
-            if (fcc == NDI_LIB_FOURCC('U','Y','V','Y'))
+            if (fcc == NDI_LIB_FOURCC('B','G','R','X'))
+                drm_fmt = DRM_FORMAT_XRGB8888;
+            else if (fcc == NDI_LIB_FOURCC('B','G','R','A'))
+                drm_fmt = DRM_FORMAT_ARGB8888;
+            else if (fcc == NDI_LIB_FOURCC('U','Y','V','Y'))
                 drm_fmt = DRM_FORMAT_UYVY;
             else if (fcc == NDI_LIB_FOURCC('N','V','1','2'))
                 drm_fmt = DRM_FORMAT_NV12;

@@ -1743,6 +1743,40 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
     if (!initialized_) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
 
+    // BGRX/BGRA direct path: SDK already converted to RGB — just copy to DRM buffer.
+    // No color conversion, no staging buffer, no NEON threads.
+    if ((drm_format == DRM_FORMAT_XRGB8888 || drm_format == DRM_FORMAT_ARGB8888) && data) {
+        DRMBuffer& buf = fb_[cur_buf_];
+        if (!buf.fb_id || buf.width != width_ || buf.height != height_) {
+            free_fb(buf);
+            if (!alloc_fb(buf, width_, height_)) return false;
+        }
+        if (!buf.map) return false;
+
+        fill_bg(buf);
+        Rect dr = compute_dst_rect(frame_w, frame_h);
+        uint32_t src_stride_bytes = stride ? stride : frame_w * 4u;
+        uint32_t copy_w = std::min(frame_w, dr.w) * 4u;
+        uint32_t copy_h = std::min(frame_h, dr.h);
+
+        for (uint32_t y = 0; y < copy_h; y++) {
+            memcpy((uint8_t*)buf.map + (size_t)(dr.y + y) * buf.stride + dr.x * 4u,
+                   data + (size_t)y * src_stride_bytes,
+                   copy_w);
+        }
+
+        streaming_ = true;
+        if (osd_enabled_ && !osd_text_.empty()) {
+            uint32_t* px = (uint32_t*)buf.map;
+            draw_text_centred(px, buf.stride / 4, osd_text_,
+                              width_ / 2, (uint32_t)(0.04f * height_),
+                              0xFFFFFFFFu, 2, width_, height_);
+        }
+        bool ok = commit_fb(buf.fb_id);
+        if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
+        return true;
+    }
+
     // UYVY native path: feed 16bpp UYVY dumb buffer to the VOP2 Cluster plane.
     // The display controller handles YUV→RGB during scanout — zero CPU colour math.
     // If commit_fb fails (plane doesn't support UYVY in this lease), fall back
