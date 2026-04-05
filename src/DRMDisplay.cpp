@@ -2109,14 +2109,14 @@ bool DRMDisplay::show_splash(bool source_available) {
         }
     }
 
-    // ── Compute proportional text scale from text_height_pct ───────────────
+    // ── Compute proportional font scale from text_height_pct ────────────────
     // The 8x8 bitmap font has 8 pixel rows; scale = desired_pixel_height / 8.
+    // All text elements use the same scale for consistency.
     float pct = std::max(1.0f, std::min(sc.text_height_pct, 20.0f));
-    int text_scale = std::max(1, (int)(pct / 100.0f * height_ / 8.0f));
-    int info_scale = std::max(1, text_scale / 2);  // device info at half size
-    int text_h = 8 * text_scale;
-    int info_h = 8 * info_scale;
-    uint32_t margin = (uint32_t)(info_h);
+    int font_scale = std::max(1, (int)(pct / 100.0f * height_ / 8.0f));
+    int font_h = 8 * font_scale;
+    // 2% of screen height as margin, minimum one glyph height
+    uint32_t margin = std::max((uint32_t)font_h, (uint32_t)(height_ * 0.02f));
 
     // ── Signal status label — top-left corner ────────────────────────────────
     if (sc.show_signal_text) {
@@ -2124,26 +2124,26 @@ bool DRMDisplay::show_splash(bool source_available) {
         if (!label.empty()) {
             draw_text_left(pixels, stride_u32, label,
                            margin, margin,
-                           accent_color, text_scale, width_, height_);
+                           accent_color, font_scale, width_, height_);
         }
     }
 
     // ── Device info — top-right: device name + URL ───────────────────────────
     {
         const auto& dev = Config::instance().device;
-        int line_h = info_h + 4;
+        int line_h = font_h + 4;
         uint32_t rx = width_ - margin;
         uint32_t ty = margin;
 
         if (sc.show_device_name && !dev.device_name.empty()) {
             draw_text_right(pixels, stride_u32, dev.device_name,
-                            rx, ty, accent_color, info_scale, width_, height_);
+                            rx, ty, accent_color, font_scale, width_, height_);
             ty += (uint32_t)line_h;
         }
         if (sc.show_device_url && !dev.device_ip.empty()) {
             std::string url = "http://" + dev.device_ip;
             draw_text_right(pixels, stride_u32, url,
-                            rx, ty, accent_color, info_scale, width_, height_);
+                            rx, ty, accent_color, font_scale, width_, height_);
         }
     }
 
