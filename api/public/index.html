@@ -194,7 +194,6 @@
         <div class="card mb-3">
           <div class="card-header"><i class="bi bi-lightning-charge-fill"></i>Quick Actions</div>
           <div class="card-body d-grid gap-2">
-            <button class="btn btn-outline-danger btn-sm" onclick="doDisconnect()"><i class="bi bi-x-circle me-1"></i>Disconnect</button>
             <button class="btn btn-outline-primary btn-sm" onclick="gotoNDI()"><i class="bi bi-broadcast-pin me-1"></i>Change Source</button>
             <button class="btn btn-outline-secondary btn-sm" onclick="refreshSources()"><i class="bi bi-arrow-repeat me-1"></i>Refresh Sources</button>
           </div>
@@ -216,18 +215,11 @@
 
       <div class="col-lg-5">
         <div class="card mb-3">
-          <div class="card-header"><i class="bi bi-plug-fill"></i>Current Connection</div>
+          <div class="card-header"><i class="bi bi-plug-fill"></i>Current Connections</div>
           <div class="card-body">
-            <div class="stat-row"><span class="stat-label">Status</span><span id="ndi-badge">—</span></div>
-            <div class="stat-row"><span class="stat-label">Source</span><span class="stat-val" id="ndi-src">None</span></div>
-            <div class="stat-row"><span class="stat-label">Resolution</span><span class="stat-val" id="ndi-res">—</span></div>
-            <div class="stat-row"><span class="stat-label">FPS</span><span class="stat-val" id="ndi-fps">—</span></div>
-            <div class="stat-row"><span class="stat-label">Codec</span><span class="stat-val" id="ndi-codec">—</span></div>
+            <div id="ndi-connections">—</div>
             <hr class="section-divider">
-            <div class="d-flex gap-2">
-              <button class="btn btn-danger btn-sm flex-fill" onclick="doDisconnect()"><i class="bi bi-x-circle me-1"></i>Disconnect</button>
-              <button class="btn btn-outline-secondary btn-sm" onclick="refreshSources()"><i class="bi bi-arrow-repeat me-1"></i>Refresh</button>
-            </div>
+            <button class="btn btn-outline-secondary btn-sm" onclick="refreshSources()"><i class="bi bi-arrow-repeat me-1"></i>Refresh Sources</button>
           </div>
         </div>
         <div class="row g-2">
@@ -1028,14 +1020,26 @@ function updateDash() {
 }
 
 function updateNDIState() {
-  const b = document.getElementById('ndi-badge');
-  if (b) b.innerHTML = S.connected
-    ? '<span class="badge-live">● LIVE</span>'
-    : '<span style="color:var(--text-muted);font-size:.85rem">Idle</span>';
-  setText('ndi-src',   S.source_name||'None');
-  setText('ndi-res',   S.input_width ? S.input_width+'×'+S.input_height : '—');
-  setText('ndi-fps',   S.fps>0 ? S.fps.toFixed(2)+' fps' : '—');
-  setText('ndi-codec', fmtCodec(S.codec));
+  // Build per-output connection status
+  const el = document.getElementById('ndi-connections');
+  if (el && S.outputs?.length) {
+    el.innerHTML = S.outputs.map((out, idx) => {
+      const badge = out.connected
+        ? '<span class="badge-live">● LIVE</span>'
+        : '<span style="color:var(--text-muted);font-size:.85rem">Idle</span>';
+      const label = out.output_alias || `Output ${idx+1}`;
+      const src = out.source_name || 'None';
+      const res = out.input_width ? `${out.input_width}×${out.input_height}` : '—';
+      const fps = out.fps > 0 ? out.fps.toFixed(1)+' fps' : '—';
+      const codec = fmtCodec(out.codec);
+      return `<div${idx > 0 ? ' style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"' : ''}>
+        <div class="stat-row"><span class="stat-label">${esc(label)}</span>${badge}</div>
+        <div class="stat-row"><span class="stat-label">Source</span><span class="stat-val">${esc(src)}</span></div>
+        <div class="stat-row"><span class="stat-label">Resolution</span><span class="stat-val">${res}</span></div>
+        <div class="stat-row"><span class="stat-label">FPS / Codec</span><span class="stat-val">${fps} / ${codec}</span></div>
+      </div>`;
+    }).join('');
+  }
   if (S.decoder) {
     setVal('tally-sel', S.decoder.tally);
     setVal('ndi-audio-sel', S.decoder.audio);
@@ -1051,10 +1055,7 @@ function renderSrcList() {
   const noneItem = `<div class="source-item ${noneActive?'active-src':''}">
     <span class="src-dot ${noneActive?'on':'off'}"></span>
     <span class="src-name">None</span>
-    ${noneActive
-      ? '<span class="badge-live">ACTIVE</span>'
-      : `<button class="btn btn-outline-secondary btn-sm" style="font-size:.78rem;padding:3px 10px" onclick="doDisconnect()"><i class="bi bi-x-circle me-1"></i>Disconnect</button>`
-    }
+    ${noneActive ? '<span class="badge-live">ACTIVE</span>' : ''}
   </div>`;
   const noSrcMsg = !S.sources.length
     ? '<div style="color:var(--text-muted);text-align:center;padding:20px 0;font-size:.85rem"><i class="bi bi-wifi-off"></i> No NDI sources found — check network or use Manual Connect</div>'
