@@ -311,7 +311,7 @@ router.get('/events', (req, res) => {
 // ---------------------------------------------------------------------------
 // Service management — real systemd status + per-service restart
 // ---------------------------------------------------------------------------
-const MANAGED_SERVICES = ['ndimon-r', 'ndimon-finder', 'ndimon-api', 'ndimon-watchdog'];
+const MANAGED_SERVICES = ['ndimon-r', 'ndimon-finder', 'ndimon-api'];
 
 function getServiceStatus(name) {
     try {

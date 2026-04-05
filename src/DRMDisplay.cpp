@@ -2120,24 +2120,45 @@ bool DRMDisplay::show_splash(bool source_available) {
     uint32_t margin_x = (uint32_t)(width_  * 0.05f);
     uint32_t margin_y = (uint32_t)(height_ * 0.05f);
 
-    // ── Signal status label — top-left corner ────────────────────────────────
-    if (sc.show_signal_text) {
-        const std::string& label = source_available ? sc.text_live : sc.text_idle;
-        if (!label.empty()) {
-            draw_text_left(pixels, stride_u32, label,
-                           margin_x, margin_y,
-                           accent_color, font_scale, width_, height_);
+    // ── Top-left: signal text + sources available ──────────────────────────
+    {
+        int line_h = font_h + 4;
+        uint32_t ty = margin_y;
+
+        if (sc.show_signal_text) {
+            const std::string& label = source_available ? sc.text_live : sc.text_idle;
+            if (!label.empty()) {
+                draw_text_left(pixels, stride_u32, label,
+                               margin_x, ty,
+                               accent_color, font_scale, width_, height_);
+                ty += (uint32_t)line_h;
+            }
+        }
+
+        if (sc.show_sources_available) {
+            // Read source count from ndimon-sources.json, subtract 1 for "None"
+            int src_count = 0;
+            try {
+                std::ifstream f("/etc/ndimon-sources.json");
+                if (f.is_open()) {
+                    nlohmann::json j;
+                    f >> j;
+                    src_count = std::max(0, j.value("count", 0) - 1);
+                }
+            } catch (...) {}
+            std::string src_text = "Sources: " + std::to_string(src_count);
+            draw_text_left(pixels, stride_u32, src_text,
+                           margin_x, ty, accent_color, font_scale, width_, height_);
         }
     }
 
-    // ── Device info — top-right: NDI name, URL, sources count ──────────────
+    // ── Top-right: NDI name + URL ────────────────────────────────────────────
     {
         const auto& dev = Config::instance().device;
         int line_h = font_h + 4;
         uint32_t rx = width_ - margin_x;
         uint32_t ty = margin_y;
 
-        // Use NDI receiver alias; fall back to device_name
         const std::string& ndi_name = dev.ndi_recv_name.empty()
                                         ? dev.device_name : dev.ndi_recv_name;
         if (sc.show_device_name && !ndi_name.empty()) {
@@ -2148,22 +2169,6 @@ bool DRMDisplay::show_splash(bool source_available) {
         if (sc.show_device_url && !dev.device_ip.empty()) {
             std::string url = "http://" + dev.device_ip;
             draw_text_right(pixels, stride_u32, url,
-                            rx, ty, accent_color, font_scale, width_, height_);
-            ty += (uint32_t)line_h;
-        }
-        if (sc.show_sources_available) {
-            // Read source count from ndimon-sources.json
-            int src_count = 0;
-            try {
-                std::ifstream f("/etc/ndimon-sources.json");
-                if (f.is_open()) {
-                    nlohmann::json j;
-                    f >> j;
-                    src_count = j.value("count", 0);
-                }
-            } catch (...) {}
-            std::string src_text = "Sources: " + std::to_string(src_count);
-            draw_text_right(pixels, stride_u32, src_text,
                             rx, ty, accent_color, font_scale, width_, height_);
         }
     }
