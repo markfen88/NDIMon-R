@@ -775,7 +775,11 @@ public:
         // Render splash asynchronously — set by disconnect_source/forget_source
         // so the IPC thread isn't blocked by the 4K software fill.
         if (splash_requested_.exchange(false)) {
-            if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
+            std::cout << "[Worker" << ch_num_ << "] Rendering splash (async)\n";
+            if (drm_ && drm_->is_initialized()) {
+                bool ok = drm_->show_splash(false);
+                std::cout << "[Worker" << ch_num_ << "] Splash render: " << (ok ? "ok" : "FAILED") << "\n";
+            }
         }
 
         // If DS routed us to a source via allow_controlling but we have no display,
