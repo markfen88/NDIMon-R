@@ -461,6 +461,12 @@
                 <input class="form-check-input" type="checkbox" id="sp-show-devurl" checked>
               </div>
             </div>
+            <div class="mb-2 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Sources Available <small class="text-muted">(top-right)</small></label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="sp-show-sources" checked>
+              </div>
+            </div>
             <div class="mb-3 d-flex align-items-center gap-3">
               <label class="form-label mb-0 flex-fill">Decorative Box</label>
               <div class="form-check form-switch mb-0">
@@ -1151,6 +1157,7 @@ async function loadSplashSettings() {
     setCheck('sp-show-signal', d.show_signal_text !== false);
     setCheck('sp-show-devname', d.show_device_name !== false);
     setCheck('sp-show-devurl', d.show_device_url !== false);
+    setCheck('sp-show-sources', d.show_sources_available !== false);
     setCheck('sp-show-box', !!d.show_box);
   } catch(e) { console.warn('splash config load failed', e); }
 }
@@ -1269,6 +1276,7 @@ async function saveSplash() {
     show_signal_text: document.getElementById('sp-show-signal').checked,
     show_device_name: document.getElementById('sp-show-devname').checked,
     show_device_url:  document.getElementById('sp-show-devurl').checked,
+    show_sources_available: document.getElementById('sp-show-sources').checked,
     show_box:    document.getElementById('sp-show-box').checked,
   };
   await post('/v1/Splash/config', cfg);

@@ -118,6 +118,7 @@ void Config::load() {
         splash.show_signal_text  = sp.value("show_signal_text",  true);
         splash.show_device_name  = sp.value("show_device_name",  true);
         splash.show_device_url   = sp.value("show_device_url",   true);
+        splash.show_sources_available = sp.value("show_sources_available", true);
     }
 
     // OSD config

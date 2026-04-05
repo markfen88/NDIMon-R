@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <nlohmann/json.hpp>
 #include <cerrno>
 #include <stdexcept>
 #include <cmath>
@@ -2129,21 +2130,40 @@ bool DRMDisplay::show_splash(bool source_available) {
         }
     }
 
-    // ── Device info — top-right: device name + URL ───────────────────────────
+    // ── Device info — top-right: NDI name, URL, sources count ──────────────
     {
         const auto& dev = Config::instance().device;
         int line_h = font_h + 4;
         uint32_t rx = width_ - margin_x;
         uint32_t ty = margin_y;
 
-        if (sc.show_device_name && !dev.device_name.empty()) {
-            draw_text_right(pixels, stride_u32, dev.device_name,
+        // Use NDI receiver alias; fall back to device_name
+        const std::string& ndi_name = dev.ndi_recv_name.empty()
+                                        ? dev.device_name : dev.ndi_recv_name;
+        if (sc.show_device_name && !ndi_name.empty()) {
+            draw_text_right(pixels, stride_u32, ndi_name,
                             rx, ty, accent_color, font_scale, width_, height_);
             ty += (uint32_t)line_h;
         }
         if (sc.show_device_url && !dev.device_ip.empty()) {
             std::string url = "http://" + dev.device_ip;
             draw_text_right(pixels, stride_u32, url,
+                            rx, ty, accent_color, font_scale, width_, height_);
+            ty += (uint32_t)line_h;
+        }
+        if (sc.show_sources_available) {
+            // Read source count from ndimon-sources.json
+            int src_count = 0;
+            try {
+                std::ifstream f("/etc/ndimon-sources.json");
+                if (f.is_open()) {
+                    nlohmann::json j;
+                    f >> j;
+                    src_count = j.value("count", 0);
+                }
+            } catch (...) {}
+            std::string src_text = "Sources: " + std::to_string(src_count);
+            draw_text_right(pixels, stride_u32, src_text,
                             rx, ty, accent_color, font_scale, width_, height_);
         }
     }

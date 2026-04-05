@@ -70,6 +70,7 @@ struct SplashConfig {
     bool show_signal_text  = true;
     bool show_device_name  = true;
     bool show_device_url   = true;
+    bool show_sources_available = true;
 };
 
 // On-screen display — overlaid on live video frames (disabled by default)

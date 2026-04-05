@@ -26,6 +26,7 @@ const DEFAULTS = {
     show_signal_text: true,
     show_device_name: true,
     show_device_url:  true,
+    show_sources_available: true,
 };
 
 function readSplash() {
@@ -56,7 +57,7 @@ router.post('/config', (req, res) => {
     const strFields   = ['bg_idle','bg_live','accent_idle','accent_live','logo_path','text_idle','text_live'];
     const floatFields = ['logo_x_pct','logo_y_pct','logo_w_pct','text_height_pct'];
     const intFields   = [];
-    const boolFields  = ['show_box','show_signal_text','show_device_name','show_device_url'];
+    const boolFields  = ['show_box','show_signal_text','show_device_name','show_device_url','show_sources_available'];
 
     for (const f of strFields)   if (f in body) cur[f] = String(body[f]);
     for (const f of floatFields) if (f in body) cur[f] = Math.max(0, Math.min(100, parseFloat(body[f]) || 0));
