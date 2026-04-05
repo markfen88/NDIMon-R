@@ -83,10 +83,14 @@ systemd/             — Service files
 - **HX codec passthrough** — NDI SDK delivers compressed H.264/H.265 bitstreams directly; hardware decoders handle the rest (no SDK software decode)
 - **FrameSync for Standard NDI** — uncompressed streams use `NDIlib_framesync` for A/V sync, display timing, automatic frame duplication/dropping, and silence insertion
 - **Zero-copy pipeline** — DMA-BUF from decoder to DRM framebuffer (MPP/V4L2); uncompressed frames hold SDK reference and free from display thread
-- **`color_format_fastest`** — avoids NDI SDK internal color conversion
+- **`color_format_fastest`** — SDK ignores `color_format_BGRX_BGRA` on ARM and always delivers UYVY. `color_format_fastest` avoids unnecessary conversion attempts. Single-threaded NEON UYVY→XRGB conversion (RowPool thread pool was removed — saturated memory bandwidth on RK3399)
 - **Factory pattern for decoders** — `VideoDecoder::create()` auto-selects MPP > V4L2 > Software
 - **DRM leases** — each output connector gets independent DRM master rights
 - **Node.js owns reconnect logic** — C++ pushes IPC events, API handles retry scheduling
+- **Splash screen on disconnect** — `disconnect_source()` drains the frame queue, clears `streaming_` flag, and renders splash. `show_splash()` always renders (caller responsible for stopping pipeline first)
+- **NDI groups are case-sensitive** — SDK treats "Production" and "production" as distinct groups. Frontend preserves case as entered.
+- **Atomic config writes** — all JSON config writes (C++ and Node.js) use write-to-tmp-then-rename to prevent corrupt reads during concurrent access
+- **SSE connection management** — browser closes old EventSource before reconnecting to prevent connection leaks that exhaust the per-host connection limit
 
 ## Reliability / Appliance Operation
 
@@ -167,10 +171,40 @@ Stream type is reported in worker status as `stream_type: "Standard" | "HX" | "u
 
 - `ndimon-dec1-settings.json` — audio, screensaver, tally, color space, source
 - `ndimon-rx-settings.json` — transport mode (TCP/UDP/Multicast/M-TCP/RUDP)
-- `ndimon-find-settings.json` — discovery server enable/IP
+- `ndimon-find-settings.json` — discovery server IP (enabled when IP is non-empty)
 - `ndimon-device-settings.json` — device name, NDI receiver alias
 - `ndi-config.json` — off-subnet source IPs
-- `ndi-group.json` — NDI groups
+- `ndi-group.json` — NDI groups (case-sensitive)
+- `ndimon-splash-settings.json` — splash screen appearance
+- `ndimon-osd-settings.json` — on-screen display config
+
+### Config File Ownership
+
+Each config file has a single designated writer to prevent race conditions:
+
+| File | Writer | Readers |
+|------|--------|---------|
+| `ndimon-find-settings.json` | ndimon-api | ndimon-r, ndimon-finder |
+| `ndi-group.json` | ndimon-api | ndimon-r, ndimon-finder |
+| `ndi-config.json` | ndimon-api | ndimon-r, ndimon-finder |
+| `ndimon-rx-settings.json` | ndimon-api | ndimon-r |
+| `ndimon-splash-settings.json` | ndimon-api | ndimon-r |
+| `ndimon-osd-settings.json` | ndimon-api | ndimon-r |
+| `ndimon-device-settings.json` | ndimon-api + ndimon-r (alias init) | both |
+| `ndimon-dec{N}-settings.json` | ndimon-api + ndimon-r (source/mode) | both |
+| `ndimon-sources.json` | ndimon-finder | ndimon-api |
+
+**Rules:**
+- C++ code must NOT write files owned by the API (no `Config::save()` — it was removed)
+- C++ writes only: `save_device()` for alias init, `set_output()` for source/mode changes
+- All writes use atomic write-to-tmp-then-rename to prevent partial reads
+- Config reload is driven by explicit `reload_config` IPC from Node.js after writes
+
+### Discovery Server Config
+
+DS is enabled by IP presence — no separate toggle. If `NDIDisServIP` is non-empty,
+DS is enabled (`NDIDisServ=NDIDisServEn`). If blank, DS is disabled. The API
+derives the enabled state from the IP to eliminate toggle desync bugs.
 
 ## Coding Conventions
 
