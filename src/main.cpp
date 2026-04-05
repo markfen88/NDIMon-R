@@ -780,6 +780,15 @@ public:
     }
     int stall_count() const { return stall_count_; }
 
+    // Watchdog stats accessors
+    int wd_recv_stalls()      const { return wd_recv_stalls_; }
+    int wd_video_stalls()     const { return wd_video_stalls_; }
+    int wd_decoder_stalls()   const { return wd_decoder_stalls_; }
+    int wd_decoder_restarts() const { return wd_decoder_restarts_; }
+    int wd_display_freezes()  const { return wd_display_freezes_; }
+    int wd_display_resets()   const { return wd_display_resets_; }
+    int wd_reconnects()       const { return wd_reconnects_; }
+
     std::string health_state() const {
         if (!connected_.load()) return "idle";
         if (stall_count_ >= 60) return "stalled";
@@ -1595,13 +1604,13 @@ int main(int argc, char* argv[]) {
                 h["display_stale_ms"] = w->display_stale_ms();
                 h["stall_count"]      = w->stall_count();
                 // Watchdog statistics
-                h["wd_recv_stalls"]      = w->wd_recv_stalls_;
-                h["wd_video_stalls"]     = w->wd_video_stalls_;
-                h["wd_decoder_stalls"]   = w->wd_decoder_stalls_;
-                h["wd_decoder_restarts"] = w->wd_decoder_restarts_;
-                h["wd_display_freezes"]  = w->wd_display_freezes_;
-                h["wd_display_resets"]   = w->wd_display_resets_;
-                h["wd_reconnects"]       = w->wd_reconnects_;
+                h["wd_recv_stalls"]      = w->wd_recv_stalls();
+                h["wd_video_stalls"]     = w->wd_video_stalls();
+                h["wd_decoder_stalls"]   = w->wd_decoder_stalls();
+                h["wd_decoder_restarts"] = w->wd_decoder_restarts();
+                h["wd_display_freezes"]  = w->wd_display_freezes();
+                h["wd_display_resets"]   = w->wd_display_resets();
+                h["wd_reconnects"]       = w->wd_reconnects();
                 j["outputs"].push_back(h);
             }
             return j;
