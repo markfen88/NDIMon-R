@@ -1177,20 +1177,21 @@ void DRMDisplay::flip_handler(int /*fd*/, unsigned /*seq*/,
 }
 
 void DRMDisplay::wait_for_flip() {
-    // Non-blocking: drain any pending flip event without stalling the decode thread.
-    // If the flip hasn't completed yet, we return immediately; commit_fb() will
-    // drop the incoming frame rather than block for up to 50ms.
     if (!flip_pending_.load()) return;
 
     drmEventContext ev = {};
     ev.version = DRM_EVENT_CONTEXT_VERSION;
     ev.page_flip_handler = flip_handler;
 
+    // Wait up to 5ms for the flip event. This is short enough to avoid
+    // stalling the pipeline (~1/3 of a frame at 60Hz) but long enough
+    // to reliably catch the vsync event. Without this, a non-blocking
+    // poll(0) races with vsync timing and causes commit_fb to drop
+    // every frame, freezing the display.
     struct pollfd pfd = { drm_fd_, POLLIN, 0 };
-    int r = poll(&pfd, 1, 0); // non-blocking
+    int r = poll(&pfd, 1, 5);
     if (r > 0 && (pfd.revents & POLLIN))
         drmHandleEvent(drm_fd_, &ev);
-    // If flip_pending_ is still true after this, commit_fb() drops the frame.
 }
 
 bool DRMDisplay::commit_fb(uint32_t fb_id) {
