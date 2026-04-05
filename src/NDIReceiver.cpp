@@ -82,7 +82,7 @@ std::string NDIReceiver::find_source_url(const std::string& name) {
 bool NDIReceiver::create_recv() {
     if (recv_) return true;  // already created
     NDIlib_recv_create_v3_t create = {};
-    create.color_format       = NDIlib_recv_color_format_BGRX_BGRA;
+    create.color_format       = NDIlib_recv_color_format_fastest;
     create.bandwidth          = NDIlib_recv_bandwidth_highest;
     create.allow_video_fields = true;   // fastest implies true; be explicit
     create.p_ndi_recv_name    = recv_name_.c_str();

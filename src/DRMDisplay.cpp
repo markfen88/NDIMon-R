@@ -1844,71 +1844,36 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
 #endif
 
     if (!rga_ok && data) {
-        // Software fallback — convert into a RAM staging buffer first, then
-        // single memcpy to the DRM framebuffer. This eliminates tearing caused
-        // by parallel NEON threads writing directly to the scanout buffer while
-        // the display controller is reading it.
-        uint32_t stage_stride_needed = width_ * 4;
-        size_t stage_size = (size_t)stage_stride_needed * height_;
-        if (stage_buf_.size() < stage_size) {
-            stage_buf_.resize(stage_size);
-            stage_stride_ = stage_stride_needed;
-        }
-
-        // Clear letterbox bars in staging buffer
-        if (dr.x > 0 || dr.y > 0 ||
-            dr.x + dr.w < width_ || dr.y + dr.h < height_) {
-            memset(stage_buf_.data(), 0, stage_size);
-        }
-
-        uint8_t* stage = stage_buf_.data();
+        // Software fallback — NEON convert directly to DRM back buffer.
+        // Triple buffering (3 buffers) ensures this buffer is never being
+        // scanned out, so direct writes are tear-free.
+        fill_bg(buf);
 
         if (drm_format == DRM_FORMAT_NV12 ||
             drm_format == DRM_FORMAT_NV15 ||
             drm_format == DRM_FORMAT_NV16) {
             sw_nv12_to_xrgb(data, frame_w, frame_h,
                              src_stride,
-                             stage, stage_stride_,
+                             (uint8_t*)buf.map, buf.stride,
                              dr, width_, height_);
         } else if (drm_format == DRM_FORMAT_UYVY) {
             sw_uyvy_to_xrgb(data, frame_w, frame_h,
                              stride ? stride : frame_w * 2,
-                             stage, stage_stride_,
+                             (uint8_t*)buf.map, buf.stride,
                              dr, width_, height_);
         } else {
             uint32_t src_row_bytes = stride ? stride : frame_w * 2u;
             sw_uyvy_to_xrgb(data, frame_w, frame_h, src_row_bytes,
-                             stage, stage_stride_,
+                             (uint8_t*)buf.map, buf.stride,
                              dr, width_, height_);
         }
+    }
 
-        // OSD overlay on staging buffer (before copy to DRM)
-        if (osd_enabled_ && !osd_text_.empty()) {
-            uint32_t* px = (uint32_t*)stage;
-            draw_text_centred(px, stage_stride_ / 4, osd_text_,
-                              width_ / 2, (uint32_t)(0.04f * height_),
-                              0xFFFFFFFFu, 2, width_, height_);
-        }
-
-        // Single bulk copy to DRM buffer — fast, no tearing
-        if (stage_stride_ == buf.stride) {
-            memcpy(buf.map, stage, stage_size);
-        } else {
-            // Stride mismatch — copy row by row
-            for (uint32_t y = 0; y < height_; y++) {
-                memcpy((uint8_t*)buf.map + (size_t)y * buf.stride,
-                       stage + (size_t)y * stage_stride_,
-                       width_ * 4);
-            }
-        }
-    } else if (rga_ok) {
-        // RGA handled it — just do OSD if needed
-        if (osd_enabled_ && !osd_text_.empty()) {
-            uint32_t* px = (uint32_t*)buf.map;
-            draw_text_centred(px, buf.stride / 4, osd_text_,
-                              width_ / 2, (uint32_t)(0.04f * height_),
-                              0xFFFFFFFFu, 2, width_, height_);
-        }
+    if (osd_enabled_ && !osd_text_.empty()) {
+        uint32_t* px = (uint32_t*)buf.map;
+        draw_text_centred(px, buf.stride / 4, osd_text_,
+                          width_ / 2, (uint32_t)(0.04f * height_),
+                          0xFFFFFFFFu, 2, width_, height_);
     }
 
     streaming_ = true;
@@ -2011,17 +1976,9 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
         }
 #endif
         if (!rga_ok) {
-            // RGA unavailable — software conversion via staging buffer.
-            uint32_t stage_stride_needed = width_ * 4;
-            size_t stage_size = (size_t)stage_stride_needed * height_;
-            if (stage_buf_.size() < stage_size) {
-                stage_buf_.resize(stage_size);
-                stage_stride_ = stage_stride_needed;
-            }
-            if (dr.x > 0 || dr.y > 0 ||
-                dr.x + dr.w < width_ || dr.y + dr.h < height_) {
-                memset(stage_buf_.data(), 0, stage_size);
-            }
+            // RGA unavailable — NEON convert directly to DRM back buffer.
+            // Triple buffering ensures this buffer is not being scanned out.
+            fill_bg(buf);
 
             if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV16) {
                 size_t uv_rows = (format == DRM_FORMAT_NV12) ? (frame_h / 2) : frame_h;
@@ -2044,37 +2001,21 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
                 if (mapped && mapped != MAP_FAILED) {
                     sw_nv12_to_xrgb((const uint8_t*)mapped,
                                     frame_w, frame_h, stride_y,
-                                    stage_buf_.data(), stage_stride_,
+                                    (uint8_t*)buf.map, buf.stride,
                                     dr, width_, height_);
+                } else {
+                    if (buf.map) memset(buf.map, 0, buf.size);
                 }
-            }
-
-            // OSD on staging buffer
-            if (osd_enabled_ && !osd_text_.empty()) {
-                uint32_t* px = (uint32_t*)stage_buf_.data();
-                draw_text_centred(px, stage_stride_ / 4, osd_text_,
-                                  width_ / 2, (uint32_t)(0.04f * height_),
-                                  0xFFFFFFFFu, 2, width_, height_);
-            }
-
-            // Bulk copy to DRM buffer
-            if (stage_stride_ == buf.stride) {
-                memcpy(buf.map, stage_buf_.data(), stage_size);
             } else {
-                for (uint32_t y = 0; y < height_; y++) {
-                    memcpy((uint8_t*)buf.map + (size_t)y * buf.stride,
-                           stage_buf_.data() + (size_t)y * stage_stride_,
-                           width_ * 4);
-                }
+                if (buf.map) memset(buf.map, 0, buf.size);
             }
-        } else {
-            // RGA handled it — OSD directly
-            if (osd_enabled_ && !osd_text_.empty()) {
-                uint32_t* px = (uint32_t*)buf.map;
-                draw_text_centred(px, buf.stride / 4, osd_text_,
-                                  width_ / 2, (uint32_t)(0.04f * height_),
-                                  0xFFFFFFFFu, 2, width_, height_);
-            }
+        }
+
+        if (osd_enabled_ && !osd_text_.empty()) {
+            uint32_t* px = (uint32_t*)buf.map;
+            draw_text_centred(px, buf.stride / 4, osd_text_,
+                              width_ / 2, (uint32_t)(0.04f * height_),
+                              0xFFFFFFFFu, 2, width_, height_);
         }
 
         streaming_ = true;
