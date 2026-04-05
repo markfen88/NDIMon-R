@@ -17,14 +17,15 @@ const DEFAULTS = {
     accent_live: '#22FF88',
     logo_path:   '',
     logo_x_pct:  50,
-    logo_y_pct:  40,
-    logo_w_pct:  30,
+    logo_y_pct:  50,
+    logo_w_pct:  50,
     text_idle:   'No Signal',
     text_live:   'Signal Available',
-    text_x_pct:  50,
-    text_y_pct:  62,
-    text_scale:  3,
-    show_box:    true,
+    text_height_pct: 10,
+    show_box:    false,
+    show_signal_text: true,
+    show_device_name: true,
+    show_device_url:  true,
 };
 
 function readSplash() {
@@ -53,9 +54,9 @@ router.post('/config', (req, res) => {
     const body = req.body || {};
 
     const strFields   = ['bg_idle','bg_live','accent_idle','accent_live','logo_path','text_idle','text_live'];
-    const floatFields = ['logo_x_pct','logo_y_pct','logo_w_pct','text_x_pct','text_y_pct'];
-    const intFields   = ['text_scale'];
-    const boolFields  = ['show_box'];
+    const floatFields = ['logo_x_pct','logo_y_pct','logo_w_pct','text_height_pct'];
+    const intFields   = [];
+    const boolFields  = ['show_box','show_signal_text','show_device_name','show_device_url'];
 
     for (const f of strFields)   if (f in body) cur[f] = String(body[f]);
     for (const f of floatFields) if (f in body) cur[f] = Math.max(0, Math.min(100, parseFloat(body[f]) || 0));

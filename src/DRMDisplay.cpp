@@ -237,6 +237,19 @@ static void draw_text_right(uint32_t* pixels, uint32_t stride_u32,
                    (unsigned char)text[i], color, scale, sw, sh);
 }
 
+// Draw text left-aligned: left edge at lx, top at ty
+static void draw_text_left(uint32_t* pixels, uint32_t stride_u32,
+                            const std::string& text,
+                            uint32_t lx, uint32_t ty,
+                            uint32_t color, int scale,
+                            uint32_t sw, uint32_t sh) {
+    if (text.empty() || scale < 1) return;
+    int cw = 8 * scale;
+    for (size_t i = 0; i < text.size(); i++)
+        draw_glyph(pixels, stride_u32, (int)lx + (int)i * cw, (int)ty,
+                   (unsigned char)text[i], color, scale, sw, sh);
+}
+
 // Draw an RGBA/RGB image (from stb_image) centred at (cx,cy), scaled to w pixels wide
 static void draw_logo(uint32_t* pixels, uint32_t stride_u32,
                       const uint8_t* img, int img_w, int img_h, int img_c,
@@ -2096,30 +2109,42 @@ bool DRMDisplay::show_splash(bool source_available) {
         }
     }
 
-    // ── Status label (centre) ────────────────────────────────────────────────
-    const std::string& label = source_available ? sc.text_live : sc.text_idle;
-    if (!label.empty() && sc.text_scale >= 1) {
-        int scale = std::min(sc.text_scale, 8);
-        draw_text_centred(pixels, stride_u32, label,
-                          width_ / 2, height_ * 2 / 3,
-                          accent_color, scale, width_, height_);
+    // ── Compute proportional text scale from text_height_pct ───────────────
+    // The 8x8 bitmap font has 8 pixel rows; scale = desired_pixel_height / 8.
+    float pct = std::max(1.0f, std::min(sc.text_height_pct, 50.0f));
+    int text_scale = std::max(1, (int)(pct / 100.0f * height_ / 8.0f));
+    int info_scale = std::max(1, text_scale / 2);  // device info at half size
+    int text_h = 8 * text_scale;
+    int info_h = 8 * info_scale;
+    uint32_t margin = (uint32_t)(info_h);
+
+    // ── Signal status label — top-left corner ────────────────────────────────
+    if (sc.show_signal_text) {
+        const std::string& label = source_available ? sc.text_live : sc.text_idle;
+        if (!label.empty()) {
+            draw_text_left(pixels, stride_u32, label,
+                           margin, margin,
+                           accent_color, text_scale, width_, height_);
+        }
     }
 
-    // ── Device info — top-right: NDI alias + IP ──────────────────────────────
+    // ── Device info — top-right: device name + URL ───────────────────────────
     {
         const auto& dev = Config::instance().device;
-        int info_scale = std::max(1, std::min(sc.text_scale, 8));
-        int line_h = 8 * info_scale + 4;  // glyph height + small gap
-        uint32_t margin = (uint32_t)(8 * info_scale);
+        int line_h = info_h + 4;
         uint32_t rx = width_ - margin;
         uint32_t ty = margin;
 
-        if (!dev.device_name.empty())
+        if (sc.show_device_name && !dev.device_name.empty()) {
             draw_text_right(pixels, stride_u32, dev.device_name,
                             rx, ty, accent_color, info_scale, width_, height_);
-        if (!dev.device_ip.empty())
-            draw_text_right(pixels, stride_u32, dev.device_ip,
-                            rx, ty + (uint32_t)line_h, accent_color, info_scale, width_, height_);
+            ty += (uint32_t)line_h;
+        }
+        if (sc.show_device_url && !dev.device_ip.empty()) {
+            std::string url = "http://" + dev.device_ip;
+            draw_text_right(pixels, stride_u32, url,
+                            rx, ty, accent_color, info_scale, width_, height_);
+        }
     }
 
     // Invalidate fill cache for ALL buffers so the next video frame in every

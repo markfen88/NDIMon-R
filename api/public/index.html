@@ -410,12 +410,12 @@
                 <input type="range" class="form-range" id="sp-logo-x" min="0" max="100" value="50" oninput="document.getElementById('sp-logo-x-val').textContent=this.value+'%'">
               </div>
               <div class="col-4">
-                <label class="form-label">Y Position <span id="sp-logo-y-val" class="text-white">40%</span></label>
-                <input type="range" class="form-range" id="sp-logo-y" min="0" max="100" value="40" oninput="document.getElementById('sp-logo-y-val').textContent=this.value+'%'">
+                <label class="form-label">Y Position <span id="sp-logo-y-val" class="text-white">50%</span></label>
+                <input type="range" class="form-range" id="sp-logo-y" min="0" max="100" value="50" oninput="document.getElementById('sp-logo-y-val').textContent=this.value+'%'">
               </div>
               <div class="col-4">
-                <label class="form-label">Width <span id="sp-logo-w-val" class="text-white">30%</span></label>
-                <input type="range" class="form-range" id="sp-logo-w" min="5" max="80" value="30" oninput="document.getElementById('sp-logo-w-val').textContent=this.value+'%'">
+                <label class="form-label">Width <span id="sp-logo-w-val" class="text-white">50%</span></label>
+                <input type="range" class="form-range" id="sp-logo-w" min="5" max="80" value="50" oninput="document.getElementById('sp-logo-w-val').textContent=this.value+'%'">
               </div>
             </div>
 
@@ -433,26 +433,38 @@
                 <input type="text" class="form-control" id="sp-text-live" placeholder="Signal Available" maxlength="64">
               </div>
             </div>
-            <div class="row g-2 mb-3">
-              <div class="col-12">
-                <label class="form-label">Text Size <small class="text-muted">(applies to centre label and top-right device info)</small></label>
-                <select class="form-select" id="sp-text-scale">
-                  <option value="1">Tiny (8px)</option>
-                  <option value="2">Small (16px)</option>
-                  <option value="3" selected>Medium (24px)</option>
-                  <option value="4">Large (32px)</option>
-                  <option value="5">XL (40px)</option>
-                </select>
-              </div>
+            <div class="mb-3">
+              <label class="form-label">Text Height <span id="sp-text-h-val" class="text-white">10%</span></label>
+              <input type="range" class="form-range" id="sp-text-height" min="1" max="30" value="10" oninput="document.getElementById('sp-text-h-val').textContent=this.value+'%'">
+              <div class="form-text">Proportional to screen height. Device info is drawn at half this size.</div>
             </div>
-            <div class="form-text mb-3"><i class="bi bi-info-circle me-1"></i>NDI Alias and IP address are shown automatically in the top-right corner.</div>
 
             <hr class="section-divider">
 
-            <div class="mb-3 d-flex align-items-center gap-3">
-              <label class="form-label mb-0 flex-fill">Show decorative box</label>
+            <!-- Visibility Toggles -->
+            <div class="mb-2" style="font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted)"><i class="bi bi-toggles me-1"></i>Element Visibility</div>
+            <div class="mb-2 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Signal Text <small class="text-muted">(top-left)</small></label>
               <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" id="sp-show-box" checked>
+                <input class="form-check-input" type="checkbox" id="sp-show-signal" checked>
+              </div>
+            </div>
+            <div class="mb-2 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Device Name <small class="text-muted">(top-right)</small></label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="sp-show-devname" checked>
+              </div>
+            </div>
+            <div class="mb-2 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Device URL <small class="text-muted">(top-right)</small></label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="sp-show-devurl" checked>
+              </div>
+            </div>
+            <div class="mb-3 d-flex align-items-center gap-3">
+              <label class="form-label mb-0 flex-fill">Decorative Box</label>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="sp-show-box">
               </div>
             </div>
 
@@ -1135,8 +1147,11 @@ async function loadSplashSettings() {
     setSlider('sp-logo-w', 'sp-logo-w-val', d.logo_w_pct, '%');
     setVal('sp-text-idle', d.text_idle||'');
     setVal('sp-text-live', d.text_live||'');
-    setVal('sp-text-scale', String(d.text_scale||3));
-    setCheck('sp-show-box', d.show_box !== false);
+    setSlider('sp-text-height', 'sp-text-h-val', d.text_height_pct || 10, '%');
+    setCheck('sp-show-signal', d.show_signal_text !== false);
+    setCheck('sp-show-devname', d.show_device_name !== false);
+    setCheck('sp-show-devurl', d.show_device_url !== false);
+    setCheck('sp-show-box', !!d.show_box);
   } catch(e) { console.warn('splash config load failed', e); }
 }
 
@@ -1250,7 +1265,10 @@ async function saveSplash() {
     logo_w_pct:  +document.getElementById('sp-logo-w').value,
     text_idle:   document.getElementById('sp-text-idle').value,
     text_live:   document.getElementById('sp-text-live').value,
-    text_scale:  +document.getElementById('sp-text-scale').value,
+    text_height_pct: +document.getElementById('sp-text-height').value,
+    show_signal_text: document.getElementById('sp-show-signal').checked,
+    show_device_name: document.getElementById('sp-show-devname').checked,
+    show_device_url:  document.getElementById('sp-show-devurl').checked,
     show_box:    document.getElementById('sp-show-box').checked,
   };
   await post('/v1/Splash/config', cfg);

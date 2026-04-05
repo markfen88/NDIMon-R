@@ -109,14 +109,15 @@ void Config::load() {
         splash.accent_live = sp.value("accent_live", "#22FF88");
         splash.logo_path  = sp.value("logo_path",  "");
         splash.logo_x_pct = sp.value("logo_x_pct", 50.0f);
-        splash.logo_y_pct = sp.value("logo_y_pct", 40.0f);
-        splash.logo_w_pct = sp.value("logo_w_pct", 30.0f);
+        splash.logo_y_pct = sp.value("logo_y_pct", 50.0f);
+        splash.logo_w_pct = sp.value("logo_w_pct", 50.0f);
         splash.text_idle  = sp.value("text_idle",  "No Signal");
         splash.text_live  = sp.value("text_live",  "Signal Available");
-        splash.text_x_pct = sp.value("text_x_pct", 50.0f);
-        splash.text_y_pct = sp.value("text_y_pct", 62.0f);
-        splash.text_scale = sp.value("text_scale", 3);
-        splash.show_box   = sp.value("show_box",   true);
+        splash.text_height_pct = sp.value("text_height_pct", 10.0f);
+        splash.show_box          = sp.value("show_box",          false);
+        splash.show_signal_text  = sp.value("show_signal_text",  true);
+        splash.show_device_name  = sp.value("show_device_name",  true);
+        splash.show_device_url   = sp.value("show_device_url",   true);
     }
 
     // OSD config

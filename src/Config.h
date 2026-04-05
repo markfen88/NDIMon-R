@@ -57,18 +57,19 @@ struct SplashConfig {
     // Logo image (absolute path to PNG/JPEG on device, empty = no logo)
     std::string logo_path  = "";
     float logo_x_pct = 50.0f;   // centre X as % of display width  [0–100]
-    float logo_y_pct = 40.0f;   // centre Y as % of display height [0–100]
-    float logo_w_pct = 30.0f;   // logo width as % of display width [5–80]
+    float logo_y_pct = 50.0f;   // centre Y as % of display height [0–100]
+    float logo_w_pct = 50.0f;   // logo width as % of display width [5–80]
 
     // Overlay text rendered on screen
     std::string text_idle  = "No Signal";
     std::string text_live  = "Signal Available";
-    float text_x_pct = 50.0f;   // centre X as % of display width  [0–100]
-    float text_y_pct = 62.0f;   // centre Y as % of display height [0–100]
-    int   text_scale = 3;        // pixel scale: 1=8px 2=16px 3=24px 4=32px 5=40px
+    float text_height_pct = 10.0f;  // text height as % of screen height [1–50]
 
-    // Show the decorative centre box
-    bool show_box = true;
+    // Element visibility toggles
+    bool show_box          = false;
+    bool show_signal_text  = true;
+    bool show_device_name  = true;
+    bool show_device_url   = true;
 };
 
 // On-screen display — overlaid on live video frames (disabled by default)
