@@ -1,6 +1,9 @@
 #include "Config.h"
 #include <fstream>
 #include <iostream>
+#include <cstdio>
+#include <cstring>
+#include <cerrno>
 
 static const char* DEC1_SETTINGS    = "/etc/ndimon-dec1-settings.json";
 static const char* SPLASH_SETTINGS  = "/etc/ndimon-splash-settings.json";
@@ -28,11 +31,18 @@ nlohmann::json Config::read_json(const std::string& path) {
 }
 
 void Config::write_json(const std::string& path, const nlohmann::json& j) {
+    const std::string tmp = path + ".tmp";
     try {
-        std::ofstream f(path);
-        f << j.dump(2);
+        {
+            std::ofstream f(tmp);
+            if (!f.is_open()) throw std::runtime_error("cannot open " + tmp);
+            f << j.dump(2);
+        }
+        if (std::rename(tmp.c_str(), path.c_str()) != 0)
+            throw std::runtime_error("rename failed: " + std::string(strerror(errno)));
     } catch (const std::exception& e) {
         std::cerr << "[Config] write_json " << path << ": " << e.what() << "\n";
+        std::remove(tmp.c_str());
     }
 }
 
@@ -117,59 +127,15 @@ void Config::load() {
     }
 }
 
-void Config::save() {
-    nlohmann::json dec;
-    dec["ChNum"]           = decoder.ch_num;
-    dec["NDIAudio"]        = decoder.ndi_audio;
-    dec["ScreenSaverMode"] = decoder.screensaver_mode;
-    dec["TallyMode"]       = decoder.tally_mode;
-    dec["ColorSpace"]      = decoder.color_space;
-    dec["SourceSelection"] = decoder.source_selection;
-    dec["SourceName"]      = connected_source_name;
-    dec["SourceIP"]        = connected_source_ip;
-    dec["videooutput"]     = device.video_output;
-    dec["ScaleMode"]       = "letterbox";
-    write_json(DEC1_SETTINGS, dec);
-
-    nlohmann::json rx;
-    rx["Rxpm"] = transport.rxpm;
-    write_json(RX_SETTINGS, rx);
-
-    // Find settings (DS IP, DS mode) and NDI groups are managed by the
-    // Node.js API — do NOT write them here or we'll overwrite user changes.
-
-    nlohmann::json dev;
-    dev["mode"]          = device.mode;
-    dev["videooutput"]   = device.video_output;
-    dev["ndi_recv_name"] = device.ndi_recv_name;
-    write_json(DEVICE_SETTINGS, dev);
-
-}
-
-void Config::save_splash() {
-    nlohmann::json j;
-    j["bg_idle"]     = splash.bg_idle;
-    j["bg_live"]     = splash.bg_live;
-    j["accent_idle"] = splash.accent_idle;
-    j["accent_live"] = splash.accent_live;
-    j["logo_path"]   = splash.logo_path;
-    j["logo_x_pct"]  = splash.logo_x_pct;
-    j["logo_y_pct"]  = splash.logo_y_pct;
-    j["logo_w_pct"]  = splash.logo_w_pct;
-    j["text_idle"]   = splash.text_idle;
-    j["text_live"]   = splash.text_live;
-    j["text_x_pct"]  = splash.text_x_pct;
-    j["text_y_pct"]  = splash.text_y_pct;
-    j["text_scale"]  = splash.text_scale;
-    j["show_box"]    = splash.show_box;
-    write_json(SPLASH_SETTINGS, j);
-}
-
-void Config::save_osd() {
-    nlohmann::json j;
-    j["enabled"] = osd.enabled;
-    j["text"]    = osd.text;
-    write_json(OSD_SETTINGS, j);
+void Config::save_device() {
+    // Only persist device-level settings that the C++ side owns.
+    // All other config files are owned by the Node.js API.
+    auto j = read_json(DEVICE_SETTINGS);
+    if (j.empty()) j = nlohmann::json::object();
+    j["mode"]          = device.mode;
+    j["videooutput"]   = device.video_output;
+    j["ndi_recv_name"] = device.ndi_recv_name;
+    write_json(DEVICE_SETTINGS, j);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,10 +179,5 @@ void Config::set_output(int ch_num, const OutputConfig& out) {
         connected_source_name = out.source_name;
         connected_source_ip   = out.source_ip;
         device.video_output   = out.preferred_mode;
-        // NOTE: save() is intentionally NOT called here.
-        // The merged write above already persisted SourceName/SourceIP correctly.
-        // save() would overwrite the merged write with a stripped-down version,
-        // losing fields like output_alias, and re-write FIND_SETTINGS/RX_SETTINGS
-        // from potentially stale in-memory values.
     }
 }

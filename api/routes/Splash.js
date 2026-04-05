@@ -37,7 +37,9 @@ function readSplash() {
 }
 
 function writeSplash(cfg) {
-    fs.writeFileSync(SPLASH_FILE, JSON.stringify(cfg, null, 2));
+    const tmp = SPLASH_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+    fs.renameSync(tmp, SPLASH_FILE);
 }
 
 // GET /v1/Splash/config
@@ -124,7 +126,9 @@ router.post('/osd', (req, res) => {
     const cfg  = readOsd();
     if ('enabled' in body) cfg.enabled = !!body.enabled;
     if ('text'    in body) cfg.text    = String(body.text).slice(0, 128);
-    fs.writeFileSync(OSD_FILE, JSON.stringify(cfg, null, 2));
+    const tmp = OSD_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+    fs.renameSync(tmp, OSD_FILE);
     sendIPC({ action: 'reload_config' });
     res.json({ ok: true, config: cfg });
 });

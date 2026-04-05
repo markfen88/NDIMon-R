@@ -76,10 +76,13 @@ function readJson(file) {
 }
 
 function writeJson(file, obj) {
+    const tmp = file + '.tmp';
     try {
-        fs.writeFileSync(file, JSON.stringify(obj));
+        fs.writeFileSync(tmp, JSON.stringify(obj));
+        fs.renameSync(tmp, file);
     } catch (e) {
         console.error('[lib] writeJson', file, e.message);
+        try { fs.unlinkSync(tmp); } catch {}
     }
 }
 

@@ -81,7 +81,10 @@ public:
     static Config& instance();
 
     void load();
-    void save();
+
+    // Save only device-level settings (mode, video output, NDI alias).
+    // All other config files are owned by the Node.js API.
+    void save_device();
 
     // Per-output config (ch_num is 1-based: 1=HDMI-A-1, 2=HDMI-A-2, 3=DP-1)
     OutputConfig get_output(int ch_num) const;
@@ -94,9 +97,6 @@ public:
     NDIGroupConfig  ndi_group;
     SplashConfig    splash;
     OsdConfig       osd;
-
-    void save_splash();
-    void save_osd();
 
     // Source connection (ch1 / legacy)
     std::string connected_source_name;

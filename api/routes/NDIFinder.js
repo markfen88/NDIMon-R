@@ -54,7 +54,9 @@ router.post('/NdiOffSnSrc', (req, res) => {
         ip === '' || /^(\d{1,3}\.){3}\d{1,3}$/.test(ip)
     );
     if (!valid) return res.send('Bad request - Invalid IP');
-    fs.writeFileSync(NDI_CONFIG, JSON.stringify(ips));
+    const tmp = NDI_CONFIG + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(ips));
+    fs.renameSync(tmp, NDI_CONFIG);
     res.send('success');
 });
 

@@ -1262,7 +1262,7 @@ int main(int argc, char* argv[]) {
     if (cfg.device.ndi_recv_name.empty()) {
         cfg.device.ndi_recv_name = "NDIMON-" + get_primary_mac_suffix();
         std::cout << "[NDIMon-R] NDI alias (default): " << cfg.device.ndi_recv_name << "\n";
-        cfg.save();
+        cfg.save_device();
         // Set OS hostname so NDI discovery shows the right device name.
         // Use fork/exec to avoid command injection via device name.
         {
