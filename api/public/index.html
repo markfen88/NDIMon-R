@@ -1327,7 +1327,7 @@ function renderNdiGroups() {
 
 function addNdiGroup() {
   const input = document.getElementById('ndi-grp-input');
-  const val = (input.value || '').trim().toLowerCase();
+  const val = (input.value || '').trim();
   if (!val || ndiGroups.includes(val)) { input.value = ''; return; }
   ndiGroups.push(val);
   input.value = '';
@@ -1345,7 +1345,7 @@ function getNdiGroupsString() {
 }
 
 function setNdiGroupsFromString(s) {
-  ndiGroups = (s || 'public').split(',').map(g => g.trim().toLowerCase()).filter(Boolean);
+  ndiGroups = (s || 'public').split(',').map(g => g.trim()).filter(Boolean);
   if (ndiGroups.length === 0) ndiGroups.push('public');
   renderNdiGroups();
 }
