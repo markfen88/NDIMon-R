@@ -10,7 +10,14 @@ const PORT = process.env.PORT || 80;
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.text());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res, filePath) => {
+        // Prevent stale HTML/JS from being served after deploys
+        if (filePath.endsWith('.html') || filePath.endsWith('.js')) {
+            res.setHeader('Cache-Control', 'no-store');
+        }
+    }
+}));
 
 // CORS
 app.use((req, res, next) => {

@@ -627,15 +627,18 @@ function gotoNDI() {
 }
 
 // ══ SSE ═════════════════════════════════════════════════════════
+let _sse = null;
 function initSSE() {
+  if (_sse) { _sse.close(); _sse = null; }
   const es = new EventSource('/api/events');
+  _sse = es;
   es.onmessage = e => {
     try {
       const d = JSON.parse(e.data);
       if (d.type === 'status') { mergeState(d); updateUI(); }
     } catch {}
   };
-  es.onerror = () => setTimeout(initSSE, 5000);
+  es.onerror = () => { es.close(); _sse = null; setTimeout(initSSE, 5000); };
 }
 
 function mergeState(d) {
