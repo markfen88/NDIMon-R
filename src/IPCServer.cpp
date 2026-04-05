@@ -107,7 +107,8 @@ bool IPCServer::handle_client(int client_fd) {
         cmd.res_refresh_hz  = j.value("refresh_hz", 0.0);
         cmd.output_index     = j.value("output",  0);
         cmd.scale_mode_str   = j.value("scale_mode", "");
-        cmd.source_available = j.value("source_available", false);
+        cmd.source_available  = j.value("source_available", false);
+        cmd.rotation_degrees  = j.value("rotation", 0u);
 
         // Commands that return JSON data
         if (action == "status" && status_cb_) {

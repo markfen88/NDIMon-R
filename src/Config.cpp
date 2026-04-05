@@ -150,6 +150,7 @@ OutputConfig Config::get_output(int ch_num) const {
         out.source_name    = j.value("SourceName", "");
         out.source_ip      = j.value("SourceIP", "");
         out.output_alias   = j.value("output_alias", "");
+        out.rotation       = j.value("rotation", 0u);
     } else if (ch_num == 1) {
         // Fall back to legacy dec1 settings
         out.preferred_mode = device.video_output;
@@ -171,6 +172,7 @@ void Config::set_output(int ch_num, const OutputConfig& out) {
     j["SourceName"]   = out.source_name;
     j["SourceIP"]     = out.source_ip;
     j["output_alias"] = out.output_alias;
+    j["rotation"]     = out.rotation;
 
     write_json(path, j);
 

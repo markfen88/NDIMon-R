@@ -719,6 +719,8 @@ async function loadOutputModes(cardIdx, outputIndex) {
     // Hide refresh rate column when auto mode is active
     const fpsCol = document.getElementById(`res-fps-${cardIdx}`)?.parentElement;
     if (fpsCol && d.auto_resolution) fpsCol.style.display = 'none';
+    // Sync rotation dropdown from modes response
+    if (d.rotation !== undefined) setVal(`rotation-sel-${cardIdx}`, String(d.rotation));
   } catch {}
 }
 
@@ -810,13 +812,24 @@ function buildOutputCards() {
             <select class="form-select" id="res-fps-${idx}"><option>—</option></select>
           </div>
         </div>
-        <div class="mb-3">
-          <label class="form-label">Scale Mode</label>
-          <select class="form-select" id="scale-sel-${idx}">
-            <option value="letterbox">Letterbox (preserve aspect ratio)</option>
-            <option value="stretch">Stretch (fill screen)</option>
-            <option value="crop">Crop (fill, no bars)</option>
-          </select>
+        <div class="row g-2 mb-3">
+          <div class="col-8">
+            <label class="form-label">Scale Mode</label>
+            <select class="form-select" id="scale-sel-${idx}">
+              <option value="letterbox">Letterbox (preserve aspect ratio)</option>
+              <option value="stretch">Stretch (fill screen)</option>
+              <option value="crop">Crop (fill, no bars)</option>
+            </select>
+          </div>
+          <div class="col-4">
+            <label class="form-label">Rotation</label>
+            <select class="form-select" id="rotation-sel-${idx}">
+              <option value="0">0&deg;</option>
+              <option value="90">90&deg;</option>
+              <option value="180">180&deg;</option>
+              <option value="270">270&deg;</option>
+            </select>
+          </div>
         </div>
         <div class="stat-row mb-1"><span class="stat-label">Source</span><span class="stat-val" id="out-src-${idx}">${esc(out.source_name||'None')}</span></div>
         <div class="stat-row mb-1"><span class="stat-label">Resolution</span><span class="stat-val" id="out-res-${idx}">${out.width?out.width+'×'+out.height+' @ '+fmtHz(out.refresh_hz||out.refresh):'—'}</span></div>
@@ -832,6 +845,7 @@ function buildOutputCards() {
   // Init each card
   S.outputs.forEach((out, idx) => {
     setVal(`scale-sel-${idx}`, out.scale_mode || 'letterbox');
+    setVal(`rotation-sel-${idx}`, String(out.rotation || 0));
     populateOutputSrcSelector(idx);
     loadOutputModes(idx, out.output_index);
     updateNdiPreview(idx);
@@ -937,6 +951,10 @@ async function applyOutputSettings(cardIdx) {
   // 4. Scale mode
   const scale = document.getElementById(`scale-sel-${cardIdx}`)?.value || 'letterbox';
   await post('/v1/VideoOutput/scaleMode', { scale_mode: scale, output: outputIndex });
+
+  // 5. Rotation
+  const rotation = parseInt(document.getElementById(`rotation-sel-${cardIdx}`)?.value || '0', 10);
+  await post('/v1/VideoOutput/rotation', { degrees: rotation, output: outputIndex });
 
   if (msg) msg.textContent = '✓ Saved';
   if (srcVal === 'None') toast(`Output ${cardIdx+1}: settings saved, disconnected`);

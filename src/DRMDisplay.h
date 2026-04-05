@@ -72,6 +72,10 @@ public:
     void      set_scale_mode(ScaleMode m) { scale_mode_ = m; }
     ScaleMode scale_mode()          const { return scale_mode_; }
 
+    // Hardware display rotation (0, 90, 180, 270 degrees)
+    bool set_rotation(uint32_t degrees);
+    uint32_t rotation() const { return rotation_degrees_; }
+
     // Called by the video pipeline to block splash from interrupting live video
     void set_streaming(bool active) { streaming_ = active; }
     bool is_streaming()       const { return streaming_; }
@@ -203,6 +207,11 @@ private:
 
     // Atomic plane commit state
     int  atomic_plane_state_ = 0;  // 0=untried, 1=ok, -1=unsupported
+
+    // Hardware rotation
+    uint32_t rotation_degrees_ = 0;    // user-facing: 0, 90, 180, 270
+    uint32_t rotation_drm_     = 1;    // DRM bitmask: 1=0°, 2=90°, 0x30=180°, 8=270°
+    uint32_t rotation_prop_id_ = 0;    // cached plane property ID
 
     bool rga_available_ = false;
     int  rga_fail_count_ = 0;

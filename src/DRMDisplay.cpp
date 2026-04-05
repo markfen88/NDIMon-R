@@ -797,6 +797,9 @@ bool DRMDisplay::init(const std::string& device,
     return true;
 }
 
+// Forward declaration — defined below atomic_plane_commit
+static uint32_t get_prop_id(int fd, uint32_t obj_id, uint32_t obj_type, const char* name);
+
 // ---------------------------------------------------------------------------
 // setup_crtc
 // ---------------------------------------------------------------------------
@@ -973,8 +976,14 @@ bool DRMDisplay::setup_crtc(const std::string& connector_name,
                 }
                 drmModeFreePlaneResources(pres);
             }
-            if (plane_id_)
+            if (plane_id_) {
                 std::cout << "[DRM] Primary plane " << plane_id_ << " for CRTC " << crtc_id << "\n";
+                // Cache rotation property ID for hardware rotation support
+                rotation_prop_id_ = get_prop_id(drm_fd_, plane_id_,
+                                                 DRM_MODE_OBJECT_PLANE, "rotation");
+                if (rotation_prop_id_)
+                    std::cout << "[DRM] Rotation property available on plane " << plane_id_ << "\n";
+            }
         }
 
         std::cout << "[DRM] Connector " << this_name
@@ -1130,6 +1139,15 @@ void DRMDisplay::wait_for_flip() {
 }
 
 bool DRMDisplay::commit_fb(uint32_t fb_id) {
+    // Atomic modesetting is required when: (a) rotation is active, or
+    // (b) a previous atomic_plane_commit established the CRTC in atomic mode
+    // (legacy SetCrtc/PageFlip fail after atomic has been used).
+    if (plane_id_ && (rotation_drm_ != 1 || atomic_plane_state_ == 1)) {
+        Rect full_src = {0, 0, width_, height_};
+        Rect full_dst = {0, 0, width_, height_};
+        return atomic_plane_commit(fb_id, full_src, full_dst);
+    }
+
     if (!crtc_active_) {
         // First commit: use SetCrtc
         int ret = drmModeSetCrtc(drm_fd_, crtc_id_, fb_id,
@@ -1251,6 +1269,10 @@ bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect
     drmModeAtomicAddProperty(req, plane_id_, p_cw,  dst.w);
     drmModeAtomicAddProperty(req, plane_id_, p_ch,  dst.h);
 
+    // Hardware rotation (VOP2 Smart/Esmart planes)
+    if (rotation_prop_id_ && rotation_drm_ != 1)
+        drmModeAtomicAddProperty(req, plane_id_, rotation_prop_id_, rotation_drm_);
+
     flip_pending_ = true;
     int ret = drmModeAtomicCommit(drm_fd_, req, flags, this);
     drmModeAtomicFree(req);
@@ -1266,6 +1288,45 @@ bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect
     }
 
     crtc_active_ = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// set_rotation — hardware rotation via VOP2 plane property
+// ---------------------------------------------------------------------------
+bool DRMDisplay::set_rotation(uint32_t degrees) {
+    uint32_t drm_val;
+    switch (degrees) {
+        case 0:   drm_val = 1;    break;  // DRM_MODE_ROTATE_0
+        case 90:  drm_val = 2;    break;  // DRM_MODE_ROTATE_90
+        case 180: drm_val = 0x30; break;  // reflect-x | reflect-y
+        case 270: drm_val = 8;    break;  // DRM_MODE_ROTATE_270
+        default:
+            std::cerr << "[DRM] Invalid rotation: " << degrees << "\n";
+            return false;
+    }
+
+    if (!rotation_prop_id_) {
+        std::cerr << "[DRM] Rotation not supported on this plane\n";
+        return false;
+    }
+
+    rotation_degrees_ = degrees;
+    rotation_drm_     = drm_val;
+    invalidate_fill_cache();  // force bg redraw with new rotation
+
+    // Cluster planes (UYVY-capable) only support rotate-0 and reflect-y.
+    // Disable UYVY native path for any non-zero rotation so we fall through to
+    // software XRGB conversion on Smart/Esmart planes which support full rotation.
+    if (degrees != 0) {
+        for (auto& b : yuv_fb_) free_fb(b);
+        yuv_fb_state_ = -1;  // mark UYVY unsupported
+    } else if (yuv_fb_state_ == -1) {
+        yuv_fb_state_ = 0;   // re-enable UYVY probing at 0°
+    }
+
+    std::cout << "[DRM] Rotation set to " << degrees << "° (DRM value 0x"
+              << std::hex << drm_val << std::dec << ")\n";
     return true;
 }
 

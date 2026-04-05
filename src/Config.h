@@ -41,6 +41,7 @@ struct OutputConfig {
     std::string source_name;
     std::string source_ip;
     std::string output_alias;    // custom output label (empty = use connector name)
+    uint32_t    rotation = 0;    // display rotation: 0, 90, 180, 270 degrees
 };
 
 // Splash screen / screensaver appearance

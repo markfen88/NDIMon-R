@@ -59,6 +59,18 @@ router.post('/scaleMode', async (req, res) => {
     res.json({ ok: true, scale_mode });
 });
 
+// POST /rotation  — set display rotation (0, 90, 180, 270 degrees)
+// Body: { "degrees": 90, "output": 0 }
+router.post('/rotation', async (req, res) => {
+    const { degrees = 0, output = 0 } = req.body || {};
+    const allowed = [0, 90, 180, 270];
+    const deg = parseInt(degrees, 10);
+    if (!allowed.includes(deg))
+        return res.status(400).json({ ok: false, error: 'degrees must be 0, 90, 180, or 270' });
+    await sendIPC({ action: 'set_rotation', rotation: deg, output: parseInt(output, 10) });
+    res.json({ ok: true, rotation: deg });
+});
+
 // GET /setresolution via query string (legacy)
 router.get('/setresolution', async (req, res) => {
     const { width, height, refresh, output = 0 } = req.query;

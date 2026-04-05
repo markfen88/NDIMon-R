@@ -20,6 +20,7 @@ struct IPCCommand {
     int output_index     = 0;      // which display output (0-based)
     std::string scale_mode_str;    // for set_scale_mode action
     bool source_available = false; // for show_splash action
+    uint32_t rotation_degrees = 0; // for set_rotation action
 };
 
 using IPCCommandCallback = std::function<void(const IPCCommand&)>;

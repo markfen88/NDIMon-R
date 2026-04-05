@@ -211,6 +211,10 @@ public:
                       << connector_name_ << " — waiting for hotplug\n";
             // Don't destroy drm_ — check_hotplug() needs the fd
         } else {
+            // Apply persisted rotation before first splash
+            auto out_cfg = Config::instance().get_output(ch_num_);
+            if (out_cfg.rotation != 0)
+                drm_->set_rotation(out_cfg.rotation);
             drm_->show_splash(false);
             std::cout << "[Worker" << ch_num_ << "] DRM ready: "
                       << drm_->width() << "x" << drm_->height()
@@ -506,7 +510,9 @@ public:
             }
         }
         if (drm_) drm_->set_streaming(false);
-        if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
+        // Schedule splash render on main-loop tick() instead of blocking the
+        // IPC thread — at 4K the software fill can take hundreds of ms.
+        splash_requested_ = true;
         // Do NOT clear source from persistent config so the device can
         // auto-reconnect after a reboot or transient signal loss.
     }
@@ -524,7 +530,7 @@ public:
             }
         }
         if (drm_) drm_->set_streaming(false);
-        if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
+        splash_requested_ = true;
         auto& cfg = Config::instance();
         OutputConfig oc = cfg.get_output(ch_num_);
         oc.source_name = "";
@@ -556,6 +562,10 @@ public:
             scale_mode_ = sm;
             if (drm_) drm_->set_scale_mode(sm);
         }
+
+        // Rotation
+        if (drm_ && out_cfg.rotation != drm_->rotation())
+            drm_->set_rotation(out_cfg.rotation);
 
         // OSD
         if (drm_) {
@@ -632,6 +642,7 @@ public:
         nlohmann::json j;
         j["modes"] = nlohmann::json::array();
         j["auto_resolution"] = auto_resolution_;
+        j["rotation"] = drm_ ? drm_->rotation() : 0;
         j["current"]["width"]      = drm_ ? drm_->width()      : 0;
         j["current"]["height"]     = drm_ ? drm_->height()     : 0;
         j["current"]["refresh"]    = drm_ ? drm_->refresh()    : 0;
@@ -660,6 +671,16 @@ public:
         else if (m == ScaleMode::Crop) oc.scale_mode = "crop";
         else                           oc.scale_mode = "letterbox";
         cfg.set_output(ch_num_, oc);
+    }
+
+    bool set_rotation(uint32_t degrees) {
+        if (!drm_) return false;
+        if (!drm_->set_rotation(degrees)) return false;
+        auto& cfg = Config::instance();
+        OutputConfig oc = cfg.get_output(ch_num_);
+        oc.rotation = degrees;
+        cfg.set_output(ch_num_, oc);
+        return true;
     }
 
     nlohmann::json get_status() const {
@@ -702,6 +723,7 @@ public:
         if (scale_mode_ == ScaleMode::Stretch) sm = "stretch";
         else if (scale_mode_ == ScaleMode::Crop) sm = "crop";
         s["scale_mode"] = sm;
+        s["rotation"]   = drm_ ? drm_->rotation() : 0;
         // Stream type: Standard (SpeedHQ/UYVY) vs HX (H.264/H.265)
         if (recv_) {
             auto st = recv_->stream_type();
@@ -750,6 +772,12 @@ public:
     }
 
     void tick() {
+        // Render splash asynchronously — set by disconnect_source/forget_source
+        // so the IPC thread isn't blocked by the 4K software fill.
+        if (splash_requested_.exchange(false)) {
+            if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
+        }
+
         // If DS routed us to a source via allow_controlling but we have no display,
         // immediately disconnect — we don't want to consume an NDI slot with no output.
         if (connected_.load() && !drm_ready()) {
@@ -1222,6 +1250,7 @@ private:
     std::string codec_name_          = "none";
 
     std::atomic<bool>    connected_{false};
+    std::atomic<bool>    splash_requested_{false};  // async splash render (picked up by tick)
     std::atomic<int>     input_w_{0}, input_h_{0};
     std::atomic<double>  fps_{0.0};
 
@@ -1452,6 +1481,10 @@ int main(int argc, char* argv[]) {
         } else if (cmd.action == "auto_resolution") {
             auto* w = get_worker(cmd.output_index);
             if (w) w->set_auto_resolution();
+
+        } else if (cmd.action == "set_rotation") {
+            auto* w = get_worker(cmd.output_index);
+            if (w) w->set_rotation(cmd.rotation_degrees);
 
         } else if (cmd.action == "show_splash") {
             cfg.load();  // pick up new splash config written by API
