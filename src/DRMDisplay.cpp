@@ -1633,6 +1633,15 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
     if (!initialized_) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
 
+    // One-shot log to confirm what format the display is actually receiving
+    static bool fmt_logged = false;
+    if (!fmt_logged && data) {
+        fmt_logged = true;
+        std::cerr << "[DRM] show_frame_memory: drm_format=0x" << std::hex << drm_format
+                  << std::dec << " (" << frame_w << "x" << frame_h
+                  << " stride=" << stride << ")\n";
+    }
+
     // BGRX/BGRA direct path: SDK already converted to RGB — just copy to DRM buffer.
     // No color conversion, no staging buffer, no NEON threads.
     if ((drm_format == DRM_FORMAT_XRGB8888 || drm_format == DRM_FORMAT_ARGB8888) && data) {
