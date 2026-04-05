@@ -18,8 +18,6 @@
 #include <cmath>
 #include <thread>
 #include <functional>
-#include <condition_variable>
-#include <queue>
 
 // ---------------------------------------------------------------------------
 // Compute actual refresh rate from DRM pixel clock / totals.
@@ -471,106 +469,6 @@ static void neon_nv12_scale_row_to_xrgb(const uint8_t* y_row, const uint8_t* uv_
     }
 }
 #endif // __aarch64__ || __ARM_NEON
-
-// ---------------------------------------------------------------------------
-// Persistent thread pool for parallel row processing.
-// Avoids per-frame thread creation overhead from std::async.
-// Workers stay alive between frames, spinning on a shared task queue.
-// ---------------------------------------------------------------------------
-class RowPool {
-public:
-    static RowPool& instance() {
-        static RowPool pool;
-        return pool;
-    }
-
-    // Submit N-1 chunks to workers, run 1 chunk on caller, then barrier-wait.
-    template<typename Func>
-    void parallel_for(uint32_t total, Func&& func) {
-        if (total < 64 || n_workers_ <= 1) {
-            func(0, total);
-            return;
-        }
-
-        unsigned int n_tasks = std::min(n_workers_, (total + 31) / 32);
-        uint32_t rows_per = total / n_tasks;
-        uint32_t remainder = total % n_tasks;
-
-        // Reset barrier
-        pending_.store((int)n_tasks - 1);
-
-        // Enqueue chunks for worker threads
-        uint32_t row = 0;
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            for (unsigned int t = 0; t < n_tasks - 1; t++) {
-                uint32_t chunk = rows_per + (t < remainder ? 1 : 0);
-                uint32_t r0 = row, r1 = row + chunk;
-                tasks_.push([&func, r0, r1]{ func(r0, r1); });
-                row = r1;
-            }
-        }
-        cv_.notify_all();
-
-        // Run last chunk on calling thread
-        func(row, total);
-
-        // Wait for workers to finish
-        std::unique_lock<std::mutex> lk(done_mtx_);
-        done_cv_.wait(lk, [this]{ return pending_.load() == 0; });
-    }
-
-private:
-    RowPool() : n_workers_(std::max(2u, std::thread::hardware_concurrency())),
-                stop_(false) {
-        // Spawn n_workers_-1 persistent threads (caller is the Nth worker)
-        unsigned int n_threads = n_workers_ - 1;
-        for (unsigned int i = 0; i < n_threads; i++) {
-            threads_.emplace_back([this]{ worker_loop(); });
-        }
-    }
-
-    ~RowPool() {
-        { std::lock_guard<std::mutex> lk(mtx_); stop_ = true; }
-        cv_.notify_all();
-        for (auto& t : threads_) t.join();
-    }
-
-    void worker_loop() {
-        while (true) {
-            std::function<void()> task;
-            {
-                std::unique_lock<std::mutex> lk(mtx_);
-                cv_.wait(lk, [this]{ return stop_ || !tasks_.empty(); });
-                if (stop_ && tasks_.empty()) return;
-                task = std::move(tasks_.front());
-                tasks_.pop();
-            }
-            task();
-            if (pending_.fetch_sub(1) == 1) {
-                // Last worker done — signal caller
-                done_cv_.notify_one();
-            }
-        }
-    }
-
-    unsigned int n_workers_;
-    bool stop_;
-    std::mutex mtx_;
-    std::condition_variable cv_;
-    std::queue<std::function<void()>> tasks_;
-
-    std::atomic<int> pending_{0};
-    std::mutex done_mtx_;
-    std::condition_variable done_cv_;
-
-    std::vector<std::thread> threads_;
-};
-
-template<typename Func>
-static void parallel_rows(uint32_t total_rows, Func&& func) {
-    RowPool::instance().parallel_for(total_rows, std::forward<Func>(func));
-}
 
 DRMDisplay::DRMDisplay() = default;
 
@@ -1451,29 +1349,25 @@ void DRMDisplay::sw_nv12_to_xrgb(const uint8_t* src,
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
     if (src_w == dr.w && src_h == dr.h) {
-        // No scaling — NEON 1:1 + parallel rows
-        parallel_rows(src_h, [&](uint32_t r0, uint32_t r1) {
-            for (uint32_t sy = r0; sy < r1; sy++) {
-                const uint8_t* yr  = y_plane  + (size_t)sy * src_stride;
-                const uint8_t* uvr = uv_plane + (size_t)(sy >> 1) * src_stride;
-                uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + sy) * dst_stride) + dr.x;
-                neon_nv12_row_to_xrgb(yr, uvr, d, src_w);
-            }
-        });
+        // No scaling — single-threaded NEON 1:1
+        for (uint32_t sy = 0; sy < src_h; sy++) {
+            const uint8_t* yr  = y_plane  + (size_t)sy * src_stride;
+            const uint8_t* uvr = uv_plane + (size_t)(sy >> 1) * src_stride;
+            uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + sy) * dst_stride) + dr.x;
+            neon_nv12_row_to_xrgb(yr, uvr, d, src_w);
+        }
         return;
     }
 
-    // Scaling path — NEON convert + horizontal resample, parallelized
+    // Scaling path — single-threaded NEON convert + horizontal resample
     uint32_t x_step = (src_w << 16) / dr.w;
-    parallel_rows(dr.h, [&](uint32_t r0, uint32_t r1) {
-        for (uint32_t row = r0; row < r1; row++) {
-            uint32_t sy = ((uint64_t)row * y_step) >> 16;
-            const uint8_t* yr  = y_plane  + (size_t)sy * src_stride;
-            const uint8_t* uvr = uv_plane + (size_t)(sy >> 1) * src_stride;
-            uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + row) * dst_stride) + dr.x;
-            neon_nv12_scale_row_to_xrgb(yr, uvr, src_w, d, dr.w, x_step);
-        }
-    });
+    for (uint32_t row = 0; row < dr.h; row++) {
+        uint32_t sy = ((uint64_t)row * y_step) >> 16;
+        const uint8_t* yr  = y_plane  + (size_t)sy * src_stride;
+        const uint8_t* uvr = uv_plane + (size_t)(sy >> 1) * src_stride;
+        uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + row) * dst_stride) + dr.x;
+        neon_nv12_scale_row_to_xrgb(yr, uvr, src_w, d, dr.w, x_step);
+    }
 #else
     uint32_t x_step = (src_w << 16) / dr.w;
     uint32_t sy_fp = 0;
@@ -1508,27 +1402,23 @@ void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
     if (src_w == dr.w && src_h == dr.h) {
-        // No scaling — NEON 1:1 + parallel rows
-        parallel_rows(src_h, [&](uint32_t r0, uint32_t r1) {
-            for (uint32_t sy = r0; sy < r1; sy++) {
-                const uint8_t* s = src + (size_t)sy * src_stride;
-                uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + sy) * dst_stride) + dr.x;
-                neon_uyvy_row_to_xrgb(s, d, src_w);
-            }
-        });
+        // No scaling — single-threaded NEON 1:1
+        for (uint32_t sy = 0; sy < src_h; sy++) {
+            const uint8_t* s = src + (size_t)sy * src_stride;
+            uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + sy) * dst_stride) + dr.x;
+            neon_uyvy_row_to_xrgb(s, d, src_w);
+        }
         return;
     }
 
-    // Scaling path — NEON convert + horizontal resample, parallelized
+    // Scaling path — single-threaded NEON convert + horizontal resample
     uint32_t x_step = (src_w << 16) / dr.w;
-    parallel_rows(dr.h, [&](uint32_t r0, uint32_t r1) {
-        for (uint32_t row = r0; row < r1; row++) {
-            uint32_t sy = ((uint64_t)row * y_step) >> 16;
-            const uint8_t* s = src + (size_t)sy * src_stride;
-            uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + row) * dst_stride) + dr.x;
-            neon_uyvy_scale_row_to_xrgb(s, src_w, d, dr.w, x_step);
-        }
-    });
+    for (uint32_t row = 0; row < dr.h; row++) {
+        uint32_t sy = ((uint64_t)row * y_step) >> 16;
+        const uint8_t* s = src + (size_t)sy * src_stride;
+        uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + row) * dst_stride) + dr.x;
+        neon_uyvy_scale_row_to_xrgb(s, src_w, d, dr.w, x_step);
+    }
 #else
     uint32_t x_step = (src_w << 16) / dr.w;
     uint32_t sy_fp = 0;
@@ -2340,9 +2230,6 @@ void DRMDisplay::clear_dma_mmap_cache() {
 }
 
 void DRMDisplay::destroy() {
-    stage_buf_.clear();
-    stage_buf_.shrink_to_fit();
-    stage_stride_ = 0;
     clear_dma_mmap_cache();
     if (import_fb_id_) {
         drmModeRmFB(drm_fd_, import_fb_id_);

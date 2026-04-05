@@ -186,12 +186,6 @@ private:
     int       cur_yuv_buf_  = 0;
     int       yuv_fb_state_ = 0;   // 0=untried, 1=ok, -1=unsupported by plane
 
-    // Staging buffer — parallel NEON threads convert into RAM first,
-    // then a single memcpy writes to the DRM buffer. Eliminates tearing
-    // caused by multiple threads writing directly to the scanout buffer.
-    std::vector<uint8_t> stage_buf_;
-    uint32_t stage_stride_ = 0;
-
     // Per-buffer fill cache — prevents overwriting bars every frame,
     // but must be tracked independently for each buffer in the triple-buffer set.
     uint32_t  last_bg_fill_w_[kNumBuffers]   = {};
