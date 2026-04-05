@@ -171,6 +171,11 @@ target_link_libraries(ndimon-finder PRIVATE
     avahi-client avahi-common
 )
 
+if(SYSTEMD_FOUND)
+    target_compile_definitions(ndimon-finder PRIVATE HAVE_SYSTEMD)
+    target_link_libraries(ndimon-finder PRIVATE ${SYSTEMD_LIBRARIES})
+endif()
+
 # --- Install ---
 install(TARGETS ndimon-r ndimon-finder
     RUNTIME DESTINATION /usr/local/bin

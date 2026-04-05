@@ -1183,13 +1183,12 @@ void DRMDisplay::wait_for_flip() {
     ev.version = DRM_EVENT_CONTEXT_VERSION;
     ev.page_flip_handler = flip_handler;
 
-    // Wait up to 5ms for the flip event. This is short enough to avoid
-    // stalling the pipeline (~1/3 of a frame at 60Hz) but long enough
-    // to reliably catch the vsync event. Without this, a non-blocking
-    // poll(0) races with vsync timing and causes commit_fb to drop
-    // every frame, freezing the display.
+    // Wait up to 50ms for the vsync flip event — must be longer than one
+    // full frame period (16.6ms at 60Hz, 33.3ms at 30Hz, 40ms at 25Hz).
+    // A shorter timeout (like 5ms) can consistently miss the vsync under
+    // load, leaving flip_pending_ stuck true and freezing the display.
     struct pollfd pfd = { drm_fd_, POLLIN, 0 };
-    int r = poll(&pfd, 1, 5);
+    int r = poll(&pfd, 1, 50);
     if (r > 0 && (pfd.revents & POLLIN))
         drmHandleEvent(drm_fd_, &ev);
 }

@@ -113,8 +113,14 @@ echo "[install] Reloading systemd..."
 $SYSTEMCTL daemon-reload
 
 echo "[install] Enabling and starting services..."
-$SYSTEMCTL enable ndimon-r ndimon-finder ndimon-api
-$SYSTEMCTL restart ndimon-r ndimon-finder ndimon-api
+# Install watchdog script
+echo "[install] Installing watchdog script..."
+$SUDO mkdir -p "$API_INSTALL_DIR/scripts"
+$SUDO cp "$PROJECT_DIR/scripts/ndimon-watchdog.sh" "$API_INSTALL_DIR/scripts/"
+$SUDO chmod +x "$API_INSTALL_DIR/scripts/ndimon-watchdog.sh"
+
+$SYSTEMCTL enable ndimon-r ndimon-finder ndimon-api ndimon-watchdog
+$SYSTEMCTL restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
 
 IP=$(hostname -I | awk '{print $1}')
 echo ""

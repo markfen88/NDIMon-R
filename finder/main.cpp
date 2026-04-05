@@ -16,6 +16,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#ifdef HAVE_SYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
+
 static const char* PARAM_FILE    = "/etc/ndi_src_find_param";
 static const char* SRC_LIST_FILE = "/etc/ndimon-sources.json";
 static const char* WEBUI_LIST    = "/etc/NDIFinderSrcList.json";
@@ -230,7 +234,11 @@ static void run_continuous() {
 
     std::vector<NDIlib_source_t> last_list;
 
+#ifdef HAVE_SYSTEMD
+    sd_notify(0, "READY=1");
+#endif
     std::cout << "[ NDIFinder ] continuous discovery running\n";
+    int wd_counter = 0;
     while (g_running) {
         // Check for command from param file
         std::string param = read_file(PARAM_FILE);
@@ -257,6 +265,12 @@ static void run_continuous() {
         }
 
         NDIlib_find_wait_for_sources(finder, 500);
+#ifdef HAVE_SYSTEMD
+        if (++wd_counter >= 20) { // every ~10s
+            sd_notify(0, "WATCHDOG=1");
+            wd_counter = 0;
+        }
+#endif
         uint32_t count = 0;
         const NDIlib_source_t* sources = NDIlib_find_get_current_sources(finder, &count);
 
