@@ -135,10 +135,8 @@ void Config::save() {
     rx["Rxpm"] = transport.rxpm;
     write_json(RX_SETTINGS, rx);
 
-    nlohmann::json find;
-    find["NDIDisServ"]   = finder.discovery_server_mode;
-    find["NDIDisServIP"] = finder.discovery_server_ip;
-    write_json(FIND_SETTINGS, find);
+    // Find settings (DS IP, DS mode) and NDI groups are managed by the
+    // Node.js API — do NOT write them here or we'll overwrite user changes.
 
     nlohmann::json dev;
     dev["mode"]          = device.mode;
@@ -146,9 +144,6 @@ void Config::save() {
     dev["ndi_recv_name"] = device.ndi_recv_name;
     write_json(DEVICE_SETTINGS, dev);
 
-    nlohmann::json grp;
-    grp["ndi_groups"] = ndi_group.groups;
-    write_json(NDI_GROUP, grp);
 }
 
 void Config::save_splash() {

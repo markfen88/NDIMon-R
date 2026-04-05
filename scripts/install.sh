@@ -119,8 +119,10 @@ $SUDO mkdir -p "$API_INSTALL_DIR/scripts"
 $SUDO cp "$PROJECT_DIR/scripts/ndimon-watchdog.sh" "$API_INSTALL_DIR/scripts/"
 $SUDO chmod +x "$API_INSTALL_DIR/scripts/ndimon-watchdog.sh"
 
-$SYSTEMCTL enable ndimon-r ndimon-finder ndimon-api ndimon-watchdog
-$SYSTEMCTL restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
+$SYSTEMCTL enable ndimon-r ndimon-finder ndimon-api
+$SYSTEMCTL restart ndimon-r ndimon-finder ndimon-api
+# Watchdog available but not enabled by default — enable manually:
+#   systemctl enable --now ndimon-watchdog
 
 IP=$(hostname -I | awk '{print $1}')
 echo ""

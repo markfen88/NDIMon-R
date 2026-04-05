@@ -74,7 +74,7 @@ systemd-notify --ready 2>/dev/null || true
 
 while true; do
     for svc in ndimon-r ndimon-api ndimon-finder; do
-        if "check_$svc" 2>/dev/null; then
+        if "check_${svc//-/_}" 2>/dev/null; then
             if [ "${fail_count[$svc]}" -gt 0 ]; then
                 log "$svc: recovered (was at ${fail_count[$svc]} failures)"
             fi
