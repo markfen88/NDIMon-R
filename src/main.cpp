@@ -495,7 +495,17 @@ public:
             ev["drm_ready"] = drm_ready();
             ipc_->push_event(ev);
         }
-        if (drm_) drm_->set_streaming(false);  // allow splash to render
+        // Drain any queued frames so display_loop doesn't re-set streaming_
+        {
+            std::lock_guard<std::mutex> lk(frame_mtx_);
+            while (!frame_queue_.empty()) {
+                auto& rf = frame_queue_.front();
+                if (rf.owns_ndi_frame && recv_)
+                    recv_->free_video(&rf.ndi_frame);
+                frame_queue_.pop();
+            }
+        }
+        if (drm_) drm_->set_streaming(false);
         if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
         // Do NOT clear source from persistent config so the device can
         // auto-reconnect after a reboot or transient signal loss.
@@ -503,7 +513,17 @@ public:
 
     void forget_source() {
         if (recv_) recv_->disconnect();
-        if (drm_) drm_->set_streaming(false);  // allow splash to render
+        // Drain queued frames
+        {
+            std::lock_guard<std::mutex> lk(frame_mtx_);
+            while (!frame_queue_.empty()) {
+                auto& rf = frame_queue_.front();
+                if (rf.owns_ndi_frame && recv_)
+                    recv_->free_video(&rf.ndi_frame);
+                frame_queue_.pop();
+            }
+        }
+        if (drm_) drm_->set_streaming(false);
         if (drm_ && drm_->is_initialized()) drm_->show_splash(false);
         auto& cfg = Config::instance();
         OutputConfig oc = cfg.get_output(ch_num_);

@@ -82,17 +82,25 @@ router.post('/NdiGrpName', (req, res) => {
 });
 
 // GET|POST /NDIDisServer (discovery server)
+// DS enabled state is derived from whether an IP is set — no separate toggle.
 router.get('/NDIDisServer', (req, res) => {
     const cfg = readJson(FIND_SETTINGS);
-    const { NDIDisServ, NDIDisServIP } = req.query;
-    let write = false;
-    if (NDIDisServ && ['NDIDisServEn','NDIDisServDis'].includes(NDIDisServ) && NDIDisServ !== cfg.NDIDisServ) {
-        cfg.NDIDisServ = NDIDisServ; write = true;
-    }
-    if (NDIDisServIP && NDIDisServIP !== cfg.NDIDisServIP) {
-        cfg.NDIDisServIP = NDIDisServIP; write = true;
-    }
-    if (write) {
+    // Derive enabled state from IP presence for backwards compatibility
+    const ip = cfg.NDIDisServIP || '';
+    cfg.NDIDisServ = ip ? 'NDIDisServEn' : 'NDIDisServDis';
+    res.json(cfg);
+});
+
+router.post('/NDIDisServer', (req, res) => {
+    const cfg = readJson(FIND_SETTINGS);
+    const body = req.body || {};
+    const newIP = (body.NDIDisServIP != null ? String(body.NDIDisServIP).trim() : cfg.NDIDisServIP || '');
+    // Derive enabled from IP: if IP is set → enabled, if blank → disabled
+    const newMode = newIP ? 'NDIDisServEn' : 'NDIDisServDis';
+
+    if (newIP !== (cfg.NDIDisServIP || '') || newMode !== (cfg.NDIDisServ || '')) {
+        cfg.NDIDisServIP = newIP;
+        cfg.NDIDisServ   = newMode;
         writeJson(FIND_SETTINGS, cfg);
         sendIPC({ action: 'reload_config' });
         exec('systemctl restart ndimon-finder', { timeout: 10000 }, (err) => {
@@ -100,27 +108,6 @@ router.get('/NDIDisServer', (req, res) => {
         });
     }
     res.json(cfg);
-});
-
-router.post('/NDIDisServer', (req, res) => {
-    const cfg = readJson(FIND_SETTINGS);
-    const body = req.body || {};
-    let write = false;
-    if (body.NDIDisServ && ['NDIDisServEn','NDIDisServDis'].includes(body.NDIDisServ) && body.NDIDisServ !== cfg.NDIDisServ) {
-        cfg.NDIDisServ = body.NDIDisServ; write = true;
-    }
-    if (body.NDIDisServIP != null && body.NDIDisServIP !== cfg.NDIDisServIP) {
-        cfg.NDIDisServIP = body.NDIDisServIP; write = true;
-    }
-    if (write) {
-        writeJson(FIND_SETTINGS, cfg);
-        sendIPC({ action: 'reload_config' });  // pick up new DS address in C++
-        // Restart finder so NDI SDK re-initializes with new DS IP
-        exec('systemctl restart ndimon-finder', { timeout: 10000 }, (err) => {
-            if (err) console.error('[NDIFinder] Failed to restart finder:', err.message);
-        });
-    }
-    res.json(body);
 });
 
 module.exports = router;

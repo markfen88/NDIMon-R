@@ -272,15 +272,10 @@
         <div class="card mb-3">
           <div class="card-header"><i class="bi bi-wifi"></i>NDI Discovery</div>
           <div class="card-body">
-            <div class="mb-3 d-flex align-items-center gap-3">
-              <label class="form-label mb-0 flex-fill">Discovery Server</label>
-              <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" id="disc-en">
-              </div>
-            </div>
             <div class="mb-3">
-              <label class="form-label">Server IP</label>
-              <input type="text" class="form-control" id="disc-ip" placeholder="10.25.0.49">
+              <label class="form-label">Discovery Server IP</label>
+              <input type="text" class="form-control" id="disc-ip" placeholder="Leave blank to disable">
+              <div class="form-text">Enter the Discovery Server IP to enable, or leave blank to disable.</div>
             </div>
             <div class="mb-3">
               <label class="form-label">NDI Groups</label>
@@ -663,6 +658,7 @@ function startSvcPolling() {
 async function loadInitialData() {
   try { const d = await api('/api/status'); mergeState(d); updateUI(); } catch {}
   loadSourceIPs();
+  loadSettings();
   startSvcPolling();
 }
 
@@ -1067,7 +1063,7 @@ function renderTemps(id) {
 async function loadSettings() {
   try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('ss-sel',d.ScreenSaverMode); setVal('cs-sel',d.ColorSpace); setVal('aud-sel',d.NDIAudio); } catch {}
   try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
-  try { const d=await api('/v1/NDIFinder/NDIDisServer'); setCheck('disc-en',d.NDIDisServ==='NDIDisServEn'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
+  try { const d=await api('/v1/NDIFinder/NDIDisServer'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
   try { const g=await api('/v1/NDIFinder/NdiGrpName'); setNdiGroupsFromString(g.ndi_groups||'public'); } catch {}
   try { const ips=await fetch('/v1/NDIFinder/NdiOffSnSrc').then(r=>r.text()); setVal('off-ips',ips.replace(/"/g,'')); } catch {}
   try { const d=await api('/v1/DeviceSettings/ndi-alias'); setVal('ndi-alias',d.ndi_recv_name||''); } catch {}
@@ -1251,9 +1247,8 @@ async function saveOsd() {
 }
 
 async function saveNetSettings() {
-  const en = document.getElementById('disc-en').checked ? 'NDIDisServEn' : 'NDIDisServDis';
   const ip = document.getElementById('disc-ip').value.trim();
-  await post('/v1/NDIFinder/NDIDisServer',{NDIDisServ:en,NDIDisServIP:ip});
+  await post('/v1/NDIFinder/NDIDisServer',{NDIDisServIP:ip});
   await post('/v1/NDIFinder/NdiGrpName',{ndi_groups:getNdiGroupsString()});
   const ips = document.getElementById('off-ips').value.trim();
   await fetch('/v1/NDIFinder/NdiOffSnSrc',{method:'POST',headers:{'Content-Type':'text/plain'},body:ips});

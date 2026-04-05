@@ -1963,8 +1963,9 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
 bool DRMDisplay::show_splash(bool source_available) {
     if (!initialized_) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
-    // Never interrupt a live video stream with a splash frame
-    if (streaming_) return true;
+    // Clear streaming flag — caller has already stopped the video pipeline.
+    // This ensures splash actually renders rather than silently returning.
+    streaming_ = false;
 
     DRMBuffer& buf = fb_[cur_buf_];
     if (!buf.fb_id || buf.width != width_ || buf.height != height_) {

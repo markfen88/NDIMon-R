@@ -190,7 +190,7 @@ async function buildStatus() {
             color_space: decCfg.ColorSpace      || 'YUV',
         },
         discovery: {
-            enabled:   findCfg.NDIDisServ   === 'NDIDisServEn',
+            enabled:   !!(findCfg.NDIDisServIP),
             server_ip: findCfg.NDIDisServIP || '',
         },
         outputs,
