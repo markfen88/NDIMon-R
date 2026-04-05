@@ -1210,9 +1210,12 @@ bool DRMDisplay::commit_fb(uint32_t fb_id) {
     // First, drain any completed flip event (non-blocking).
     wait_for_flip();
     if (flip_pending_.load()) {
-        // Previous flip still in progress — drop this frame so the decode
-        // thread isn't stalled waiting for vsync.
-        return true;
+        // Previous flip still in progress — drop this frame.
+        // Callers must NOT advance the buffer index: the "back" buffer
+        // we just wrote to may actually be the displayed front buffer
+        // when using double-buffering, so we need to overwrite it again
+        // next frame rather than switching to the real front buffer.
+        return false;
     }
 
     flip_pending_ = true;
@@ -1803,8 +1806,8 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
     }
 
     bool ok = commit_fb(buf.fb_id);
-    cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
-    return ok;
+    if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
+    return true;  // frame rendered (even if flip was dropped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1944,8 +1947,8 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
         }
 
         bool ok = commit_fb(buf.fb_id);
-        cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
-        return ok;
+        if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
+        return true;
     }
 
     streaming_ = true;
@@ -2096,8 +2099,8 @@ bool DRMDisplay::show_splash(bool source_available) {
     invalidate_fill_cache();
 
     bool ok = commit_fb(buf.fb_id);
-    cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
-    return ok;
+    if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
+    return true;  // frame rendered (even if flip was dropped)
 }
 
 // ---------------------------------------------------------------------------
@@ -2116,8 +2119,8 @@ bool DRMDisplay::show_black_impl() {
     invalidate_fill_cache();
 
     bool ok = commit_fb(buf.fb_id);
-    cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
-    return ok;
+    if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
+    return true;  // frame rendered (even if flip was dropped)
 }
 
 // ---------------------------------------------------------------------------
