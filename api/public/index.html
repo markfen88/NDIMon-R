@@ -774,19 +774,28 @@ function buildOutputCards() {
         <span id="out-badge-${idx}" class="badge ${out.connected?'bg-success':'bg-secondary'}">${out.connected?'● LIVE':'○ IDLE'}</span>
       </div>
       <div class="card-body">
-        <div class="mb-3">
-          <label class="form-label">Output Name <small class="text-muted">(shown in NDI discovery)</small></label>
-          <input type="text" class="form-control" id="output-alias-${idx}"
-                 value="${esc(out.output_alias||'')}"
-                 placeholder="${esc(out.connector?.replace('HDMI-A-','HDMI-')||'HDMI-'+(idx+1))}"
-                 oninput="updateNdiPreview(${idx})">
-          <div class="form-text" id="ndi-preview-${idx}" style="color:var(--text-muted);font-size:.78rem"></div>
+        <!-- Output Name -->
+        <div class="d-flex gap-2 align-items-end mb-3">
+          <div class="flex-grow-1">
+            <label class="form-label">Output Name <small class="text-muted">(shown in NDI discovery)</small></label>
+            <input type="text" class="form-control" id="output-alias-${idx}"
+                   value="${esc(out.output_alias||'')}"
+                   placeholder="${esc(out.connector?.replace('HDMI-A-','HDMI-')||'HDMI-'+(idx+1))}"
+                   oninput="updateNdiPreview(${idx})">
+            <div class="form-text" id="ndi-preview-${idx}" style="color:var(--text-muted);font-size:.78rem"></div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="saveOutputName(${idx})"><i class="bi bi-check-lg me-1"></i>Save Name</button>
         </div>
-        <div class="mb-3">
-          <label class="form-label">NDI Source</label>
-          <select class="form-select" id="src-sel-${idx}" onchange="onSrcChange(${idx})">
-            <option value="">— Select source —</option>
-          </select>
+
+        <!-- NDI Source -->
+        <div class="d-flex gap-2 align-items-end mb-3">
+          <div class="flex-grow-1">
+            <label class="form-label">NDI Source</label>
+            <select class="form-select" id="src-sel-${idx}" onchange="onSrcChange(${idx})">
+              <option value="">— Select source —</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="applySource(${idx})"><i class="bi bi-check-lg me-1"></i>Apply Source</button>
         </div>
         <div class="mb-3" id="manual-ip-row-${idx}" style="display:none">
           <label class="form-label">Source Name</label>
@@ -794,6 +803,15 @@ function buildOutputCards() {
           <label class="form-label">IP Address <small class="text-muted">(optional)</small></label>
           <input type="text" class="form-control" id="manual-ip-${idx}" placeholder="192.168.1.100">
         </div>
+
+        <!-- Status -->
+        <div class="stat-row mb-1"><span class="stat-label">Source</span><span class="stat-val" id="out-src-${idx}">${esc(out.source_name||'None')}</span></div>
+        <div class="stat-row mb-1"><span class="stat-label">Resolution</span><span class="stat-val" id="out-res-${idx}">${out.width?out.width+'×'+out.height+' @ '+fmtHz(out.refresh_hz||out.refresh):'—'}</span></div>
+        <div class="stat-row mb-3"><span class="stat-label">FPS / Codec</span><span class="stat-val" id="out-fps-${idx}">${out.fps>0?out.fps.toFixed(1)+' fps':'—'}</span></div>
+
+        <!-- Video Settings -->
+        <hr style="border-color:var(--border);margin:0.5rem 0 1rem">
+        <h6 style="font-size:.85rem;color:var(--text-muted);margin-bottom:.75rem">Video Settings</h6>
         <div class="row g-2 mb-3">
           <div class="col-7">
             <label class="form-label">Resolution</label>
@@ -823,11 +841,8 @@ function buildOutputCards() {
             </select>
           </div>
         </div>
-        <div class="stat-row mb-1"><span class="stat-label">Source</span><span class="stat-val" id="out-src-${idx}">${esc(out.source_name||'None')}</span></div>
-        <div class="stat-row mb-1"><span class="stat-label">Resolution</span><span class="stat-val" id="out-res-${idx}">${out.width?out.width+'×'+out.height+' @ '+fmtHz(out.refresh_hz||out.refresh):'—'}</span></div>
-        <div class="stat-row mb-3"><span class="stat-label">FPS / Codec</span><span class="stat-val" id="out-fps-${idx}">${out.fps>0?out.fps.toFixed(1)+' fps':'—'}</span></div>
         <div class="d-flex gap-2 align-items-center">
-          <button class="btn btn-primary btn-sm" onclick="applyOutputSettings(${idx})"><i class="bi bi-check-lg me-1"></i>Save Output ${idx+1}</button>
+          <button class="btn btn-primary btn-sm" onclick="saveVideoSettings(${idx})"><i class="bi bi-check-lg me-1"></i>Save Video Settings</button>
           <span id="out-msg-${idx}" style="font-size:.8rem;color:var(--text-muted)"></span>
         </div>
       </div>
@@ -914,55 +929,60 @@ function onSrcChange(cardIdx) {
 
 
 
-async function applyOutputSettings(cardIdx) {
+async function saveOutputName(cardIdx) {
   const out = S.outputs[cardIdx];
   const outputIndex = out?.output_index ?? cardIdx;
-  const msg = document.getElementById(`out-msg-${cardIdx}`);
-  if (msg) msg.textContent = 'Applying…';
-
-  // 1. Output alias
   const outAlias = (document.getElementById(`output-alias-${cardIdx}`)?.value || '').trim();
   await post('/v1/DeviceSettings/output-alias', { ch: outputIndex+1, output_alias: outAlias });
+  toast(`Output ${cardIdx+1}: name saved`);
+}
 
-  // 2. Source connection
+async function applySource(cardIdx) {
+  const out = S.outputs[cardIdx];
+  const outputIndex = out?.output_index ?? cardIdx;
   const srcSel = document.getElementById(`src-sel-${cardIdx}`);
   const srcVal = srcSel?.value || 'None';
   if (srcVal === '__manual__') {
     const manName = (document.getElementById(`manual-name-${cardIdx}`)?.value || '').trim();
     const manIP = (document.getElementById(`manual-ip-${cardIdx}`)?.value || '').trim();
-    if (!manName) { toast('Enter a source name for manual connect', 'warning'); if (msg) msg.textContent = ''; return; }
+    if (!manName) { toast('Enter a source name for manual connect', 'warning'); return; }
     await post('/v1/NDIDecode/connectTo', { SourceName: manName, SourceIP: manIP, Output: outputIndex+1 });
+    toast(`Output ${cardIdx+1}: connecting to ${manName}…`);
   } else {
     await post('/v1/NDIDecode/connectTo', { SourceName: srcVal, SourceIP: sourceIPs[srcVal]||'', Output: outputIndex+1 });
+    if (srcVal === 'None') toast(`Output ${cardIdx+1}: disconnected`);
+    else toast(`Output ${cardIdx+1}: connecting to ${srcVal}…`);
+  }
+}
+
+async function saveVideoSettings(cardIdx) {
+  const out = S.outputs[cardIdx];
+  const outputIndex = out?.output_index ?? cardIdx;
+  const msg = document.getElementById(`out-msg-${cardIdx}`);
+  if (msg) msg.textContent = 'Applying…';
+
+  // Resolution
+  const whSel  = document.getElementById(`res-wh-${cardIdx}`);
+  const fpsSel = document.getElementById(`res-fps-${cardIdx}`);
+  const whOpt  = whSel?.options[whSel.selectedIndex];
+  const fpsOpt = fpsSel?.options[fpsSel.selectedIndex];
+  if (whOpt?.dataset.auto === '1') {
+    await post('/v1/VideoOutput/resolution', { auto: true, output: outputIndex });
+  } else if (whOpt?.dataset.w && fpsOpt) {
+    const hz = parseFloat(fpsOpt.dataset.hz || fpsOpt.value);
+    await post('/v1/VideoOutput/resolution', { width: +whOpt.dataset.w, height: +whOpt.dataset.h, refresh_hz: hz, output: outputIndex });
   }
 
-  // 3–5: Resolution, scale mode, rotation — skip when disconnecting (no source)
-  const isDisconnect = srcVal === 'None';
-  if (!isDisconnect) {
-    // 3. Resolution
-    const whSel  = document.getElementById(`res-wh-${cardIdx}`);
-    const fpsSel = document.getElementById(`res-fps-${cardIdx}`);
-    const whOpt  = whSel?.options[whSel.selectedIndex];
-    const fpsOpt = fpsSel?.options[fpsSel.selectedIndex];
-    if (whOpt?.dataset.auto === '1') {
-      await post('/v1/VideoOutput/resolution', { auto: true, output: outputIndex });
-    } else if (whOpt?.dataset.w && fpsOpt) {
-      const hz = parseFloat(fpsOpt.dataset.hz || fpsOpt.value);
-      await post('/v1/VideoOutput/resolution', { width: +whOpt.dataset.w, height: +whOpt.dataset.h, refresh_hz: hz, output: outputIndex });
-    }
+  // Scale mode
+  const scale = document.getElementById(`scale-sel-${cardIdx}`)?.value || 'letterbox';
+  await post('/v1/VideoOutput/scaleMode', { scale_mode: scale, output: outputIndex });
 
-    // 4. Scale mode
-    const scale = document.getElementById(`scale-sel-${cardIdx}`)?.value || 'letterbox';
-    await post('/v1/VideoOutput/scaleMode', { scale_mode: scale, output: outputIndex });
-
-    // 5. Rotation
-    const rotation = parseInt(document.getElementById(`rotation-sel-${cardIdx}`)?.value || '0', 10);
-    await post('/v1/VideoOutput/rotation', { degrees: rotation, output: outputIndex });
-  }
+  // Rotation
+  const rotation = parseInt(document.getElementById(`rotation-sel-${cardIdx}`)?.value || '0', 10);
+  await post('/v1/VideoOutput/rotation', { degrees: rotation, output: outputIndex });
 
   if (msg) msg.textContent = '✓ Saved';
-  if (srcVal === 'None') toast(`Output ${cardIdx+1}: settings saved, disconnected`);
-  else toast(`Output ${cardIdx+1}: settings saved`);
+  toast(`Output ${cardIdx+1}: video settings saved`);
 }
 
 // ══ UI update ════════════════════════════════════════════════════
@@ -1215,8 +1235,8 @@ async function saveAudioSetting() {
   toast('Audio settings saved');
 }
 
-// Legacy stub — real saves now go through applyOutputSettings(cardIdx)
-async function applyVideoOutput() { await applyOutputSettings(0); }
+// Legacy stub
+async function applyVideoOutput() { await saveVideoSettings(0); }
 
 async function saveSplash() {
   const cfg = {
