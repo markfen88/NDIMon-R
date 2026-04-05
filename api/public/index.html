@@ -860,49 +860,57 @@ function updateOutputCards() {
     // Badge
     const badge = document.getElementById(`out-badge-${idx}`);
     if (badge) { badge.className = `badge ${out.connected?'bg-success':'bg-secondary'}`; badge.textContent = out.connected?'● LIVE':'○ IDLE'; }
-    // Status rows
+    // Status rows (read-only labels — never touch form controls like dropdowns)
     setText(`out-src-${idx}`, out.source_name || 'None');
     const resStr = out.width ? `${out.width}×${out.height} @ ${fmtHz(out.refresh_hz||out.refresh)}` : '—';
     setText(`out-res-${idx}`, resStr);
     setText(`out-fps-${idx}`, out.fps > 0 ? out.fps.toFixed(1)+' fps' : '—');
-    // Update source selector without clearing user selection
-    populateOutputSrcSelector(idx);
+    // Do NOT call populateOutputSrcSelector here — it overwrites the user's
+    // dropdown selection every 1.5s, making it impossible to change source.
+    // Source list is only rebuilt when sources actually change (see below).
   });
+  // Only rebuild source dropdowns when the source list changes
+  const srcKey = JSON.stringify(S.sources);
+  if (srcKey !== _lastSrcKey) {
+    _lastSrcKey = srcKey;
+    S.outputs.forEach((out, idx) => populateOutputSrcSelector(idx));
+  }
 }
+let _lastSrcKey = '';
 
 function populateOutputSrcSelector(cardIdx) {
   const sel = document.getElementById(`src-sel-${cardIdx}`);
   if (!sel) return;
   const cur = S.outputs[cardIdx]?.source_name || '';
-  const prev = sel.value;
+  // Preserve user's current dropdown selection across rebuilds
+  const prev = sel.value || cur;
   const isManual = prev === '__manual__';
   sel.innerHTML = '';
   // "None" disconnects the output
   const noneOpt = document.createElement('option');
   noneOpt.value = 'None'; noneOpt.textContent = 'None (Disconnect)';
-  if (!isManual && ((prev || cur) === 'None' || (!prev && !cur))) noneOpt.selected = true;
   sel.appendChild(noneOpt);
   // Discovered sources
-  let foundCur = false;
+  let foundPrev = (prev === 'None');
   S.sources.forEach(s => {
     const o = document.createElement('option');
     o.value = s; o.textContent = s;
-    if (!isManual && s === (prev || cur)) { o.selected = true; foundCur = true; }
     sel.appendChild(o);
+    if (s === prev) foundPrev = true;
   });
   // Manual entry option
   const manOpt = document.createElement('option');
   manOpt.value = '__manual__'; manOpt.textContent = 'Manual...';
-  if (isManual) manOpt.selected = true;
   sel.appendChild(manOpt);
-  // If current source isn't in list and isn't None, select it as manual
-  if (!foundCur && cur && cur !== 'None' && !isManual) {
-    // Source not discovered — keep showing it but don't force manual
+  if (isManual) foundPrev = true;
+  // If the saved selection isn't in the discovered list, add it
+  if (!foundPrev && prev && prev !== 'None') {
     const curOpt = document.createElement('option');
-    curOpt.value = cur; curOpt.textContent = cur + ' (not discovered)';
-    curOpt.selected = true;
+    curOpt.value = prev; curOpt.textContent = prev + ' (not discovered)';
     sel.insertBefore(curOpt, manOpt);
   }
+  // Restore selection
+  sel.value = prev;
   onSrcChange(cardIdx);
 }
 
@@ -1161,8 +1169,12 @@ async function doConnect(name, ip) {
   toast('Connecting to '+name+'…');
 }
 
-async function doDisconnect() {
-  await post('/v1/NDIDecode/connectTo', { SourceName:'None', SourceIP:'' });
+async function doDisconnect(outputIdx) {
+  const output = (outputIdx !== undefined) ? outputIdx + 1 : 1;
+  await post('/v1/NDIDecode/connectTo', { SourceName:'None', SourceIP:'', Output: output });
+  // Update dropdown to reflect disconnect
+  const sel = document.getElementById(`src-sel-${outputIdx || 0}`);
+  if (sel) sel.value = 'None';
   toast('Disconnected');
 }
 

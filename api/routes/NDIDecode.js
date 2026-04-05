@@ -96,21 +96,23 @@ router.post('/decodeTransport', (req, res) => {
 router.get('/connectTo', (req, res) => {
     const { SourceName, SourceIP, Output = 1 } = req.query;
     const outputIdx = (parseInt(Output, 10) || 1) - 1;
+    const ch = outputIdx + 1;
+    const settingsFile = `/etc/ndimon-dec${ch}-settings.json`;
     cancelReconnect(outputIdx);  // explicit user action — cancel pending auto-reconnect
     if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);
-    const cfg = readJson(DEC1_SETTINGS);
+    const cfg = readJson(settingsFile);
     if (SourceName && SourceName !== 'None') {
         cfg.SourceName = SourceName;
         cfg.SourceIP   = SourceIP || '';
         cfg.SourceSelection = 'NDI';
-        writeJson(DEC1_SETTINGS, cfg);
+        writeJson(settingsFile, cfg);
         sendIPC({ action: 'connect', source_name: SourceName, source_ip: SourceIP || '',
                   output: outputIdx });
     } else {
         cfg.SourceName = '';
         cfg.SourceIP   = '';
-        writeJson(DEC1_SETTINGS, cfg);
-        sendIPC({ action: 'disconnect', output: outputIdx });
+        writeJson(settingsFile, cfg);
+        sendIPC({ action: 'forget_source', output: outputIdx });
     }
     res.json({ ok: true, SourceName });
 });
@@ -118,21 +120,24 @@ router.get('/connectTo', (req, res) => {
 router.post('/connectTo', (req, res) => {
     const { SourceName, SourceIP, Output = 1 } = req.body || {};
     const outputIdx = (parseInt(Output, 10) || 1) - 1;
+    const ch = outputIdx + 1;
+    const settingsFile = `/etc/ndimon-dec${ch}-settings.json`;
     cancelReconnect(outputIdx);  // explicit user action — cancel pending auto-reconnect
     if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);
-    const cfg = readJson(DEC1_SETTINGS);
+    const cfg = readJson(settingsFile);
     if (SourceName && SourceName !== 'None') {
         cfg.SourceName = SourceName;
         cfg.SourceIP   = SourceIP || '';
         cfg.SourceSelection = 'NDI';
-        writeJson(DEC1_SETTINGS, cfg);
+        writeJson(settingsFile, cfg);
         sendIPC({ action: 'connect', source_name: SourceName, source_ip: SourceIP || '',
                   output: outputIdx });
     } else {
         cfg.SourceName = '';
         cfg.SourceIP   = '';
-        writeJson(DEC1_SETTINGS, cfg);
-        sendIPC({ action: 'disconnect', output: outputIdx });
+        writeJson(settingsFile, cfg);
+        // Use forget_source to clear saved source — prevents auto-reconnect
+        sendIPC({ action: 'forget_source', output: outputIdx });
     }
     res.json({ ok: true, SourceName });
 });

@@ -519,6 +519,22 @@ public:
 
     void forget_source() {
         if (recv_) recv_->disconnect();
+        connected_ = false;
+        {
+            std::lock_guard<std::mutex> lk(source_mutex_);
+            source_name_.clear();
+            source_ip_.clear();
+        }
+        // Push connection event so Node.js stops reconnect loop
+        if (ipc_) {
+            nlohmann::json ev;
+            ev["type"]      = "connection";
+            ev["output"]    = ch_num_ - 1;
+            ev["connected"] = false;
+            ev["source"]    = "";
+            ev["drm_ready"] = drm_ready();
+            ipc_->push_event(ev);
+        }
         // Drain queued frames
         {
             std::lock_guard<std::mutex> lk(frame_mtx_);
