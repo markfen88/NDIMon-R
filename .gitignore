@@ -9,5 +9,6 @@ cmake_install.cmake
 install_manifest.txt
 Makefile
 .env
+.deploy-env
 *.log
 /tmp/
