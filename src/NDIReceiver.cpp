@@ -156,6 +156,9 @@ bool NDIReceiver::init_recv() {
 
     // Start recv + audio threads immediately so DS can send routing metadata at
     // any time, even before a source is selected (idle/fresh-start scenario).
+    std::cout << "[NDIRecv] init_recv complete (advertiser="
+              << (advertiser_ ? "active" : "none")
+              << ", ds='" << discovery_server_ << "')\n";
     running_ = true;
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
     return true;
@@ -524,8 +527,12 @@ void NDIReceiver::recv_thread() {
             if (video_frame.p_data && video_cb_) {
                 if (!first_frame_logged_) {
                     first_frame_logged_ = true;
+                    char fcc[5] = {};
+                    memcpy(fcc, &video_frame.FourCC, 4);
                     std::cout << "[NDIRecv] First frame (Standard/FrameSync): "
-                              << video_frame.xres << "x" << video_frame.yres << "\n";
+                              << video_frame.xres << "x" << video_frame.yres
+                              << " FourCC='" << fcc << "'"
+                              << " stride=" << video_frame.line_stride_in_bytes << "\n";
                 }
                 NDIVideoFrame vf = make_video_frame(video_frame);
                 vf.ndi_frame = nullptr;  // framesync frames use separate free
