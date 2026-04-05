@@ -63,7 +63,7 @@ struct SplashConfig {
     // Overlay text rendered on screen
     std::string text_idle  = "No Signal";
     std::string text_live  = "Signal Available";
-    float text_height_pct = 10.0f;  // text height as % of screen height [1–50]
+    float text_height_pct = 4.0f;   // font size as % of screen height [1–20]
 
     // Element visibility toggles
     bool show_box          = false;

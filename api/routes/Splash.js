@@ -21,7 +21,7 @@ const DEFAULTS = {
     logo_w_pct:  50,
     text_idle:   'No Signal',
     text_live:   'Signal Available',
-    text_height_pct: 10,
+    text_height_pct: 4,
     show_box:    false,
     show_signal_text: true,
     show_device_name: true,

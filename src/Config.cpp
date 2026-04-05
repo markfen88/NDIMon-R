@@ -113,7 +113,7 @@ void Config::load() {
         splash.logo_w_pct = sp.value("logo_w_pct", 50.0f);
         splash.text_idle  = sp.value("text_idle",  "No Signal");
         splash.text_live  = sp.value("text_live",  "Signal Available");
-        splash.text_height_pct = sp.value("text_height_pct", 10.0f);
+        splash.text_height_pct = sp.value("text_height_pct", 4.0f);
         splash.show_box          = sp.value("show_box",          false);
         splash.show_signal_text  = sp.value("show_signal_text",  true);
         splash.show_device_name  = sp.value("show_device_name",  true);

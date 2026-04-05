@@ -2111,7 +2111,7 @@ bool DRMDisplay::show_splash(bool source_available) {
 
     // ── Compute proportional text scale from text_height_pct ───────────────
     // The 8x8 bitmap font has 8 pixel rows; scale = desired_pixel_height / 8.
-    float pct = std::max(1.0f, std::min(sc.text_height_pct, 50.0f));
+    float pct = std::max(1.0f, std::min(sc.text_height_pct, 20.0f));
     int text_scale = std::max(1, (int)(pct / 100.0f * height_ / 8.0f));
     int info_scale = std::max(1, text_scale / 2);  // device info at half size
     int text_h = 8 * text_scale;
