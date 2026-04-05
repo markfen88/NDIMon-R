@@ -92,7 +92,9 @@ router.get('/NDIDisServer', (req, res) => {
     }
     if (write) {
         writeJson(FIND_SETTINGS, cfg);
-        sendIPC({ action: 'reload_config' });  // pick up new DS address in C++
+        sendIPC({ action: 'reload_config' });
+        try { require('child_process').execSync('systemctl restart ndimon-finder', { timeout: 10000 }); }
+        catch (e) { console.error('[NDIFinder] Failed to restart finder:', e.message); }
     }
     res.json(cfg);
 });
@@ -110,6 +112,9 @@ router.post('/NDIDisServer', (req, res) => {
     if (write) {
         writeJson(FIND_SETTINGS, cfg);
         sendIPC({ action: 'reload_config' });  // pick up new DS address in C++
+        // Restart finder so NDI SDK re-initializes with new DS IP
+        try { require('child_process').execSync('systemctl restart ndimon-finder', { timeout: 10000 }); }
+        catch (e) { console.error('[NDIFinder] Failed to restart finder:', e.message); }
     }
     res.json(body);
 });
