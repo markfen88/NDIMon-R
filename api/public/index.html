@@ -775,27 +775,27 @@ function buildOutputCards() {
       </div>
       <div class="card-body">
         <!-- Output Name -->
-        <div class="d-flex gap-2 align-items-end mb-3">
-          <div class="flex-grow-1">
-            <label class="form-label">Output Name <small class="text-muted">(shown in NDI discovery)</small></label>
-            <input type="text" class="form-control" id="output-alias-${idx}"
-                   value="${esc(out.output_alias||'')}"
-                   placeholder="${esc(out.connector?.replace('HDMI-A-','HDMI-')||'HDMI-'+(idx+1))}"
-                   oninput="updateNdiPreview(${idx})">
-            <div class="form-text" id="ndi-preview-${idx}" style="color:var(--text-muted);font-size:.78rem"></div>
-          </div>
-          <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="saveOutputName(${idx})"><i class="bi bi-check-lg me-1"></i>Save Name</button>
+        <div class="mb-2">
+          <label class="form-label">Output Name <small class="text-muted">(shown in NDI discovery)</small></label>
+          <input type="text" class="form-control" id="output-alias-${idx}"
+                 value="${esc(out.output_alias||'')}"
+                 placeholder="${esc(out.connector?.replace('HDMI-A-','HDMI-')||'HDMI-'+(idx+1))}"
+                 oninput="updateNdiPreview(${idx})">
+          <div class="form-text" id="ndi-preview-${idx}" style="color:var(--text-muted);font-size:.78rem"></div>
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-primary btn-sm" onclick="saveOutputName(${idx})"><i class="bi bi-check-lg me-1"></i>Save Name</button>
         </div>
 
         <!-- NDI Source -->
-        <div class="d-flex gap-2 align-items-end mb-3">
-          <div class="flex-grow-1">
-            <label class="form-label">NDI Source</label>
-            <select class="form-select" id="src-sel-${idx}" onchange="onSrcChange(${idx})">
-              <option value="">— Select source —</option>
-            </select>
-          </div>
-          <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="applySource(${idx})"><i class="bi bi-check-lg me-1"></i>Apply Source</button>
+        <div class="mb-2">
+          <label class="form-label">NDI Source</label>
+          <select class="form-select" id="src-sel-${idx}" onchange="onSrcChange(${idx})">
+            <option value="">— Select source —</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-primary btn-sm" onclick="applySource(${idx})"><i class="bi bi-check-lg me-1"></i>Apply Source</button>
         </div>
         <div class="mb-3" id="manual-ip-row-${idx}" style="display:none">
           <label class="form-label">Source Name</label>

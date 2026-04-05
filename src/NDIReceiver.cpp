@@ -282,6 +282,12 @@ void NDIReceiver::disconnect() {
         std::cout << "[NDIRecv] Sent routing-to-None to DS\n";
     }
     stop_thread();
+    // Destroy FrameSync so the restarted recv_thread doesn't keep pulling
+    // frames from the old session (which blocks frame_mutex_ and prevents splash).
+    if (framesync_) {
+        NDIlib_framesync_destroy(framesync_);
+        framesync_ = nullptr;
+    }
     // Keep recv_ alive — device stays visible as a receiver in discovery
     if (recv_) NDIlib_recv_connect(recv_, nullptr);
     current_source_.clear();
