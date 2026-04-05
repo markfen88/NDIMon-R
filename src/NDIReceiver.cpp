@@ -629,6 +629,7 @@ void NDIReceiver::recv_thread() {
                             // frame duplication/dropping and silence insertion.
                             framesync_ = NDIlib_framesync_create(recv_);
                             if (framesync_) {
+                                first_frame_logged_ = false;  // reset so FrameSync logs its FourCC
                                 std::cout << "[NDIRecv] FrameSync enabled for Standard NDI\n";
                                 // Free the current frame and let FrameSync take over
                                 NDIlib_recv_free_video_v2(recv_, &video_frame);
