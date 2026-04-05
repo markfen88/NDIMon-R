@@ -2023,7 +2023,11 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
 // ---------------------------------------------------------------------------
 bool DRMDisplay::show_splash(bool source_available) {
     if (!initialized_) return false;
-    std::lock_guard<std::mutex> lk(frame_mutex_);
+    // Use try_lock to avoid blocking the main-loop tick() (which handles
+    // watchdog notifications). If the FrameSync thread holds the mutex,
+    // we'll retry on the next tick (500ms).
+    std::unique_lock<std::mutex> lk(frame_mutex_, std::try_to_lock);
+    if (!lk.owns_lock()) return false;
     // Clear streaming flag — caller has already stopped the video pipeline.
     // This ensures splash actually renders rather than silently returning.
     streaming_ = false;

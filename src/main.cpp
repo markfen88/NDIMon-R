@@ -774,11 +774,15 @@ public:
     void tick() {
         // Render splash asynchronously — set by disconnect_source/forget_source
         // so the IPC thread isn't blocked by the 4K software fill.
-        if (splash_requested_.exchange(false)) {
-            std::cout << "[Worker" << ch_num_ << "] Rendering splash (async)\n";
+        if (splash_requested_.load()) {
             if (drm_ && drm_->is_initialized()) {
-                bool ok = drm_->show_splash(false);
-                std::cout << "[Worker" << ch_num_ << "] Splash render: " << (ok ? "ok" : "FAILED") << "\n";
+                if (drm_->show_splash(false)) {
+                    splash_requested_ = false;
+                    std::cout << "[Worker" << ch_num_ << "] Splash rendered (async)\n";
+                }
+                // If show_splash returned false (mutex contention), retry next tick
+            } else {
+                splash_requested_ = false;
             }
         }
 
