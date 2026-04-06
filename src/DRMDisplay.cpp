@@ -292,7 +292,6 @@ static void draw_logo(uint32_t* pixels, uint32_t stride_u32,
 #ifdef HAVE_RGA
 #include <rga/im2d.hpp>
 #include <rga/RgaUtils.h>
-#include <rga/RgaApi.h>
 #include <atomic>
 // libRGA uses a global singleton that can only be safely initialised once.
 // Gate all init checks behind this flag so multiple DRMDisplay instances
@@ -721,27 +720,30 @@ bool DRMDisplay::init(int fd, const std::string& connector_name,
     {
         int state = g_rga_state.load();
         if (state == 0) {
-            // First instance: explicitly init librga singleton then probe.
-            // librga 2.x requires c_RkRgaInit() before im2d calls — without it
-            // the singleton is never created and improcess() fails with
-            // "The current RockchipRga singleton is destroyed".
+            // Probe RGA availability.
+            // NOTE: librga (im2d API) requires the Rockchip BSP kernel driver
+            // which exposes /dev/rga as a misc device with custom ioctls.
+            // Mainline kernels (6.x+) use a V4L2 M2M driver instead, which
+            // librga cannot communicate with. If RGA probe fails, we fall back
+            // to NEON software color conversion — still fast enough for 4K@30.
             if (access("/dev/rga", F_OK) != 0) {
                 g_rga_state = -1;
                 std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
-            } else {
-                int rga_ret = c_RkRgaInit();
-                if (rga_ret < 0) {
-                    g_rga_state = -1;
-                    std::cerr << "[DRM] c_RkRgaInit() failed (" << rga_ret
-                              << "), falling back to software\n";
-                } else if (imcheckHeader() != IM_STATUS_SUCCESS) {
-                    g_rga_state = -1;
-                    std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
-                } else {
+            } else if (imcheckHeader() == IM_STATUS_SUCCESS) {
+                // Try a quick querystring to verify the driver actually responds
+                const char* info = querystring(RGA_ALL);
+                if (info && std::string(info).find("get info failed") == std::string::npos) {
                     g_rga_state = 1;
                     rga_available_ = true;
                     std::cout << "[DRM] RGA hardware color conversion available\n";
+                } else {
+                    g_rga_state = -1;
+                    std::cout << "[DRM] RGA device exists but driver incompatible "
+                                 "(mainline V4L2 kernel?), using software conversion\n";
                 }
+            } else {
+                g_rga_state = -1;
+                std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
             }
         } else if (state == 1) {
             rga_available_ = true;
@@ -794,20 +796,20 @@ bool DRMDisplay::init(const std::string& device,
             if (access("/dev/rga", F_OK) != 0) {
                 g_rga_state = -1;
                 std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
-            } else {
-                int rga_ret = c_RkRgaInit();
-                if (rga_ret < 0) {
-                    g_rga_state = -1;
-                    std::cerr << "[DRM] c_RkRgaInit() failed (" << rga_ret
-                              << "), falling back to software\n";
-                } else if (imcheckHeader() != IM_STATUS_SUCCESS) {
-                    g_rga_state = -1;
-                    std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
-                } else {
+            } else if (imcheckHeader() == IM_STATUS_SUCCESS) {
+                const char* info = querystring(RGA_ALL);
+                if (info && std::string(info).find("get info failed") == std::string::npos) {
                     g_rga_state = 1;
                     rga_available_ = true;
                     std::cout << "[DRM] RGA hardware color conversion available\n";
+                } else {
+                    g_rga_state = -1;
+                    std::cout << "[DRM] RGA device exists but driver incompatible "
+                                 "(mainline V4L2 kernel?), using software conversion\n";
                 }
+            } else {
+                g_rga_state = -1;
+                std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
             }
         } else if (state == 1) {
             rga_available_ = true;
