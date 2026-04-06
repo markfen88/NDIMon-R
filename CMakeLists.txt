@@ -34,8 +34,8 @@ if(SYSTEMD_FOUND)
     message(STATUS "libsystemd found: watchdog integration enabled")
 endif()
 
-# LibRGA (optional, Rockchip only)
-pkg_check_modules(LIBRGA librga)
+# LibRGA removed — incompatible with mainline V4L2 kernel driver.
+# NEON software color conversion is used instead.
 
 # NDI SDK (manually specified)
 set(NDI_INCLUDE_DIR "/usr/local/include")
@@ -138,14 +138,7 @@ if(SYSTEMD_FOUND)
     list(APPEND DECODER_LIBS ${SYSTEMD_LIBRARIES})
 endif()
 
-if(LIBRGA_FOUND)
-    list(APPEND DECODER_DEFINES HAVE_RGA)
-    list(APPEND DECODER_INCLUDES ${LIBRGA_INCLUDE_DIRS})
-    list(APPEND DECODER_LIBS ${LIBRGA_LIBRARIES})
-    message(STATUS "LibRGA found: hardware color conversion enabled")
-else()
-    message(STATUS "LibRGA NOT found: software color conversion only")
-endif()
+message(STATUS "Color conversion: NEON software (RGA removed — mainline kernel incompatible)")
 
 # --- Decoder executable ---
 add_executable(ndimon-r ${DECODER_SOURCES})

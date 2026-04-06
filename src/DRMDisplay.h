@@ -143,13 +143,6 @@ private:
                          uint8_t* dst, uint32_t dst_stride,
                          const Rect& dr, uint32_t out_w, uint32_t out_h);
 
-    // RGA hardware path (optional, HAVE_RGA)
-    bool rga_blit(const void* src_va, int src_fd,
-                  uint32_t src_w, uint32_t src_h, uint32_t src_stride,
-                  uint32_t src_rga_fmt,
-                  void* dst_va, uint32_t dst_stride,
-                  const Rect& dr, uint32_t dst_w, uint32_t dst_h);
-
     // UYVY native plane path — VOP2 Cluster handles YUV→RGB during scanout.
     // Eliminates all per-pixel color conversion CPU work.
     bool alloc_yuv_fb_if_needed();
@@ -212,9 +205,6 @@ private:
     uint32_t rotation_degrees_ = 0;    // user-facing: 0, 90, 180, 270
     uint32_t rotation_drm_     = 1;    // DRM bitmask: 1=0°, 2=90°, 0x30=180°, 8=270°
     uint32_t rotation_prop_id_ = 0;    // cached plane property ID
-
-    bool rga_available_ = false;
-    int  rga_fail_count_ = 0;
 
     // DMA-BUF mmap cache (avoids per-frame mmap/munmap in software fallback)
     struct MmapEntry { void* ptr = nullptr; size_t size = 0; };

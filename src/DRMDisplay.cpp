@@ -289,16 +289,8 @@ static void draw_logo(uint32_t* pixels, uint32_t stride_u32,
     }
 }
 
-#ifdef HAVE_RGA
-#include <rga/im2d.hpp>
-#include <rga/RgaUtils.h>
-#include <atomic>
-// libRGA uses a global singleton that can only be safely initialised once.
-// Gate all init checks behind this flag so multiple DRMDisplay instances
-// don't race and corrupt the singleton.
-static std::atomic<int> g_rga_state{0};  // 0=unknown, 1=ok, -1=unavailable
-static constexpr int kRgaMaxRetries = 3; // retry blit before giving up
-#endif
+// RGA hardware color conversion removed — mainline kernels use V4L2 M2M
+// driver which is incompatible with librga. NEON software path is used instead.
 
 // BT.601 YUV->RGB, clamped to [0,255]
 static inline uint32_t yuv_to_xrgb(int y, int u, int v) {
@@ -716,43 +708,6 @@ bool DRMDisplay::init(int fd, const std::string& connector_name,
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_ATOMIC, 1);
 
-#ifdef HAVE_RGA
-    {
-        int state = g_rga_state.load();
-        if (state == 0) {
-            // Probe RGA availability.
-            // NOTE: librga (im2d API) requires the Rockchip BSP kernel driver
-            // which exposes /dev/rga as a misc device with custom ioctls.
-            // Mainline kernels (6.x+) use a V4L2 M2M driver instead, which
-            // librga cannot communicate with. If RGA probe fails, we fall back
-            // to NEON software color conversion — still fast enough for 4K@30.
-            if (access("/dev/rga", F_OK) != 0) {
-                g_rga_state = -1;
-                std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
-            } else if (imcheckHeader() == IM_STATUS_SUCCESS) {
-                // Try a quick querystring to verify the driver actually responds
-                const char* info = querystring(RGA_ALL);
-                if (info && std::string(info).find("get info failed") == std::string::npos) {
-                    g_rga_state = 1;
-                    rga_available_ = true;
-                    std::cout << "[DRM] RGA hardware color conversion available\n";
-                } else {
-                    g_rga_state = -1;
-                    std::cout << "[DRM] RGA device exists but driver incompatible "
-                                 "(mainline V4L2 kernel?), using software conversion\n";
-                }
-            } else {
-                g_rga_state = -1;
-                std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
-            }
-        } else if (state == 1) {
-            rga_available_ = true;
-            // No log — already reported by first instance
-        }
-        // state == -1: leave rga_available_ = false (default)
-    }
-#endif
-
     if (!setup_crtc(connector_name, preferred_mode)) {
         std::cerr << "[DRM] No connected display found for connector '"
                   << connector_name << "' — will retry on hotplug\n";
@@ -788,34 +743,6 @@ bool DRMDisplay::init(const std::string& device,
 
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
     drmSetClientCap(drm_fd_, DRM_CLIENT_CAP_ATOMIC, 1);
-
-#ifdef HAVE_RGA
-    {
-        int state = g_rga_state.load();
-        if (state == 0) {
-            if (access("/dev/rga", F_OK) != 0) {
-                g_rga_state = -1;
-                std::cout << "[DRM] /dev/rga not found, using software color conversion\n";
-            } else if (imcheckHeader() == IM_STATUS_SUCCESS) {
-                const char* info = querystring(RGA_ALL);
-                if (info && std::string(info).find("get info failed") == std::string::npos) {
-                    g_rga_state = 1;
-                    rga_available_ = true;
-                    std::cout << "[DRM] RGA hardware color conversion available\n";
-                } else {
-                    g_rga_state = -1;
-                    std::cout << "[DRM] RGA device exists but driver incompatible "
-                                 "(mainline V4L2 kernel?), using software conversion\n";
-                }
-            } else {
-                g_rga_state = -1;
-                std::cerr << "[DRM] RGA header version mismatch, falling back to software\n";
-            }
-        } else if (state == 1) {
-            rga_available_ = true;
-        }
-    }
-#endif
 
     if (!setup_crtc(connector_name, preferred_mode)) {
         std::cerr << "[DRM] No connected display found for connector '"
@@ -1664,62 +1591,6 @@ void DRMDisplay::sw_uyvy_scale(const uint8_t* src,
 }
 
 // ---------------------------------------------------------------------------
-// rga_blit (RGA hardware path)
-// ---------------------------------------------------------------------------
-bool DRMDisplay::rga_blit(const void* src_va, int src_fd,
-                           uint32_t src_w, uint32_t src_h, uint32_t src_stride,
-                           uint32_t src_rga_fmt,
-                           void* dst_va, uint32_t dst_stride,
-                           const Rect& dr, uint32_t dst_w, uint32_t dst_h) {
-#ifdef HAVE_RGA
-    if (!rga_available_) return false;
-
-    rga_buffer_t src_buf, dst_buf;
-    if (src_fd >= 0) {
-        src_buf = wrapbuffer_fd(src_fd, src_w, src_h, (int)src_rga_fmt);
-    } else if (src_va) {
-        src_buf = wrapbuffer_virtualaddr(const_cast<void*>(src_va),
-                                          src_w, src_h, (int)src_rga_fmt);
-    } else {
-        return false;
-    }
-    // wstride is in PIXELS, not bytes.
-    // Packed formats (UYVY/YUYV): 2 bytes per pixel → pixels = bytes/2
-    // Planar formats (NV12/NV16): Y plane is 1 byte per pixel → pixels = bytes
-    bool is_packed = (src_rga_fmt == (uint32_t)RK_FORMAT_UYVY_422 ||
-                      src_rga_fmt == (uint32_t)RK_FORMAT_YUYV_422);
-    src_buf.wstride = is_packed ? (int)(src_stride / 2) : (int)src_stride;
-
-    // Output is XRGB8888 (RK_FORMAT_BGRA_8888 in RGA terminology)
-    dst_buf = wrapbuffer_virtualaddr(dst_va, dst_w, dst_h, RK_FORMAT_BGRA_8888);
-    dst_buf.wstride = (int)(dst_stride / 4); // BGRA8888: 4 bytes per pixel
-
-    im_rect src_rect = { 0, 0, (int)src_w, (int)src_h };
-    im_rect dst_rect = { (int)dr.x, (int)dr.y, (int)dr.w, (int)dr.h };
-
-    IM_STATUS status = improcess(src_buf, dst_buf, {}, src_rect, dst_rect, {}, IM_SYNC);
-    if (status != IM_STATUS_SUCCESS) {
-        rga_fail_count_++;
-        if (rga_fail_count_ >= kRgaMaxRetries) {
-            std::cerr << "[DRM] RGA blit failed " << rga_fail_count_
-                      << " times: " << imStrError(status) << " — disabling RGA\n";
-            rga_available_ = false;
-        } else {
-            std::cerr << "[DRM] RGA blit failed (attempt " << rga_fail_count_
-                      << "/" << kRgaMaxRetries << "): " << imStrError(status) << "\n";
-        }
-        return false;
-    }
-    rga_fail_count_ = 0;  // reset on success
-    return true;
-#else
-    (void)src_va; (void)src_fd; (void)src_w; (void)src_h; (void)src_stride;
-    (void)src_rga_fmt; (void)dst_va; (void)dst_stride; (void)dr; (void)dst_w; (void)dst_h;
-    return false;
-#endif
-}
-
-// ---------------------------------------------------------------------------
 // show_frame_memory
 // ---------------------------------------------------------------------------
 bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
@@ -1803,33 +1674,8 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
 
     uint32_t src_stride = stride ? stride : frame_w;
 
-    // Try RGA first (writes directly to DRM buffer — single-threaded, no tearing)
-    bool rga_ok = false;
-#ifdef HAVE_RGA
-    if (rga_available_ && data) {
-        fill_bg(buf);  // RGA writes directly to DRM buffer, needs letterbox bars
-        uint32_t rga_fmt = 0;
-        bool rga_supported = true;
-        if (drm_format == DRM_FORMAT_NV12)
-            rga_fmt = RK_FORMAT_YCbCr_420_SP;
-        else if (drm_format == DRM_FORMAT_NV16)
-            rga_fmt = RK_FORMAT_YCbCr_422_SP;
-        else if (drm_format == DRM_FORMAT_UYVY)
-            rga_fmt = RK_FORMAT_UYVY_422;
-        else if (drm_format == DRM_FORMAT_YUYV)
-            rga_fmt = RK_FORMAT_YUYV_422;
-        else
-            rga_supported = false;
-
-        if (rga_supported) {
-            rga_ok = rga_blit(data, -1, frame_w, frame_h, src_stride, rga_fmt,
-                              buf.map, buf.stride, dr, width_, height_);
-        }
-    }
-#endif
-
-    if (!rga_ok && data) {
-        // Software fallback — NEON convert directly to DRM back buffer.
+    if (data) {
+        // NEON software convert directly to DRM back buffer.
         // Triple buffering (3 buffers) ensures this buffer is never being
         // scanned out, so direct writes are tear-free.
         fill_bg(buf);
@@ -1922,10 +1768,10 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
                 struct drm_gem_close c = {}; c.handle = a_bo;
                 drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
             }
-            // Atomic failed — mark as unsupported and fall through to RGA/software
+            // Atomic failed — mark as unsupported and fall through to software
             if (atomic_plane_state_ == 0) {
                 atomic_plane_state_ = -1;
-                std::cerr << "[DRM] Atomic plane commit failed — falling back to RGA/software\n";
+                std::cerr << "[DRM] Atomic plane commit failed — falling back to software conversion\n";
             }
         }
 
@@ -1938,33 +1784,9 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
 
         fill_bg(buf);
 
-        bool rga_ok = false;
-#ifdef HAVE_RGA
-        if (rga_available_) {
-            uint32_t rga_fmt = 0;
-            bool rga_supported = true;
-            if (format == DRM_FORMAT_NV12)
-                rga_fmt = RK_FORMAT_YCbCr_420_SP;
-            else if (format == DRM_FORMAT_NV16)
-                rga_fmt = RK_FORMAT_YCbCr_422_SP;
-            else if (format == DRM_FORMAT_UYVY)
-                rga_fmt = RK_FORMAT_UYVY_422;
-            else if (format == DRM_FORMAT_YUYV)
-                rga_fmt = RK_FORMAT_YUYV_422;
-            else
-                rga_supported = false;
-
-            if (rga_supported) {
-                rga_ok = rga_blit(nullptr, dma_fd, frame_w, frame_h, stride_y, rga_fmt,
-                                  buf.map, buf.stride, dr, width_, height_);
-            }
-        }
-#endif
-        if (!rga_ok) {
-            // RGA unavailable — NEON convert directly to DRM back buffer.
+        {
+            // NEON convert directly to DRM back buffer.
             // Triple buffering ensures this buffer is not being scanned out.
-            fill_bg(buf);
-
             if (format == DRM_FORMAT_NV12 || format == DRM_FORMAT_NV16) {
                 size_t uv_rows = (format == DRM_FORMAT_NV12) ? (frame_h / 2) : frame_h;
                 size_t map_size = (size_t)stride_y * frame_h
@@ -2309,15 +2131,6 @@ bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
     streaming_   = false;
     invalidate_fill_cache();
     clear_dma_mmap_cache();
-
-#ifdef HAVE_RGA
-    // Reset RGA state on mode change — the initial failure may have been
-    // transient (lazy kernel driver init on RK3399).
-    rga_fail_count_ = 0;
-    if (!rga_available_ && g_rga_state.load() != -1) {
-        rga_available_ = true;
-    }
-#endif
 
     // Reallocate at new size and show black to activate mode
     for (auto& b : fb_) {

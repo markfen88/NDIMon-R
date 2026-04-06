@@ -126,30 +126,10 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
             fi
 
             apt-get install -yq --no-install-recommends \
-                librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 \
-                librga2 librga-dev && ok "MPP + RGA installed" || \
-            apt-get install -yq --no-install-recommends \
-                librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 && ok "MPP installed (no RGA)" || \
+                librockchip-mpp1 librockchip-mpp-dev librockchip-vpu0 && ok "MPP installed" || \
             warn "MPP packages unavailable — software decode only"
         else
             warn "Radxa keyring not found — MPP installation skipped (software decode will be used)"
-        fi
-
-        # Create librga.pc stub if librga installed but no pkg-config file
-        if /sbin/ldconfig -p 2>/dev/null | grep -q "librga\." && \
-           ! pkg-config --exists librga 2>/dev/null; then
-            _rga_so=$(find /usr/lib -name "librga.so*" 2>/dev/null | head -1)
-            RGA_LIBDIR=$(dirname "$_rga_so" 2>/dev/null)
-            if [[ -n "$RGA_LIBDIR" ]]; then
-                cat > /usr/lib/aarch64-linux-gnu/pkgconfig/librga.pc <<RGAEOF
-Name: librga
-Description: Rockchip RGA 2D accelerator
-Version: 2.2.0
-Libs: -L${RGA_LIBDIR} -lrga
-Cflags: -I/usr/include/rga
-RGAEOF
-                ok "librga.pc stub created"
-            fi
         fi
     fi
 fi
@@ -339,7 +319,6 @@ info "Dependency check:"
 /sbin/ldconfig -p | grep 'libavcodec\.so\.61\b' && echo "  ✓ FFmpeg 7 (libavcodec61)" \
                                           || echo "  ✗ FFmpeg 7 (libavcodec61) MISSING — H.265 HX sources will fail"
 /sbin/ldconfig -p | grep librockchip_mpp 2>/dev/null && echo "  ✓ MPP"   || echo "  - MPP (not found, software decode will be used)"
-/sbin/ldconfig -p | grep librga          2>/dev/null && echo "  ✓ librga" || echo "  - librga (not found, ok)"
 pkg-config --exists libdrm   && echo "  ✓ libdrm"          || echo "  ✗ libdrm MISSING"
 pkg-config --exists libsystemd && echo "  ✓ libsystemd"    || echo "  ✗ libsystemd MISSING (sd_notify won't work)"
 pkg-config --exists alsa     && echo "  ✓ alsa"            || echo "  ✗ alsa MISSING"

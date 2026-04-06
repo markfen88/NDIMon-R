@@ -49,7 +49,7 @@ make -j$(nproc)
 - `ENABLE_V4L2=ON/OFF` — V4L2 M2M decoder (RPi)
 - `ENABLE_FFMPEG=ON/OFF` — FFmpeg software fallback
 
-**Dependencies:** NDI SDK 6 (`/usr/local/lib/libndi.so`), libdrm, ALSA, Avahi, nlohmann_json (auto-fetched). Optional: Rockchip MPP, FFmpeg, LibRGA.
+**Dependencies:** NDI SDK 6 (`/usr/local/lib/libndi.so`), libdrm, ALSA, Avahi, nlohmann_json (auto-fetched). Optional: Rockchip MPP, FFmpeg.
 
 ## Code Layout
 
@@ -62,7 +62,7 @@ src/
   MppDecoder.h/cpp   — Rockchip MPP (H.264/H.265, DMA-BUF zero-copy)
   V4L2Decoder.h/cpp  — V4L2 M2M (RPi BCM2835, DMA-BUF export)
   SoftwareDecoder.h/cpp — FFmpeg libavcodec fallback
-  DRMDisplay.h/cpp   — DRM/KMS display (scaling, splash, OSD, RGA)
+  DRMDisplay.h/cpp   — DRM/KMS display (scaling, splash, OSD, NEON color conversion)
   AlsaAudio.h/cpp    — ALSA PCM output (planar float -> S16LE)
   IPCServer.h/cpp    — Unix socket IPC (JSON commands + event push)
   PlatformDetect.h/cpp — Auto-detect Rockchip/RPi/Generic
