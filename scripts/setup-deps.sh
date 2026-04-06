@@ -38,6 +38,7 @@ apt-get install -yq --no-install-recommends \
     libdrm-dev libasound2-dev \
     libavahi-client-dev libavahi-common-dev \
     nlohmann-json3-dev \
+    libsystemd-dev \
     libavcodec-dev libavformat-dev libswscale-dev libavutil-dev \
     2>/dev/null || {
     # Fallback: some packages may differ by distro
@@ -45,6 +46,7 @@ apt-get install -yq --no-install-recommends \
         build-essential cmake pkg-config git wget curl ca-certificates \
         libdrm-dev libasound2-dev \
         libavahi-client-dev libavahi-common-dev \
+        libsystemd-dev \
         libavcodec-dev libavutil-dev libswscale-dev
     # nlohmann-json header-only, can be fetched by cmake if package not found
     apt-get install -yq --no-install-recommends nlohmann-json3-dev 2>/dev/null || true
@@ -339,6 +341,7 @@ info "Dependency check:"
 /sbin/ldconfig -p | grep librockchip_mpp 2>/dev/null && echo "  ✓ MPP"   || echo "  - MPP (not found, software decode will be used)"
 /sbin/ldconfig -p | grep librga          2>/dev/null && echo "  ✓ librga" || echo "  - librga (not found, ok)"
 pkg-config --exists libdrm   && echo "  ✓ libdrm"          || echo "  ✗ libdrm MISSING"
+pkg-config --exists libsystemd && echo "  ✓ libsystemd"    || echo "  ✗ libsystemd MISSING (sd_notify won't work)"
 pkg-config --exists alsa     && echo "  ✓ alsa"            || echo "  ✗ alsa MISSING"
 command -v cmake  &>/dev/null && echo "  ✓ cmake"           || echo "  ✗ cmake MISSING"
 command -v node   &>/dev/null && echo "  ✓ node $(node --version)" || echo "  ✗ node MISSING"
