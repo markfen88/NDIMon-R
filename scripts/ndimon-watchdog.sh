@@ -165,8 +165,7 @@ except:
 log "starting — monitoring ndimon-r, ndimon-api, ndimon-finder"
 log "watchdog mode: $(get_watchdog_mode)"
 
-# Tell systemd we're ready
-systemd-notify --ready 2>/dev/null || true
+log "service type=simple, no sd_notify needed"
 
 while true; do
     # 1. Process liveness checks (always active)
@@ -192,11 +191,6 @@ while true; do
 
     # 3. Write stats for the web UI
     write_stats
-
-    # Watchdog ping to systemd
-    if [ -n "${NOTIFY_SOCKET:-}" ]; then
-        systemd-notify WATCHDOG=1
-    fi
 
     sleep "$INTERVAL"
 done

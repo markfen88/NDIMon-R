@@ -1560,6 +1560,10 @@ int main(int argc, char* argv[]) {
 #ifdef HAVE_SYSTEMD
     sd_notify(0, "READY=1");
     std::cout << "[NDIMon-R] sd_notify READY\n";
+#else
+    std::cerr << "[NDIMon-R] WARNING: built without libsystemd — sd_notify disabled.\n"
+              << "[NDIMon-R] If using Type=notify in systemd, the service WILL timeout.\n"
+              << "[NDIMon-R] Install libsystemd-dev and rebuild to fix.\n";
 #endif
 
     // Wire IPC pointer into workers so they can push events

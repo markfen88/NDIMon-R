@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=notify
+TimeoutStartSec=15
 WatchdogSec=30
 Restart=always
 RestartSec=3
