@@ -101,8 +101,12 @@ void NDIReceiver::rename(const std::string& new_name) {
     std::cout << "[NDIRecv] Renaming receiver to: " << new_name << "\n";
 
     // Remember current source so we can reconnect after the swap
-    std::string src = current_source_;
-    std::string ip  = current_ip_;
+    std::string src, ip;
+    {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        src = current_source_;
+        ip  = current_ip_;
+    }
 
     stop_thread();
 
@@ -202,7 +206,11 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
     stop_thread();  // stop polling thread; keep recv_ alive for discovery
 
     if (source_name.empty() || source_name == "None") {
-        current_source_.clear();
+        {
+            std::lock_guard<std::mutex> lk(state_mutex_);
+            current_source_.clear();
+            current_ip_.clear();
+        }
         // Stay connected to nothing — device remains visible as a receiver
         if (recv_) NDIlib_recv_connect(recv_, nullptr);
         if (conn_cb_) conn_cb_(false, "");
@@ -213,8 +221,11 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
     }
 
     std::cout << "[NDIRecv] Connect to NDI source: " << source_name << "\n";
-    current_source_ = source_name;
-    current_ip_     = source_ip;
+    {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        current_source_ = source_name;
+        current_ip_     = source_ip;
+    }
     stream_type_    = NDIStreamType::Unknown;
 
     // Destroy old framesync — will be recreated if new source is standard
@@ -290,7 +301,11 @@ void NDIReceiver::disconnect() {
     }
     // Keep recv_ alive — device stays visible as a receiver in discovery
     if (recv_) NDIlib_recv_connect(recv_, nullptr);
-    current_source_.clear();
+    {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        current_source_.clear();
+        current_ip_.clear();
+    }
     // Keep threads running so DS can still send routing metadata at any time
     running_ = true;
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
@@ -576,8 +591,11 @@ void NDIReceiver::recv_thread() {
                     std::string url  = xml_attr(xml, "url");
                     std::cout << "[NDIRecv] DS routing: source='"
                               << name << "' url='" << url << "'\n";
-                    current_source_ = (name.empty() || name == "None") ? "" : name;
-                    current_ip_     = url;
+                    {
+                        std::lock_guard<std::mutex> lk(state_mutex_);
+                        current_source_ = (name.empty() || name == "None") ? "" : name;
+                        current_ip_     = url;
+                    }
                     if (routing_cb_) routing_cb_(name, url);
                 } else {
                     std::cout << "[NDIRecv] Metadata: " << xml.substr(0, 120) << "\n";
@@ -588,7 +606,10 @@ void NDIReceiver::recv_thread() {
                 NDIlib_recv_get_source_name(recv_, &p_src, 0);
                 std::string new_src = p_src ? p_src : "";
                 if (p_src) NDIlib_recv_free_string(recv_, p_src);
-                if (!new_src.empty()) current_source_ = new_src;
+                if (!new_src.empty()) {
+                    std::lock_guard<std::mutex> lk(state_mutex_);
+                    current_source_ = new_src;
+                }
             }
 
             // Small sleep to pace the pull loop (~60Hz)
@@ -691,8 +712,11 @@ void NDIReceiver::recv_thread() {
                             std::string url  = xml_attr(xml, "url");
                             std::cout << "[NDIRecv] DS routing: source='"
                                       << name << "' url='" << url << "'\n";
-                            current_source_ = (name.empty() || name == "None") ? "" : name;
-                            current_ip_     = url;
+                            {
+                                std::lock_guard<std::mutex> lk(state_mutex_);
+                                current_source_ = (name.empty() || name == "None") ? "" : name;
+                                current_ip_     = url;
+                            }
                             if (routing_cb_) routing_cb_(name, url);
                         } else {
                             std::cout << "[NDIRecv] Metadata: " << xml.substr(0, 120) << "\n";
@@ -711,7 +735,10 @@ void NDIReceiver::recv_thread() {
                     std::string new_src = p_src ? p_src : "";
                     if (p_src) NDIlib_recv_free_string(recv_, p_src);
                     std::cout << "[NDIRecv] Source change: '" << new_src << "'\n";
-                    if (!new_src.empty()) current_source_ = new_src;
+                    if (!new_src.empty()) {
+                        std::lock_guard<std::mutex> lk(state_mutex_);
+                        current_source_ = new_src;
+                    }
                     break;
                 }
 

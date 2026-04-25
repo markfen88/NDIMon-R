@@ -4,6 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <cstddef>
 #include <cstdint>
 #include <Processing.NDI.Lib.h>
@@ -59,7 +60,10 @@ public:
     void disconnect();
 
     bool is_connected() const;
-    std::string current_source() const { return current_source_; }
+    std::string current_source() const {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        return current_source_;
+    }
 
     // Set transport mode (TCP/UDP/Multicast)
     void set_transport(const std::string& rxpm);
@@ -135,6 +139,9 @@ private:
     std::atomic<bool> audio_enabled_{true};
     std::atomic<NDIStreamType> stream_type_{NDIStreamType::Unknown};
 
+    // Protects current_source_ / current_ip_ — written by recv_thread on
+    // routing/source-change metadata and by connect()/disconnect() from main.
+    mutable std::mutex state_mutex_;
     std::string current_source_;
     std::string current_ip_;
     std::string transport_mode_{"TCP"};
