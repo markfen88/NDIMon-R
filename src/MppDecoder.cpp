@@ -94,8 +94,18 @@ void MppDecoder::destroy() {
 bool MppDecoder::decode(const uint8_t* data, size_t size, int64_t pts_us) {
     if (!initialized_) return false;
 
+    // Copy bitstream into a decoder-owned ring buffer. mpp_packet_init wraps
+    // the pointer (no copy) and MPP's parser thread reads it asynchronously,
+    // so we cannot reuse the caller's buffer (the NDI SDK frees it as soon as
+    // decode() returns). Cycling through kPacketRingSize buffers guarantees
+    // MPP has finished with an entry before we overwrite it.
+    auto& buf = packet_ring_[packet_ring_idx_];
+    if (buf.size() < size) buf.resize(size);
+    memcpy(buf.data(), data, size);
+    packet_ring_idx_ = (packet_ring_idx_ + 1) % kPacketRingSize;
+
     MppPacket packet = nullptr;
-    MPP_RET ret = mpp_packet_init(&packet, (void*)data, size);
+    MPP_RET ret = mpp_packet_init(&packet, buf.data(), size);
     if (ret != MPP_OK) {
         std::cerr << "[mppdec] mpp_packet_init failed " << ret << "\n";
         return false;

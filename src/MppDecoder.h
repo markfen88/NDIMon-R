@@ -4,6 +4,7 @@
 #include <rockchip/mpp_buffer.h>
 #include <rockchip/mpp_frame.h>
 #include <rockchip/mpp_packet.h>
+#include <vector>
 
 class MppDecoder : public VideoDecoder {
 public:
@@ -26,4 +27,13 @@ private:
     VideoCodec     codec_     = VideoCodec::H264;
     bool           initialized_ = false;
     int64_t        pts_counter_ = 0;
+
+    // mpp_packet_init wraps the caller's pointer; MPP's parser thread reads
+    // the bitstream asynchronously after decode_put_packet returns. The caller
+    // (NDIReceiver) frees the NDI frame as soon as decode() returns, so we
+    // copy into a ring of decoder-owned buffers to keep the data alive until
+    // MPP has consumed it.
+    static constexpr int kPacketRingSize = 4;
+    std::vector<uint8_t> packet_ring_[kPacketRingSize];
+    int                  packet_ring_idx_ = 0;
 };
