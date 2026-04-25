@@ -518,35 +518,14 @@ public:
     }
 
     void forget_source() {
-        if (recv_) recv_->disconnect();
-        connected_ = false;
+        // disconnect_source handles drain + splash + IPC event + connected_ flag.
+        // forget additionally clears in-memory source and persists empty source.
+        disconnect_source();
         {
             std::lock_guard<std::mutex> lk(source_mutex_);
             source_name_.clear();
             source_ip_.clear();
         }
-        // Push connection event so Node.js stops reconnect loop
-        if (ipc_) {
-            nlohmann::json ev;
-            ev["type"]      = "connection";
-            ev["output"]    = ch_num_ - 1;
-            ev["connected"] = false;
-            ev["source"]    = "";
-            ev["drm_ready"] = drm_ready();
-            ipc_->push_event(ev);
-        }
-        // Drain queued frames
-        {
-            std::lock_guard<std::mutex> lk(frame_mtx_);
-            while (!frame_queue_.empty()) {
-                auto& rf = frame_queue_.front();
-                if (rf.owns_ndi_frame && recv_)
-                    recv_->free_video(&rf.ndi_frame);
-                frame_queue_.pop();
-            }
-        }
-        if (drm_) drm_->set_streaming(false);
-        splash_requested_ = true;
         auto& cfg = Config::instance();
         OutputConfig oc = cfg.get_output(ch_num_);
         oc.source_name = "";
@@ -612,10 +591,18 @@ public:
         // Skip while actively streaming — renaming mid-stream causes a reconnect
         // churn if the config reload happens immediately after connect_source saves
         // the new source (the alias write triggers rename → reconnect loop).
-        if (recv_ && !connected_.load()) {
+        if (recv_) {
             std::string new_name = build_recv_name();
-            if (recv_->get_recv_name() != new_name)
-                recv_->rename(new_name);
+            if (recv_->get_recv_name() != new_name) {
+                if (connected_.load()) {
+                    std::cerr << "[Worker" << ch_num_
+                              << "] alias change deferred (streaming): '"
+                              << recv_->get_recv_name() << "' -> '"
+                              << new_name << "' — disconnect to apply\n";
+                } else {
+                    recv_->rename(new_name);
+                }
+            }
         }
     }
 
@@ -1123,15 +1110,20 @@ private:
             ipc_->push_event(ev);
         }
 
-        // Update status file for ch1
+        // Update status file for ch1 (atomic write — Node.js may be reading)
         if (ch_num_ == 1) {
             try {
                 nlohmann::json status;
                 status["SourceName"] = connected ? src : "";
                 status["Status"]     = connected ? "active" : "inactive";
                 status["ChNum"]      = ch_num_;
-                std::ofstream f("/etc/ndimon-dec1-status.json");
-                f << status.dump();
+                const char* path = "/etc/ndimon-dec1-status.json";
+                const std::string tmp = std::string(path) + ".tmp";
+                {
+                    std::ofstream f(tmp);
+                    if (f) f << status.dump();
+                }
+                std::rename(tmp.c_str(), path);
             } catch (...) {}
         }
     }
@@ -1439,7 +1431,11 @@ int main(int argc, char* argv[]) {
 
     // Helper: find worker by output_index
     auto get_worker = [&](int idx) -> DisplayWorker* {
-        if (idx < 0 || idx >= (int)workers.size()) return workers[0].get();
+        if (idx < 0 || idx >= (int)workers.size()) {
+            std::cerr << "[NDIMon-R] IPC: invalid output index " << idx
+                      << " (have " << workers.size() << " workers)\n";
+            return nullptr;
+        }
         return workers[idx].get();
     };
 
