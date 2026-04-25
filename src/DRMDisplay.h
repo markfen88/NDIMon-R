@@ -206,6 +206,27 @@ private:
     uint32_t rotation_drm_     = 1;    // DRM bitmask: 1=0°, 2=90°, 0x30=180°, 8=270°
     uint32_t rotation_prop_id_ = 0;    // cached plane property ID
 
+    // Cached property IDs for atomic_plane_commit (looked up once at CRTC
+    // setup; drmModeObjectGetProperties + per-property drmModeGetProperty
+    // is too expensive to repeat at 60 fps).
+    uint32_t prop_plane_fb_id_   = 0;
+    uint32_t prop_plane_crtc_id_ = 0;
+    uint32_t prop_plane_src_x_   = 0;
+    uint32_t prop_plane_src_y_   = 0;
+    uint32_t prop_plane_src_w_   = 0;
+    uint32_t prop_plane_src_h_   = 0;
+    uint32_t prop_plane_crtc_x_  = 0;
+    uint32_t prop_plane_crtc_y_  = 0;
+    uint32_t prop_plane_crtc_w_  = 0;
+    uint32_t prop_plane_crtc_h_  = 0;
+    uint32_t prop_conn_crtc_id_  = 0;
+    uint32_t prop_crtc_active_   = 0;
+    uint32_t prop_crtc_mode_id_  = 0;
+
+    // Mode blob — created on first atomic modeset, destroyed on swap so we
+    // don't leak kernel blob objects every modeset.
+    uint32_t mode_blob_id_ = 0;
+
     // DMA-BUF mmap cache (avoids per-frame mmap/munmap in software fallback)
     struct MmapEntry { void* ptr = nullptr; size_t size = 0; };
     std::unordered_map<int, MmapEntry> dma_mmap_cache_;

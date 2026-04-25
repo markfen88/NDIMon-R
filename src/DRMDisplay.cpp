@@ -939,9 +939,22 @@ bool DRMDisplay::setup_crtc(const std::string& connector_name,
             }
             if (plane_id_) {
                 std::cout << "[DRM] Primary plane " << plane_id_ << " for CRTC " << crtc_id << "\n";
-                // Cache rotation property ID for hardware rotation support
-                rotation_prop_id_ = get_prop_id(drm_fd_, plane_id_,
-                                                 DRM_MODE_OBJECT_PLANE, "rotation");
+                // Cache plane / crtc / connector property IDs once. atomic_plane_commit
+                // would otherwise enumerate them on every frame at 60 fps.
+                prop_plane_fb_id_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "FB_ID");
+                prop_plane_crtc_id_ = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "CRTC_ID");
+                prop_plane_src_x_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "SRC_X");
+                prop_plane_src_y_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "SRC_Y");
+                prop_plane_src_w_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "SRC_W");
+                prop_plane_src_h_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "SRC_H");
+                prop_plane_crtc_x_  = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "CRTC_X");
+                prop_plane_crtc_y_  = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "CRTC_Y");
+                prop_plane_crtc_w_  = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "CRTC_W");
+                prop_plane_crtc_h_  = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "CRTC_H");
+                prop_conn_crtc_id_  = get_prop_id(drm_fd_, connector_id_, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
+                prop_crtc_active_   = get_prop_id(drm_fd_, crtc_id_,      DRM_MODE_OBJECT_CRTC,      "ACTIVE");
+                prop_crtc_mode_id_  = get_prop_id(drm_fd_, crtc_id_,      DRM_MODE_OBJECT_CRTC,      "MODE_ID");
+                rotation_prop_id_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "rotation");
                 if (rotation_prop_id_)
                     std::cout << "[DRM] Rotation property available on plane " << plane_id_ << "\n";
             }
@@ -1174,19 +1187,10 @@ static uint32_t get_prop_id(int fd, uint32_t obj_id, uint32_t obj_type, const ch
 bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst) {
     if (!plane_id_) return false;
 
-    uint32_t p_fb   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "FB_ID");
-    uint32_t p_cid  = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
-    uint32_t p_sx   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "SRC_X");
-    uint32_t p_sy   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "SRC_Y");
-    uint32_t p_sw   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "SRC_W");
-    uint32_t p_sh   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "SRC_H");
-    uint32_t p_cx   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "CRTC_X");
-    uint32_t p_cy   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
-    uint32_t p_cw   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "CRTC_W");
-    uint32_t p_ch   = get_prop_id(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE, "CRTC_H");
-
-    if (!p_fb || !p_cid || !p_sx || !p_sy || !p_sw || !p_sh ||
-        !p_cx || !p_cy || !p_cw || !p_ch)
+    if (!prop_plane_fb_id_ || !prop_plane_crtc_id_ || !prop_plane_src_x_ ||
+        !prop_plane_src_y_ || !prop_plane_src_w_   || !prop_plane_src_h_ ||
+        !prop_plane_crtc_x_ || !prop_plane_crtc_y_ || !prop_plane_crtc_w_ ||
+        !prop_plane_crtc_h_)
         return false;
 
     // First atomic commit must also set the CRTC mode
@@ -1198,16 +1202,20 @@ bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect
     if (!crtc_active_) {
         // First commit: need ALLOW_MODESET and connector/CRTC properties
         flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
-        uint32_t c_crtc = get_prop_id(drm_fd_, connector_id_, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
-        uint32_t crtc_active = get_prop_id(drm_fd_, crtc_id_, DRM_MODE_OBJECT_CRTC, "ACTIVE");
-        uint32_t crtc_mode = get_prop_id(drm_fd_, crtc_id_, DRM_MODE_OBJECT_CRTC, "MODE_ID");
-        if (c_crtc) drmModeAtomicAddProperty(req, connector_id_, c_crtc, crtc_id_);
-        if (crtc_active) drmModeAtomicAddProperty(req, crtc_id_, crtc_active, 1);
-        if (crtc_mode) {
-            uint32_t blob_id = 0;
-            drmModeCreatePropertyBlob(drm_fd_, &mode_, sizeof(mode_), &blob_id);
-            if (blob_id)
-                drmModeAtomicAddProperty(req, crtc_id_, crtc_mode, blob_id);
+        if (prop_conn_crtc_id_)
+            drmModeAtomicAddProperty(req, connector_id_, prop_conn_crtc_id_, crtc_id_);
+        if (prop_crtc_active_)
+            drmModeAtomicAddProperty(req, crtc_id_, prop_crtc_active_, 1);
+        if (prop_crtc_mode_id_) {
+            // Destroy any previous mode blob to avoid leaking kernel blobs on
+            // every modeset (re-init / set_mode / hotplug).
+            if (mode_blob_id_) {
+                drmModeDestroyPropertyBlob(drm_fd_, mode_blob_id_);
+                mode_blob_id_ = 0;
+            }
+            drmModeCreatePropertyBlob(drm_fd_, &mode_, sizeof(mode_), &mode_blob_id_);
+            if (mode_blob_id_)
+                drmModeAtomicAddProperty(req, crtc_id_, prop_crtc_mode_id_, mode_blob_id_);
         }
     }
 
@@ -1219,16 +1227,16 @@ bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect
     }
 
     // SRC rect is in 16.16 fixed point
-    drmModeAtomicAddProperty(req, plane_id_, p_fb,  fb_id);
-    drmModeAtomicAddProperty(req, plane_id_, p_cid, crtc_id_);
-    drmModeAtomicAddProperty(req, plane_id_, p_sx,  (uint64_t)src.x << 16);
-    drmModeAtomicAddProperty(req, plane_id_, p_sy,  (uint64_t)src.y << 16);
-    drmModeAtomicAddProperty(req, plane_id_, p_sw,  (uint64_t)src.w << 16);
-    drmModeAtomicAddProperty(req, plane_id_, p_sh,  (uint64_t)src.h << 16);
-    drmModeAtomicAddProperty(req, plane_id_, p_cx,  dst.x);
-    drmModeAtomicAddProperty(req, plane_id_, p_cy,  dst.y);
-    drmModeAtomicAddProperty(req, plane_id_, p_cw,  dst.w);
-    drmModeAtomicAddProperty(req, plane_id_, p_ch,  dst.h);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_fb_id_,   fb_id);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_crtc_id_, crtc_id_);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_src_x_,   (uint64_t)src.x << 16);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_src_y_,   (uint64_t)src.y << 16);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_src_w_,   (uint64_t)src.w << 16);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_src_h_,   (uint64_t)src.h << 16);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_crtc_x_,  dst.x);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_crtc_y_,  dst.y);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_crtc_w_,  dst.w);
+    drmModeAtomicAddProperty(req, plane_id_, prop_plane_crtc_h_,  dst.h);
 
     // Hardware rotation (VOP2 Smart/Esmart planes)
     if (rotation_prop_id_ && rotation_drm_ != 1)
@@ -2195,6 +2203,8 @@ void DRMDisplay::destroy() {
     if (drm_fd_ >= 0) {
         for (auto& b : fb_)     free_fb(b);
         for (auto& b : yuv_fb_) free_fb(b);
+        if (mode_blob_id_)
+            drmModeDestroyPropertyBlob(drm_fd_, mode_blob_id_);
         if (owns_fd_) {
             std::cout << "[DRM] Closing DRM device\n";
             close(drm_fd_);
@@ -2204,6 +2214,21 @@ void DRMDisplay::destroy() {
         }
         drm_fd_ = -1;
     }
+
+    mode_blob_id_       = 0;
+    prop_plane_fb_id_   = 0;
+    prop_plane_crtc_id_ = 0;
+    prop_plane_src_x_   = 0;
+    prop_plane_src_y_   = 0;
+    prop_plane_src_w_   = 0;
+    prop_plane_src_h_   = 0;
+    prop_plane_crtc_x_  = 0;
+    prop_plane_crtc_y_  = 0;
+    prop_plane_crtc_w_  = 0;
+    prop_plane_crtc_h_  = 0;
+    prop_conn_crtc_id_  = 0;
+    prop_crtc_active_   = 0;
+    prop_crtc_mode_id_  = 0;
 
     initialized_  = false;
     crtc_active_  = false;
