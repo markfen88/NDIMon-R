@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 #include <functional>
+#include <mutex>
+#include <unordered_map>
 #include <nlohmann/json.hpp>
 
 struct DecoderConfig {
@@ -125,4 +127,10 @@ private:
 
     // Returns config file path for given ch_num
     static std::string settings_path(int ch_num);
+
+    // Guards the in-memory config structs (decoder/transport/finder/device/...)
+    // against concurrent load() from one thread and reads from others.
+    // Per-output cache uses the same mutex.
+    mutable std::mutex mutex_;
+    mutable std::unordered_map<int, OutputConfig> output_cache_;
 };

@@ -51,6 +51,11 @@ std::string Config::settings_path(int ch_num) {
 }
 
 void Config::load() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    // Disk source-of-truth changed — drop per-output cache so next get_output
+    // re-reads from disk.
+    output_cache_.clear();
+
     // Decoder settings (ch1 / legacy)
     auto dec = read_json(DEC1_SETTINGS);
     if (!dec.empty() && dec.is_object()) {
@@ -130,6 +135,7 @@ void Config::load() {
 }
 
 void Config::save_device() {
+    std::lock_guard<std::mutex> lk(mutex_);
     // Only persist device-level settings that the C++ side owns.
     // All other config files are owned by the Node.js API.
     auto j = read_json(DEVICE_SETTINGS);
@@ -144,6 +150,11 @@ void Config::save_device() {
 // Per-output config
 // ---------------------------------------------------------------------------
 OutputConfig Config::get_output(int ch_num) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+
+    auto it = output_cache_.find(ch_num);
+    if (it != output_cache_.end()) return it->second;
+
     OutputConfig out;
     auto j = read_json(settings_path(ch_num));
     if (!j.empty() && j.is_object()) {
@@ -160,10 +171,13 @@ OutputConfig Config::get_output(int ch_num) const {
         out.source_ip      = connected_source_ip;
         out.scale_mode     = "letterbox";
     }
+    output_cache_[ch_num] = out;
     return out;
 }
 
 void Config::set_output(int ch_num, const OutputConfig& out) {
+    std::lock_guard<std::mutex> lk(mutex_);
+
     // Read existing JSON to preserve other fields
     std::string path = settings_path(ch_num);
     nlohmann::json j = read_json(path);
@@ -177,6 +191,7 @@ void Config::set_output(int ch_num, const OutputConfig& out) {
     j["rotation"]     = out.rotation;
 
     write_json(path, j);
+    output_cache_[ch_num] = out;
 
     // Keep legacy in-memory fields in sync for ch1 (used by get_output fallback)
     if (ch_num == 1) {
