@@ -2,7 +2,10 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <cerrno>
+#include <string>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <poll.h>
@@ -75,16 +78,34 @@ void IPCServer::server_thread() {
 }
 
 bool IPCServer::handle_client(int client_fd) {
-    char buf[8192] = {};
-    ssize_t n = read(client_fd, buf, sizeof(buf) - 1);
-    if (n <= 0) return true;
+    // Read until newline (commands are newline-terminated JSON).
+    // Single read() can return a partial command if the kernel splits the
+    // write — keep pulling until \n or we hit the size cap.
+    static constexpr size_t kMaxCommand = 64 * 1024;
+    std::string buf;
+    buf.reserve(1024);
+    char chunk[2048];
+    while (buf.size() < kMaxCommand) {
+        struct pollfd pfd = { client_fd, POLLIN, 0 };
+        int pr = poll(&pfd, 1, 1000);
+        if (pr <= 0) break;
+        ssize_t n = read(client_fd, chunk, sizeof(chunk));
+        if (n <= 0) break;
+        buf.append(chunk, chunk + n);
+        if (buf.find('\n') != std::string::npos) break;
+    }
+    if (buf.empty()) return true;
 
     try {
-        auto j = nlohmann::json::parse(buf, buf + n);
+        auto j = nlohmann::json::parse(buf);
         std::string action = j.value("action", "");
 
         // Subscriber mode: keep fd open and push events to it
         if (action == "subscribe") {
+            // Non-blocking writes so a stalled subscriber can't block the
+            // recv/decode/IPC threads that call push_event().
+            int fl = fcntl(client_fd, F_GETFL, 0);
+            if (fl >= 0) fcntl(client_fd, F_SETFL, fl | O_NONBLOCK);
             {
                 std::lock_guard<std::mutex> lk(subscribers_mutex_);
                 subscribers_.push_back(client_fd);
@@ -143,7 +164,16 @@ void IPCServer::push_event(const nlohmann::json& event) {
     std::lock_guard<std::mutex> lk(subscribers_mutex_);
     std::vector<int> dead;
     for (int fd : subscribers_) {
-        if (write(fd, msg.c_str(), msg.size()) < 0) dead.push_back(fd);
+        // MSG_DONTWAIT on top of the per-fd O_NONBLOCK and MSG_NOSIGNAL so a
+        // disconnected subscriber doesn't kill us with SIGPIPE.
+        ssize_t r = send(fd, msg.c_str(), msg.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (r < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Slow subscriber: drop this event rather than stall.
+                continue;
+            }
+            dead.push_back(fd);
+        }
     }
     for (int fd : dead) {
         close(fd);
