@@ -17,6 +17,7 @@ COOLDOWN=60
 HEALTH_URL="http://127.0.0.1:80/api/health"
 DEVICE_SETTINGS="/etc/ndimon-device-settings.json"
 STATS_FILE="/tmp/ndimon-watchdog-stats.json"
+DECODER_SOCK="/tmp/ndi-decoder.sock"
 
 declare -A fail_count
 declare -A last_restart
@@ -152,11 +153,26 @@ except:
             if [ "$mode" = "active" ] && [ "$stall" -ge 60 ] 2>/dev/null; then
                 log "output $idx: 30s stall escalation — triggering reconnect"
                 wd_reconnects=$((wd_reconnects + 1))
-                # Send reconnect via IPC through the API
-                curl -s --max-time 5 -X POST "http://127.0.0.1:80/v1/NDIDecode/connectTo" \
-                    -H "Content-Type: application/json" \
-                    -d "{\"SourceName\":\"__reconnect__\",\"Output\":$((idx+1))}" \
-                    >/dev/null 2>&1 || true
+                # Talk directly to the C++ decoder over its Unix socket.
+                # disconnect preserves the saved source per the design
+                # contract; the API's SSE-driven reconnect scheduler then
+                # reconnects on the resulting disconnect event. Avoids a
+                # round-trip through the HTTP API (which can itself stall
+                # and was previously called with a sentinel SourceName the
+                # API never actually handled).
+                if [ -S "$DECODER_SOCK" ]; then
+                    python3 - "$DECODER_SOCK" "$idx" <<'PY' >/dev/null 2>&1 || true
+import socket, sys, json
+sock_path, idx = sys.argv[1], int(sys.argv[2])
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2.0)
+s.connect(sock_path)
+s.sendall((json.dumps({"action": "disconnect", "output": idx}) + "\n").encode())
+s.close()
+PY
+                else
+                    log "output $idx: decoder socket missing ($DECODER_SOCK)"
+                fi
             fi
         fi
     done <<< "$outputs"

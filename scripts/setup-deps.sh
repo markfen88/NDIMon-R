@@ -239,6 +239,12 @@ done
 install_ffmpeg7() {
     # Use Ubuntu Plucky (25.04) arm64 packages — they install cleanly on
     # both Ubuntu Noble and Debian Bookworm (same libc/libstdc++ ABI).
+    #
+    # RECONSIDER: once Ubuntu 26.04 LTS ships FFmpeg 7 in the default
+    # Noble successor pocket (or backports lands libavcodec61 in Noble
+    # itself), drop the Plucky pin and use the distro repo directly.
+    # Pinning to a non-LTS release ties our HX H.265 path to Plucky's
+    # 9-month lifecycle.
     local _tmplist; _tmplist=$(mktemp /etc/apt/sources.list.d/_tmp_plucky_XXXXXX.list)
     echo "deb [arch=arm64 trusted=yes] http://ports.ubuntu.com/ubuntu-ports plucky main universe" \
         > "$_tmplist"
