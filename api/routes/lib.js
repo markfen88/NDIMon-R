@@ -86,10 +86,10 @@ function writeJson(file, obj) {
     }
 }
 
+// Historically set CORS-allow-all headers; the API is now same-origin only
+// (cross-origin access enabled CSRF against an authenticated appliance).
+// Kept as the per-route response-header hook for cache control.
 function corsHeaders(res) {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS,POST,PUT');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
     res.header('Cache-Control', 'no-store');
     res.header('Connection', 'close');
 }

@@ -2,7 +2,7 @@
 const express = require('express');
 const router  = express.Router();
 const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 
 const DEVICE_SETTINGS = '/etc/ndimon-device-settings.json';
 
@@ -51,9 +51,14 @@ router.post('/ndi-alias', (req, res) => {
     const cfg = readJson(DEVICE_SETTINGS);
     cfg.ndi_recv_name = name;
     writeJson(DEVICE_SETTINGS, cfg);
-    // Update OS hostname so NDI discovery shows the right device name
+    // Update OS hostname so NDI discovery shows the right device name.
+    // execFile (no shell) prevents command injection via the alias, and the
+    // hostname itself is restricted to RFC-952-ish safe characters.
     if (name) {
-        exec(`hostnamectl set-hostname "${name.replace(/"/g, '')}"`, err => {
+        const hostname = name.replace(/[^A-Za-z0-9-]+/g, '-')
+                             .replace(/^-+|-+$/g, '')
+                             .slice(0, 63) || 'ndimon';
+        execFile('hostnamectl', ['set-hostname', hostname], err => {
             if (err) console.warn('[DeviceSettings] hostnamectl:', err.message);
         });
     }
@@ -79,6 +84,25 @@ router.post('/output-alias', (req, res) => {
     writeJson(path, cfg);
     sendIPC({ action: 'reload_config' });
     res.json({ output_alias: cfg.output_alias, ch: chNum });
+});
+
+// GET /decode-mode  — HX decode path: auto | hardware | software
+router.get('/decode-mode', (req, res) => {
+    const cfg = readJson(DEVICE_SETTINGS);
+    res.json({ decode_mode: cfg.decode_mode || 'auto' });
+});
+
+// POST /decode-mode  — body: { decode_mode: "auto"|"hardware"|"software" }
+router.post('/decode-mode', (req, res) => {
+    const mode = ((req.body && req.body.decode_mode) || '').trim();
+    const allowed = ['auto', 'hardware', 'software'];
+    if (!allowed.includes(mode))
+        return res.status(400).json({ ok: false, error: 'must be auto, hardware, or software' });
+    const cfg = readJson(DEVICE_SETTINGS);
+    cfg.decode_mode = mode;
+    writeJson(DEVICE_SETTINGS, cfg);
+    sendIPC({ action: 'reload_config' });
+    res.json({ ok: true, decode_mode: mode });
 });
 
 // GET /watchdog-mode

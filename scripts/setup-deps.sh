@@ -25,9 +25,17 @@ elif grep -qi "raspberrypi\|brcm,bcm2" /proc/device-tree/compatible 2>/dev/null;
 fi
 info "Board: $BOARD"
 
-# Detect architecture
+# Detect architecture and normalise into: IS_X86, MULTIARCH (Debian triplet),
+# NDI_LIB_MATCH (substring used to pick the right dir in the NDI SDK tarball,
+# which ships libraries for ALL architectures), and UBUNTU_MIRROR (FFmpeg pin).
 ARCH=$(dpkg --print-architecture 2>/dev/null || uname -m)
-info "Arch:  $ARCH"
+case "$ARCH" in
+    amd64|x86_64)  IS_X86=1; MULTIARCH="x86_64-linux-gnu"; NDI_LIB_MATCH="x86_64-linux-gnu"; FFMPEG_APT_ARCH="amd64"; UBUNTU_MIRROR="http://archive.ubuntu.com/ubuntu" ;;
+    arm64|aarch64) IS_X86=0; MULTIARCH="aarch64-linux-gnu"; NDI_LIB_MATCH="aarch64";          FFMPEG_APT_ARCH="arm64"; UBUNTU_MIRROR="http://ports.ubuntu.com/ubuntu-ports" ;;
+    armhf|armv7l)  IS_X86=0; MULTIARCH="arm-linux-gnueabihf"; NDI_LIB_MATCH="arm-";            FFMPEG_APT_ARCH="armhf"; UBUNTU_MIRROR="http://ports.ubuntu.com/ubuntu-ports" ;;
+    *)             IS_X86=0; MULTIARCH="$(gcc -dumpmachine 2>/dev/null || echo unknown)"; NDI_LIB_MATCH="$ARCH"; FFMPEG_APT_ARCH="$ARCH"; UBUNTU_MIRROR="http://ports.ubuntu.com/ubuntu-ports" ;;
+esac
+info "Arch:  $ARCH  (x86=$IS_X86, multiarch=$MULTIARCH)"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -134,6 +142,25 @@ if [[ "$BOARD" == rk3588 || "$BOARD" == rk3399 ]]; then
     fi
 fi
 
+# --- 2b. VAAPI hardware decode (x86 Intel/AMD) ---
+# On Linux the NDI SDK has NO GPU decode path (FFmpeg software only), so HX
+# H.264/H.265 hardware decode is done application-side via the VAAPIDecoder.
+# VAAPI is the vendor-neutral API covering Intel (iHD/i965) and AMD (Mesa).
+if [[ "$IS_X86" == "1" ]]; then
+    info "Installing VAAPI runtime + drivers (Intel/AMD hardware decode)..."
+    # libva runtime + vainfo; intel-media (modern iHD), i965 (older Intel),
+    # mesa-va-drivers (AMD). Installing all three is harmless — libva loads the
+    # one matching the GPU. dev headers are pulled for the build.
+    apt-get install -yq --no-install-recommends \
+        libva2 libva-drm2 libva-dev vainfo \
+        intel-media-va-driver-non-free i965-va-driver mesa-va-drivers \
+        2>/dev/null || \
+    apt-get install -yq --no-install-recommends \
+        libva2 libva-drm2 libva-dev vainfo mesa-va-drivers 2>/dev/null || \
+        warn "Some VAAPI packages unavailable — hardware decode may fall back to software"
+    ok "VAAPI runtime installed"
+fi
+
 # --- 3. NDI SDK v6 ---
 install_ndi_sdk() {
     info "Installing NDI SDK v6..."
@@ -172,25 +199,31 @@ install_ndi_sdk() {
         cp -f "$ndi_inc_dir"/Processing.NDI.*.h /usr/local/include/
     fi
 
-    # Install library — search under lib/ to avoid picking up bin/ subdirs
-    # Fall back to any dir containing libndi.so if lib/ subdirs not found
+    # Install library — the NDI SDK tarball ships libraries for ALL targets
+    # (x86_64-linux-gnu, aarch64-*, arm-*), so we MUST pick the dir matching this
+    # host's architecture (NDI_LIB_MATCH) rather than always grabbing aarch64.
     local ndi_lib_dir=""
     local ndi_lib_base="$ndi_base/lib"
     if [[ -d "$ndi_lib_base" ]]; then
-        ndi_lib_dir=$(find "$ndi_lib_base" -type d -name "aarch64-rpi4-linux-gnueabi" 2>/dev/null | head -1)
-        [[ -z "$ndi_lib_dir" ]] && ndi_lib_dir=$(find "$ndi_lib_base" -type d -name "*aarch64*" 2>/dev/null | head -1)
-        [[ -z "$ndi_lib_dir" ]] && ndi_lib_dir=$(find "$ndi_lib_base" -type d -name "*arm64*"   2>/dev/null | head -1)
+        ndi_lib_dir=$(find "$ndi_lib_base" -type d -name "*${NDI_LIB_MATCH}*" 2>/dev/null | head -1)
+        # aarch64 fallbacks (Pi tarball names the dir aarch64-rpi4-linux-gnueabi)
+        if [[ -z "$ndi_lib_dir" && "$IS_X86" != "1" ]]; then
+            ndi_lib_dir=$(find "$ndi_lib_base" -type d -name "*aarch64*" 2>/dev/null | head -1)
+            [[ -z "$ndi_lib_dir" ]] && ndi_lib_dir=$(find "$ndi_lib_base" -type d -name "*arm64*" 2>/dev/null | head -1)
+        fi
     fi
-    # Final fallback: find the .so file itself and use its parent dir
+    # Final fallback: locate the .so under a dir matching this arch only — do NOT
+    # blindly grab the first libndi.so.* in the tree (that could be the wrong arch).
     if [[ -z "$ndi_lib_dir" ]]; then
-        local so_parent; so_parent=$(find "$ndi_base" -name "libndi.so.*.*" 2>/dev/null | head -1)
+        local so_parent; so_parent=$(find "$ndi_base" -path "*${NDI_LIB_MATCH}*" -name "libndi.so.*.*" 2>/dev/null | head -1)
         [[ -n "$so_parent" ]] && ndi_lib_dir=$(dirname "$so_parent")
     fi
 
     if [[ -z "$ndi_lib_dir" ]]; then
-        warn "NDI aarch64 library not found in extracted SDK"
+        warn "NDI library for $ARCH ($NDI_LIB_MATCH) not found in extracted SDK"
         return 1
     fi
+    info "NDI library dir: $ndi_lib_dir"
 
     local so_full; so_full=$(find "$ndi_lib_dir" -name "libndi.so.*.*" | head -1)
     [[ -z "$so_full" ]] && { warn "libndi.so.*.* not found in $ndi_lib_dir"; return 1; }
@@ -204,6 +237,10 @@ install_ndi_sdk() {
     ln -sf "$so_ver" /usr/local/lib/"$so_major"
     ln -sf "$so_major" /usr/local/lib/libndi.so
     ldconfig
+    # Record the exact installed SDK version for the About page and for support
+    # diagnostics. We pin to the v6 SDK line (see NDI_SDK_URL); HX passthrough
+    # behaviour is validated against this major version at runtime.
+    echo "${so_ver#libndi.so.}" > /etc/ndimon-ndi-version 2>/dev/null || true
     ok "NDI SDK installed: $so_ver"
 }
 
@@ -224,8 +261,8 @@ fi
 # the FFmpeg 6 and 7 ABIs differ in AVFrame/AVPacket layout and cause a hard SEGV.
 # Remove only stale compat shims (those pointing to FFmpeg 6 targets, e.g. .so.60.*).
 # Do NOT remove real Debian/Ubuntu package symlinks pointing to .so.61.* targets.
-for _stale in /lib/aarch64-linux-gnu/libavcodec.so.61 /lib/aarch64-linux-gnu/libavutil.so.59 \
-              /usr/lib/aarch64-linux-gnu/libavcodec.so.61 /usr/lib/aarch64-linux-gnu/libavutil.so.59; do
+for _stale in /lib/${MULTIARCH}/libavcodec.so.61 /lib/${MULTIARCH}/libavutil.so.59 \
+              /usr/lib/${MULTIARCH}/libavcodec.so.61 /usr/lib/${MULTIARCH}/libavutil.so.59; do
     if [[ -L "$_stale" ]]; then
         _target=$(readlink "$_stale")
         # Only remove if pointing to an FFmpeg 6 library (compat shim), not FFmpeg 7
@@ -246,7 +283,7 @@ install_ffmpeg7() {
     # Pinning to a non-LTS release ties our HX H.265 path to Plucky's
     # 9-month lifecycle.
     local _tmplist; _tmplist=$(mktemp /etc/apt/sources.list.d/_tmp_plucky_XXXXXX.list)
-    echo "deb [arch=arm64 trusted=yes] http://ports.ubuntu.com/ubuntu-ports plucky main universe" \
+    echo "deb [arch=${FFMPEG_APT_ARCH} trusted=yes] ${UBUNTU_MIRROR} plucky main universe" \
         > "$_tmplist"
     apt-get update -o Dir::Etc::sourcelist="$_tmplist" \
         -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 -qq 2>/dev/null || true
@@ -294,20 +331,25 @@ else
     ok "Node.js installed: $(node --version) / npm $(npm --version 2>/dev/null || echo '?')"
 fi
 
-# --- 5. RPi-specific: DRM/V4L2 group membership ---
-if [[ "$BOARD" == "rpi" ]]; then
-    # The service user needs access to /dev/dri and /dev/video* devices
-    SVCUSER=""
-    if id radxa &>/dev/null; then SVCUSER="radxa"; fi
-    if [[ -n "$SVCUSER" ]]; then
-        for grp in video render audio; do
-            if getent group "$grp" &>/dev/null; then
-                usermod -aG "$grp" "$SVCUSER" 2>/dev/null && \
-                    info "Added $SVCUSER to group $grp" || true
-            fi
-        done
-        ok "RPi device groups configured for $SVCUSER"
-    fi
+# --- 5. DRM/VAAPI/V4L2 device group membership ---
+# The service user needs access to /dev/dri (DRM display + VAAPI renderD128)
+# and /dev/video* (V4L2). Required on every platform: ARM for MPP/V4L2, x86 for
+# VAAPI. Pick the most likely service user: the sudo invoker, else a known SBC
+# account, else skip (root installs don't need group membership).
+SVCUSER="${SUDO_USER:-}"
+if [[ -z "$SVCUSER" || "$SVCUSER" == "root" ]]; then
+    for _u in radxa rock pi ubuntu; do
+        if id "$_u" &>/dev/null; then SVCUSER="$_u"; break; fi
+    done
+fi
+if [[ -n "$SVCUSER" && "$SVCUSER" != "root" ]]; then
+    for grp in video render audio; do
+        if getent group "$grp" &>/dev/null; then
+            usermod -aG "$grp" "$SVCUSER" 2>/dev/null && \
+                info "Added $SVCUSER to group $grp" || true
+        fi
+    done
+    ok "Device groups (video/render/audio) configured for $SVCUSER"
 fi
 
 # Grant node access to port 80
@@ -325,6 +367,20 @@ info "Dependency check:"
 /sbin/ldconfig -p | grep 'libavcodec\.so\.61\b' && echo "  ✓ FFmpeg 7 (libavcodec61)" \
                                           || echo "  ✗ FFmpeg 7 (libavcodec61) MISSING — H.265 HX sources will fail"
 /sbin/ldconfig -p | grep librockchip_mpp 2>/dev/null && echo "  ✓ MPP"   || echo "  - MPP (not found, software decode will be used)"
+if [[ "$IS_X86" == "1" ]]; then
+    # Probe VAAPI and record supported decode profiles for the About page.
+    if command -v vainfo &>/dev/null && vainfo &>/tmp/_vainfo 2>&1; then
+        cp -f /tmp/_vainfo /etc/ndimon-vaapi-info 2>/dev/null || true
+        if grep -q "VAProfile.*\(H264\|HEVC\).*VAEntrypointVLD" /tmp/_vainfo; then
+            echo "  ✓ VAAPI hardware decode ($(grep -oE 'Driver version[^\n]*' /tmp/_vainfo | head -1))"
+        else
+            echo "  - VAAPI present but no H.264/HEVC decode profile — software decode will be used"
+        fi
+        rm -f /tmp/_vainfo
+    else
+        echo "  - VAAPI not usable (no /dev/dri/renderD128 or driver) — software decode will be used"
+    fi
+fi
 pkg-config --exists libdrm   && echo "  ✓ libdrm"          || echo "  ✗ libdrm MISSING"
 pkg-config --exists libsystemd && echo "  ✓ libsystemd"    || echo "  ✗ libsystemd MISSING (sd_notify won't work)"
 pkg-config --exists alsa     && echo "  ✓ alsa"            || echo "  ✗ alsa MISSING"

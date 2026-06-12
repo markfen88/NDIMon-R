@@ -13,6 +13,7 @@
 #include <csignal>
 #include <atomic>
 #include <cstring>
+#include <cstdio>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -44,10 +45,38 @@ static std::string read_file(const std::string& path) {
 }
 
 static void write_file(const std::string& path, const std::string& content) {
+    // Atomic write: tmp + rename so readers (ndimon-api) never see a partial
+    // file. rename(2) is atomic within a filesystem.
     try {
-        std::ofstream f(path);
-        f << content;
+        std::string tmp = path + ".tmp";
+        {
+            std::ofstream f(tmp);
+            if (!f.is_open()) return;
+            f << content;
+        }
+        if (std::rename(tmp.c_str(), path.c_str()) != 0)
+            std::remove(tmp.c_str());
     } catch (...) {}
+}
+
+// Owned copy of a discovered source. NDIlib_source_t pointers returned by
+// NDIlib_find_get_current_sources are only valid until the next call into the
+// finder, so we copy the strings immediately rather than holding the structs.
+struct SrcEntry {
+    std::string name;
+    std::string ip;
+};
+
+static std::vector<SrcEntry> copy_sources(const NDIlib_source_t* sources, uint32_t count) {
+    std::vector<SrcEntry> out;
+    out.reserve(count);
+    for (uint32_t i = 0; i < count; i++) {
+        SrcEntry e;
+        e.name = sources[i].p_ndi_name    ? sources[i].p_ndi_name    : "";
+        e.ip   = sources[i].p_url_address ? sources[i].p_url_address : "";
+        out.push_back(std::move(e));
+    }
+    return out;
 }
 
 static nlohmann::json read_json(const std::string& path) {
@@ -63,7 +92,38 @@ struct FindSettings {
     std::string discovery_server_ip;
     std::string extra_ips;  // off-subnet IPs
     std::string groups;
+    std::string rxpm = "RUDP";  // transport mode (TCP/UDP/Multicast/M-TCP/RUDP)
 };
+
+// Escape a string for embedding inside a JSON string literal.
+static std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((unsigned char)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+                else out += c;
+        }
+    }
+    return out;
+}
+
+// Mirror of ndimon-r's transport mapping so the shared ndi-config.v1.json keeps
+// consistent transport keys regardless of which process wrote it last.
+static std::string transport_json(const std::string& rxpm) {
+    bool rudp  = (rxpm == "RUDP" || rxpm == "Multicast" || rxpm.empty());
+    bool mcast = (rxpm == "Multicast");
+    std::string r = rudp ? "true" : "false";
+    std::string m = mcast ? "true" : "false";
+    return std::string("    \"rudp\": { \"recv\": { \"enable\": ") + r + " } },\n"
+         + "    \"multicast\": { \"recv\": { \"enable\": " + m + " } },\n";
+}
 
 // Write ~/.ndi/ndi-config.v1.json before NDIlib_initialize() so NDI SDK 6.2+
 // picks up the discovery server address and groups at startup.
@@ -74,11 +134,11 @@ static void write_ndi_sdk_config(const FindSettings& s) {
     mkdir(ndi_dir.c_str(), 0755);
     std::string path = ndi_dir + "/ndi-config.v1.json";
 
-    std::string groups   = s.groups.empty() ? "public" : s.groups;
-    std::string extra    = s.extra_ips;
+    std::string groups   = json_escape(s.groups.empty() ? "public" : s.groups);
+    std::string extra    = json_escape(s.extra_ips);
     std::string discovery;
     if (s.use_discovery_server && !s.discovery_server_ip.empty())
-        discovery = s.discovery_server_ip;
+        discovery = json_escape(s.discovery_server_ip);
 
     // Include codec passthrough keys so the NDI SDK delivers H.264/H.265 as
     // compressed bitstream rather than decoding internally. Without these,
@@ -96,6 +156,7 @@ static void write_ndi_sdk_config(const FindSettings& s) {
         "      \"ips\": \"" + extra + "\",\n"
         "      \"discovery\": \"" + discovery + "\"\n"
         "    },\n"
+        + transport_json(s.rxpm) +
         "    \"codec\": {\n"
         "      \"h264\": { \"passthrough\": true },\n"
         "      \"h265\": { \"passthrough\": true }\n"
@@ -119,17 +180,17 @@ static FindSettings load_settings() {
     if (!cfg.empty() && cfg.is_string()) s.extra_ips = cfg.get<std::string>();
     auto grp = read_json(NDI_GROUP);
     if (!grp.empty() && grp.is_object()) s.groups = grp.value("ndi_groups", "public");
+    auto rx = read_json("/etc/ndimon-rx-settings.json");
+    if (!rx.empty() && rx.is_object()) s.rxpm = rx.value("Rxpm", "RUDP");
     return s;
 }
 
-static void write_source_list(const std::vector<NDIlib_source_t>& sources) {
+static void write_source_list(const std::vector<SrcEntry>& sources) {
     nlohmann::json j;
     j["count"] = (int)sources.size() + 1;
     j["list"]["None"] = "None";
     for (auto& s : sources) {
-        std::string name = s.p_ndi_name ? s.p_ndi_name : "";
-        std::string ip   = s.p_url_address ? s.p_url_address : "";
-        j["list"][name] = ip;
+        if (!s.name.empty()) j["list"][s.name] = s.ip;
     }
     write_file(SRC_LIST_FILE, j.dump());
 
@@ -138,7 +199,7 @@ static void write_source_list(const std::vector<NDIlib_source_t>& sources) {
     webui["ndi"] = nlohmann::json::array();
     webui["ndi"].push_back("None");
     for (auto& s : sources) {
-        if (s.p_ndi_name) webui["ndi"].push_back(s.p_ndi_name);
+        if (!s.name.empty()) webui["ndi"].push_back(s.name);
     }
     write_file(WEBUI_LIST, webui.dump());
 
@@ -196,8 +257,7 @@ static void run_once() {
     const NDIlib_source_t* sources = NDIlib_find_get_current_sources(finder, &count);
     std::cout << "[ NDIFinder ] Source count from network " << count << "\n";
 
-    std::vector<NDIlib_source_t> src_list(sources, sources + count);
-    write_source_list(src_list);
+    write_source_list(copy_sources(sources, count));
 
     NDIlib_find_destroy(finder);
     NDIlib_destroy();
@@ -232,7 +292,7 @@ static void run_continuous() {
         return;
     }
 
-    std::vector<NDIlib_source_t> last_list;
+    std::vector<SrcEntry> last_list;
 
 #ifdef HAVE_SYSTEMD
     sd_notify(0, "READY=1");
@@ -274,21 +334,21 @@ static void run_continuous() {
         uint32_t count = 0;
         const NDIlib_source_t* sources = NDIlib_find_get_current_sources(finder, &count);
 
-        // Check if list changed
-        bool changed = (count != last_list.size());
+        // Copy out immediately — the SDK's source pointers are invalidated by
+        // the next finder call, so we must not retain them across iterations.
+        std::vector<SrcEntry> current = copy_sources(sources, count);
+
+        // Check if list changed (by name)
+        bool changed = (current.size() != last_list.size());
         if (!changed) {
-            for (uint32_t i = 0; i < count; i++) {
-                if (!last_list[i].p_ndi_name || !sources[i].p_ndi_name ||
-                    strcmp(last_list[i].p_ndi_name, sources[i].p_ndi_name) != 0) {
-                    changed = true;
-                    break;
-                }
+            for (size_t i = 0; i < current.size(); i++) {
+                if (current[i].name != last_list[i].name) { changed = true; break; }
             }
         }
 
         if (changed) {
             std::cout << "[ NDIFinder ] delta - list changed count=" << count << "\n";
-            last_list.assign(sources, sources + count);
+            last_list = std::move(current);
             write_source_list(last_list);
         }
     }

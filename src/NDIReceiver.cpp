@@ -11,8 +11,9 @@
 // Extract a named XML attribute value from a simple single-element XML string.
 // e.g. xml_attr("<source name=\"foo\" url=\"bar\"/>", "name") -> "foo"
 static std::string xml_attr(const std::string& xml, const std::string& attr) {
-    // Match: attr="value" or attr='value'
-    std::regex re(attr + R"(=[\"']([^\"']*)[\"'])");
+    // Match: attr="value" or attr='value'. The leading (^|[\s<]) boundary stops
+    // a request for "name" from matching "ndi_name=..." or "long_name=..." first.
+    std::regex re(R"((?:^|[\s<]))" + attr + R"(\s*=\s*[\"']([^\"']*)[\"'])");
     std::smatch m;
     if (std::regex_search(xml, m, re)) return m[1].str();
     return {};
@@ -95,11 +96,7 @@ bool NDIReceiver::create_recv() {
     return true;
 }
 
-void NDIReceiver::rename(const std::string& new_name) {
-    if (new_name == recv_name_) return;
-    recv_name_ = new_name;
-    std::cout << "[NDIRecv] Renaming receiver to: " << new_name << "\n";
-
+void NDIReceiver::recreate_recv_preserving_source() {
     // Remember current source so we can reconnect after the swap
     std::string src, ip;
     {
@@ -109,6 +106,12 @@ void NDIReceiver::rename(const std::string& new_name) {
     }
 
     stop_thread();
+
+    // FrameSync is bound to the old recv — destroy it before the recv.
+    if (framesync_) {
+        NDIlib_framesync_destroy(framesync_);
+        framesync_ = nullptr;
+    }
 
     // Remove old recv from advertiser (keep advertiser alive)
     if (advertiser_ && recv_)
@@ -120,7 +123,7 @@ void NDIReceiver::rename(const std::string& new_name) {
         recv_ = nullptr;
     }
 
-    // Create fresh recv with new name
+    // Create fresh recv (picks up the new name and/or new ndi-config transport)
     create_recv();
 
     // Re-register new recv with the existing advertiser
@@ -130,9 +133,29 @@ void NDIReceiver::rename(const std::string& new_name) {
                                             /*allow_monitoring=*/true,
                                             /*group=*/nullptr);
 
-    // Reconnect to previous source if there was one
-    if (!src.empty() && src != "None")
+    // Reconnect to previous source if there was one; otherwise restart the
+    // recv thread idle so discovery/routing still works.
+    if (!src.empty() && src != "None") {
         connect(src, ip);
+    } else if (recv_) {
+        running_ = true;
+        recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
+    }
+}
+
+void NDIReceiver::rename(const std::string& new_name) {
+    if (new_name == recv_name_) return;
+    recv_name_ = new_name;
+    std::cout << "[NDIRecv] Renaming receiver to: " << new_name << "\n";
+    recreate_recv_preserving_source();
+}
+
+void NDIReceiver::reload_transport(const std::string& rxpm) {
+    if (rxpm == transport_mode_) return;
+    transport_mode_ = rxpm;
+    std::cout << "[NDIRecv] Applying transport mode: " << rxpm
+              << " (recreating recv)\n";
+    recreate_recv_preserving_source();
 }
 
 bool NDIReceiver::init_recv() {

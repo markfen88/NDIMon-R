@@ -19,12 +19,16 @@ A Node.js REST API and web UI run alongside the C++ decoder core, providing sour
 
 - **Hardware H.264/H.265 decode** — Rockchip MPP (RK3588/RK3399) and V4L2 M2M (Raspberry Pi 4/5)
 - **Multi-output support** — independent NDI sources on HDMI-A-1, HDMI-A-2, and DP-1 simultaneously
+- **Authenticated web UI + REST API** — password-protected, same-origin; default password `ndimon` (change on first login)
+- **Source presets** — save named NDI sources and recall them to any output instantly (no rescan)
 - **REST API** — `/v1/` routes for source control, output config, and status
 - **Web UI** — source selection, output config, resolution control, status monitoring
-- **NDI Discovery Server** — full integration with centralised NDI routing and discovery
+- **NDI Discovery Server** — receiver-advertiser integration (NDI 6.2) for centralised routing/discovery
+- **Transport selection** — TCP / UDP / Multicast / RUDP, applied live to the NDI receiver
 - **Auto-reconnect** — exponential backoff reconnect on signal loss
 - **Splash screen** — customisable idle/live backgrounds with logo and OSD overlay
 - **Hotplug** — display workers initialise on hotplug when no monitor is connected at boot
+- **In-place updates** — check/apply software updates from the web UI
 
 ---
 
@@ -37,8 +41,18 @@ A Node.js REST API and web UI run alongside the C++ decoder core, providing sour
 | Raspberry Pi 4 | BCM2711 | V4L2 M2M | Tested |
 | Raspberry Pi 5 | BCM2712 | V4L2 M2M | Tested |
 | Any aarch64 board | — | FFmpeg (software) | Fallback |
+| Intel/AMD x86-64 (NUC, mini-PC) | — | FFmpeg software (VAAPI HW decode in progress) | Software supported |
 
-Runs on Debian Bookworm/Trixie, Ubuntu Noble (24.04), Armbian, and Raspberry Pi OS.
+Runs on Debian Bookworm/Trixie, Ubuntu Noble (24.04), Armbian, and Raspberry Pi OS. The installer auto-detects ARM vs x86-64 and installs the right NDI library, decoders, and (on x86) VAAPI drivers.
+
+### Decode mode (x86)
+
+On Linux the NDI SDK decodes only in software, so HX (H.264/H.265) hardware decode is done by NDIMon-R itself. **Settings → Decoder → HX Decode** selects:
+- **Auto** — hardware (VAAPI/MPP/V4L2) if available, else software
+- **Hardware** — force hardware (falls back to software if unavailable, shown in status)
+- **Software** — FFmpeg software decode (multi-threaded on x86)
+
+The active backend (e.g. `HW vaapi`, `SW software`) is shown per output on the NDI page. ARM keeps its MPP/V4L2 + NEON path as the default; the selector primarily affects x86. (VAAPI hardware decode lands in the next release; x86 currently runs multi-threaded software decode.)
 
 ---
 
@@ -90,7 +104,9 @@ Config files live in `/etc/`. They are created from `config/` defaults on first 
 | `/etc/ndimon-dec1-settings.json` | Audio, screensaver, tally, color space |
 | `/etc/ndimon-find-settings.json` | NDI Discovery Server IP and enable/disable |
 | `/etc/ndimon-device-settings.json` | Device alias (NDI receiver name shown in discovery) |
-| `/etc/ndimon-rx-settings.json` | Transport mode (TCP / UDP / Multicast / RUDP) |
+| `/etc/ndimon-rx-settings.json` | Transport mode (TCP / UDP / Multicast / RUDP) — applied live to the receiver |
+| `/etc/ndimon-presets.json` | Saved source presets (written by the API) |
+| `/etc/ndimon-auth.json` | Web UI password hash (scrypt; created on first password change) |
 | `/etc/ndi-group.json` | NDI groups to subscribe to (default: `public`) |
 | `/etc/ndi-config.json` | Off-subnet source IPs (comma-separated) |
 | `/etc/ndimon-sources.json` | NDI source list cache (written by ndimon-finder) |
@@ -121,28 +137,39 @@ systemctl --user restart ndimon-r ndimon-finder ndimon-api
 
 The web UI is served at `http://<device-ip>/` once the `ndimon-api` service is running.
 
+> **Security:** The UI and API require a password. The default is `ndimon` — you'll see a warning banner until you change it under **Settings → Security**. The API is same-origin only (no cross-origin/CORS access). The password hash is stored in `/etc/ndimon-auth.json`.
+
 From the web UI you can:
 - Select an NDI source to display on each output
+- Save and recall source presets to any output instantly
 - Switch between connected HDMI/DP outputs
 - Change output resolution and refresh rate
+- Choose the NDI transport mode (TCP / UDP / Multicast / RUDP)
 - Adjust scale mode (letterbox / stretch / crop)
-- Monitor connection status, FPS, codec, CPU, memory, and temperatures
+- Monitor connection status, FPS, codec, HX-passthrough health, CPU, memory, and temperatures
+- Set a device password and check/apply software updates
 
 ### Key API endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/api/login` | POST | Authenticate (`{password}`) — returns a session cookie + bearer token |
 | `/api/status` | GET | Full decoder and system status (JSON) |
 | `/api/events` | GET | Server-Sent Events stream (1.5 s updates) |
 | `/v1/NDIFinder/List` | GET | Available NDI sources |
 | `/v1/NDIDecode/connectTo` | GET/POST | Connect to a source |
+| `/v1/Presets/list` | GET | Saved source presets |
+| `/v1/Presets/save` | POST | Save a preset (`{name, source, ip}`) |
+| `/v1/Presets/recall` | POST | Recall a preset to an output (`{name, output}`) |
 | `/v1/VideoOutput/modes` | GET | Available display modes |
 | `/v1/VideoOutput/setresolution` | POST | Set output resolution |
 | `/v1/NDIFinder/NDIDisServer` | GET/POST | Discovery server config |
 | `/v1/DeviceSettings/ndi-alias` | GET/POST | NDI receiver name |
 | `/v1/Splash/config` | GET/POST | Splash screen appearance |
+| `/v1/System/version` | GET | Version info + update availability |
+| `/v1/System/update` | POST | Pull, rebuild, and restart services |
 
-All `/v1/` routes are part of the NDIMon-R REST API.
+All `/v1/` and `/api/` routes (except `/api/login`) require authentication.
 
 ---
 

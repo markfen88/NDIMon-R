@@ -143,10 +143,14 @@ and network failures. The device recovers from any failure without human interve
 - `find_source` pointers are owned by the finder — copy strings before destroying the finder instance
 
 ### Discovery Server Telemetry
-- Device sends `<ndi_device_status>` metadata every 30s with FPS, resolution, codec, health state, SoC temperature, and stall count
-- DS routing accepted via `allow_controlling=true` and `allow_monitoring=true`
-- Routing ACKs sent every 30s to keep DS in sync
-- Connection metadata includes `<ndi_product>`, `<ndi_routing>`, `<ndi_audio_setup>`, `<ndi_video_setup>`, `<ndi_general_setup>`
+- DS routing accepted via `allow_controlling=true` and `allow_monitoring=true` on the receiver advertiser (NDI 6.2 API). This is the supported mechanism — the SDK switches sources internally; do NOT call connect() from a routing callback.
+- IMPORTANT (verified against docs.ndi.video): `NDIlib_recv_send_metadata` sends metadata **upstream to the connected source (sender)**, NOT to the Discovery Server. The `<ndi_device_status>` telemetry and `<ndi_routing>` "ACKs" we send every 30s therefore reach the sender, not the DS. Senders ignore unknown XML, so this is harmless but does not drive DS state. Receiver visibility/state in the DS is managed by the advertiser/SDK itself.
+- `<ndi_device_status>`, `<ndi_audio_setup>`, `<ndi_video_setup>`, `<ndi_general_setup>` are **custom (non-standard) XML elements**, not part of the documented NDI metadata vocabulary. `<ndi_product>` is standard.
+
+### HX Passthrough (undocumented-config dependency)
+- The `codec.h264/h265.passthrough` keys written into `ndi-config.v1.json` are NOT part of the publicly documented standard-SDK contract. The documented receive-side passthrough mechanism is per-codec override JSON at recv creation in the NDI **Advanced** SDK (6.3+). Passthrough works empirically with the v6 standard SDK we ship, but treat it as version-pinned, undocumented behavior.
+- `verify_passthrough_config()` (main.cpp) reads ndi-config.v1.json back after `NDIlib_initialize()` rewrites it and sets `passthrough_ok`, surfaced in `/api/status` and `/api/health` and shown as a red banner in the web UI when false.
+- The installed SDK version is pinned to the v6 line (setup-deps.sh) and recorded in `/etc/ndimon-ndi-version`.
 
 ### Dual-Mode Capture (Standard vs HX)
 
@@ -156,8 +160,8 @@ The receiver auto-detects stream type from the first video frame and uses the op
 - SDK decodes SpeedHQ internally → delivers UYVY frames
 - FrameSync enabled (`NDIlib_framesync`) — pull model at display refresh rate
 - FrameSync handles A/V sync, frame duplication, silence insertion
-- Video: `NDIlib_framesync_capture_video` → zero-copy display queue → DRM
-- Audio: `NDIlib_framesync_capture_audio` at 48kHz/2ch/1024 samples → ALSA
+- Video: `NDIlib_framesync_capture_video`. NOTE: FrameSync frames are NOT held zero-copy through the display queue — `on_video()` takes the memcpy fallback for FrameSync frames (the SDK frame is freed via `framesync_free_video` right after the callback). Only the HX/uncompressed `capture_v3` path uses the zero-copy SDK-frame-hold queue. This memcpy is a per-frame ~4–8 MB copy at 1080p/4K — a real memory-bandwidth cost on RK3399.
+- Audio: `NDIlib_framesync_capture_audio` requesting native channel count (no_channels=0) → ALSA downmix to stereo
 
 **HX NDI (H.264/H.265 compressed):**
 - HX passthrough delivers compressed bitstream (no SDK decode)
@@ -205,6 +209,67 @@ Each config file has a single designated writer to prevent race conditions:
 DS is enabled by IP presence — no separate toggle. If `NDIDisServIP` is non-empty,
 DS is enabled (`NDIDisServ=NDIDisServEn`). If blank, DS is disabled. The API
 derives the enabled state from the IP to eliminate toggle desync bugs.
+
+### Transport Selection (Rxpm)
+
+`ndimon-rx-settings.json:Rxpm` (TCP/UDP/Multicast/M-TCP/RUDP) is mapped to
+`rudp.recv.enable` / `multicast.recv.enable` in `ndi-config.v1.json` by
+`transport_json()` in BOTH main.cpp and finder/main.cpp (they share the file, so
+both must emit identical keys). The SDK only reads transport settings at recv
+creation, so a change rewrites the config and calls
+`NDIReceiver::reload_transport()` → `recreate_recv_preserving_source()` to
+destroy/recreate the recv instance and reconnect. RUDP is the SDK default;
+Multicast also requires the sender to be multicasting.
+
+### Authentication
+
+`api/auth.js` guards all `/v1/*` and `/api/*` routes (session cookie or
+`Authorization: Bearer`). Password hash (scrypt) lives in `/etc/ndimon-auth.json`;
+default password is `ndimon` until changed (UI shows a warning banner). CORS
+allow-all was removed — the API is same-origin only. `POST /v1/System/reboot`
+(GET removed). All hand-built JSON config writes escape interpolated strings;
+all shell-outs use `execFile`/`spawn` (no shell) — no more `hostnamectl` injection.
+
+### Source Presets & Software Update
+
+`api/routes/Presets.js` stores named source presets in `/etc/ndimon-presets.json`
+(list/save/delete/recall). Recall sends a `connect` IPC with the pre-resolved
+source+IP for instant switching (no rescan). `/v1/System/version` reports the
+installed version + git update availability (recorded `/etc/ndimon-source-dir`,
+`/etc/ndimon-build-commit`); `/v1/System/update` git-pulls + rebuilds detached.
+
+## x86-64 Support (Phase 1 done; VAAPI decoder = Phase 2)
+
+NUC/mini-PC appliances are supported. KEY FACT (verified at docs.ndi.video): the
+NDI SDK has NO GPU decode on Linux — it's FFmpeg software-only. So HX hardware
+decode is app-side via passthrough → our own decoder, which is NDI's documented
+recommendation. NEON is ARM-only and fully guarded (`#if defined(__aarch64__) ||
+defined(__ARM_NEON)`) with scalar `#else` paths that `-O3` auto-vectorises on x86.
+
+- **decode_mode** (`auto|hardware|software`, device-level in ndimon-device-settings.json):
+  `VideoDecoder::create()` consults it + platform. ARM `auto` = MPP/V4L2 unchanged.
+  x86 `auto`/`hardware` = VAAPI if `HAVE_VAAPI` + render node, else software.
+  "hardware" with no HW = best-effort fallback to software (logged; visible as
+  `decode_backend` in status). Changing it at runtime rebuilds the worker decoder.
+- **Backend reporting**: `VideoDecoder::backend_name()`/`is_hardware()` →
+  status `decode_backend`/`hw_decode` per output → UI badge (HW/SW) + Decoder hint.
+- **SoftwareDecoder threading**: `set_low_latency(bool)`. ARM fallback = 1 thread +
+  LOW_DELAY (latency). x86 = all cores (FF_THREAD_SLICE|FRAME, capped 16) for 4K.
+- **PlatformDetect**: `is_x86()`, `cpu_vendor()` (Intel/AMD), `has_render_node()`.
+- **Installer** (`setup-deps.sh`): arch-normalised (IS_X86/MULTIARCH/NDI_LIB_MATCH);
+  picks the x86_64-linux-gnu NDI lib (the tarball ships all arches — was the one
+  real breakage); installs libva + intel-media/i965/mesa-va drivers + vainfo on
+  x86; skips MPP; adds service user to render group; records vainfo to
+  /etc/ndimon-vaapi-info. CMake: x86 flags `-msse4.2 -mtune=generic` (no -march=
+  native, so binaries run across a mixed NUC fleet); `HAVE_VAAPI` via libva+libva-drm,
+  VAAPIDecoder.cpp added only when the file exists (Phase 2).
+- **Connector→ch mapping** in main.cpp is now a stable map: keeps HDMI-A-1→1,
+  HDMI-A-2→2, DP-1→3 (backward compat) and assigns DP-2/eDP-1/etc the lowest free
+  ch deterministically. `get_primary_mac_suffix()` enumerates /sys/class/net.
+- **PHASE 2 (next)**: `src/VAAPIDecoder.{h,cpp}` — FFmpeg AV_HWDEVICE_TYPE_VAAPI,
+  `vaExportSurfaceHandle(DRM_PRIME_2)` NV12 dmabuf → existing `show_frame_dma()`/
+  `atomic_plane_commit()`. Roadmap: NVIDIA NVDEC, Intel oneVPL/QSV; multi-4K
+  saturation indicator.
 
 ## Coding Conventions
 

@@ -37,6 +37,11 @@ public:
     virtual void destroy() = 0;
     virtual void release_frame(DecodedFrame& f) = 0;
 
+    // Short backend id for status/UI: "mpp", "v4l2", "vaapi", or "software".
+    virtual const char* backend_name() const { return "software"; }
+    // True if this backend decodes on dedicated/GPU hardware (not the CPU).
+    virtual bool is_hardware() const { return false; }
+
     virtual void set_frame_callback(FrameCallback cb) { frame_cb_ = std::move(cb); }
 
     // Factory: creates best decoder for the current platform

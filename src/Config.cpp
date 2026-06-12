@@ -88,6 +88,7 @@ void Config::load() {
         device.mode          = dev.value("mode", "decode");
         device.video_output  = dev.value("videooutput", "hdmi");
         device.ndi_recv_name = dev.value("ndi_recv_name", "");
+        device.decode_mode   = dev.value("decode_mode", "auto");
     }
 
     // NDI groups

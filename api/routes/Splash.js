@@ -54,15 +54,25 @@ router.post('/config', (req, res) => {
     const cur  = readSplash();
     const body = req.body || {};
 
-    const strFields   = ['bg_idle','bg_live','accent_idle','accent_live','logo_path','text_idle','text_live'];
+    const strFields   = ['bg_idle','bg_live','accent_idle','accent_live','text_idle','text_live'];
     const floatFields = ['logo_x_pct','logo_y_pct','logo_w_pct','text_height_pct'];
     const intFields   = [];
     const boolFields  = ['show_box','show_signal_text','show_device_name','show_device_url','show_sources_available'];
 
     for (const f of strFields)   if (f in body) cur[f] = String(body[f]);
+    // logo_path is constrained to the managed upload location (or empty) so the
+    // decoder can't be pointed at arbitrary files on disk to render as an image.
+    if ('logo_path' in body) {
+        const p = String(body.logo_path || '');
+        cur.logo_path = (p === '' || path.dirname(p) === LOGO_DIR && path.basename(p).startsWith(LOGO_BASE))
+            ? p : cur.logo_path;
+    }
     for (const f of floatFields) if (f in body) cur[f] = Math.max(0, Math.min(100, parseFloat(body[f]) || 0));
     for (const f of intFields)   if (f in body) cur[f] = Math.max(1, Math.min(8, parseInt(body[f],10) || 1));
     for (const f of boolFields)  if (f in body) cur[f] = Boolean(body[f]);
+
+    // The decoder renders logo_path with stb_image as root — restrict it to
+    // files created by /
 
     writeSplash(cur);
 

@@ -22,6 +22,9 @@
 #include <map>
 #include <chrono>
 #include <fstream>
+#include <iterator>
+#include <algorithm>
+#include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -38,6 +41,10 @@
 #endif
 
 static std::atomic<bool> g_running{true};
+// True when ndi-config.v1.json still carries codec passthrough after the SDK
+// rewrites it during init. If false, HX (H.264/H.265) sources may be decoded
+// internally by the SDK (or fail), so hardware decode won't engage.
+static std::atomic<bool> g_passthrough_ok{false};
 
 static int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -47,6 +54,41 @@ static int64_t now_ms() {
 // Write ~/.ndi/ndi-config.v1.json so the NDI SDK uses the discovery server
 // and correct groups for BOTH finding sources AND registering this receiver.
 // Must be called before NDIlib_initialize().
+// Escape a string for safe embedding inside a JSON string literal.
+static std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((unsigned char)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+                else out += c;
+        }
+    }
+    return out;
+}
+
+// Map the user's transport selection (Rxpm) to ndi-config.v1.json recv keys.
+// The SDK negotiates transport from these enables; RUDP is the default in NDI 5+.
+// Returns a JSON fragment for the "rudp"/"multicast" objects (no trailing comma).
+//   RUDP            → rudp recv on,  multicast recv off
+//   Multicast       → rudp recv on,  multicast recv on  (sender must also multicast)
+//   TCP / M-TCP     → rudp recv off, multicast recv off (forces TCP)
+//   UDP             → rudp recv off, multicast recv off (plain unicast UDP)
+static std::string transport_json(const std::string& rxpm) {
+    bool rudp = (rxpm == "RUDP" || rxpm == "Multicast" || rxpm.empty());
+    bool mcast = (rxpm == "Multicast");
+    std::string r = rudp ? "true" : "false";
+    std::string m = mcast ? "true" : "false";
+    return std::string("    \"rudp\": { \"recv\": { \"enable\": ") + r + " } },\n"
+         + "    \"multicast\": { \"recv\": { \"enable\": " + m + " } },\n";
+}
+
 static void write_ndi_sdk_config(const Config& cfg) {
     const char* home = getenv("HOME");
     if (!home || !home[0]) home = "/root";
@@ -54,11 +96,12 @@ static void write_ndi_sdk_config(const Config& cfg) {
     mkdir(ndi_dir.c_str(), 0755);
     std::string path = ndi_dir + "/ndi-config.v1.json";
 
-    std::string groups = cfg.ndi_group.groups.empty() ? "public" : cfg.ndi_group.groups;
+    std::string groups = json_escape(cfg.ndi_group.groups.empty() ? "public" : cfg.ndi_group.groups);
+    std::string ips    = json_escape(cfg.off_subnet_ips);
     std::string discovery;
     if (cfg.finder.discovery_server_mode == "NDIDisServEn" &&
         !cfg.finder.discovery_server_ip.empty()) {
-        discovery = cfg.finder.discovery_server_ip;
+        discovery = json_escape(cfg.finder.discovery_server_ip);
     }
 
     // Build JSON manually to avoid pulling nlohmann into this helper.
@@ -74,9 +117,10 @@ static void write_ndi_sdk_config(const Config& cfg) {
         "      \"send\": \"" + groups + "\"\n"
         "    },\n"
         "    \"networks\": {\n"
-        "      \"ips\": \"" + cfg.off_subnet_ips + "\",\n"
+        "      \"ips\": \"" + ips + "\",\n"
         "      \"discovery\": \"" + discovery + "\"\n"
         "    },\n"
+        + transport_json(cfg.transport.rxpm) +
         "    \"codec\": {\n"
         "      \"h264\": { \"passthrough\": true },\n"
         "      \"h265\": { \"passthrough\": true }\n"
@@ -85,8 +129,37 @@ static void write_ndi_sdk_config(const Config& cfg) {
         "}\n";
 
     std::ofstream f(path);
-    if (f) { f << json; std::cout << "[NDIMon-R] NDI config written: " << path << "\n"; }
+    if (f) { f << json; std::cout << "[NDIMon-R] NDI config written (transport="
+                                  << cfg.transport.rxpm << "): " << path << "\n"; }
     else   { std::cerr << "[NDIMon-R] WARNING: could not write " << path << "\n"; }
+}
+
+// Read back ndi-config.v1.json and confirm h264/h265 passthrough survived the
+// SDK's init-time rewrite. Sets g_passthrough_ok and logs a clear warning.
+static void verify_passthrough_config() {
+    const char* home = getenv("HOME");
+    if (!home || !home[0]) home = "/root";
+    std::string path = std::string(home) + "/.ndi/ndi-config.v1.json";
+    std::ifstream f(path);
+    if (!f) { g_passthrough_ok = false; return; }
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    // Cheap structural check: both codecs must mention passthrough true.
+    auto has_pt = [&](const char* codec) {
+        size_t k = content.find(codec);
+        if (k == std::string::npos) return false;
+        size_t pt = content.find("passthrough", k);
+        if (pt == std::string::npos) return false;
+        size_t t = content.find("true", pt);
+        return t != std::string::npos && t < content.find('}', pt);
+    };
+    g_passthrough_ok = has_pt("h264") && has_pt("h265");
+    if (g_passthrough_ok) {
+        std::cout << "[NDIMon-R] HX passthrough config verified (hardware decode path active)\n";
+    } else {
+        std::cerr << "[NDIMon-R] WARNING: HX passthrough NOT present in ndi-config.v1.json "
+                     "after init — H.264/H.265 sources may not hardware-decode.\n";
+    }
 }
 
 // Returns the first non-loopback IPv4 address, or empty string.
@@ -111,24 +184,39 @@ static std::string get_primary_ip() {
 // Returns last 4 hex digits of the first non-loopback LAN MAC address (e.g. "A1B2").
 // Used to build the default NDI alias "NDIMON-XXXX".
 static std::string get_primary_mac_suffix() {
-    // Try common interface names in order of preference
-    static const char* ifaces[] = {
-        "enP4p65s0", "eth0", "end0", "eno1", "enp0s3", nullptr
-    };
-    for (int i = 0; ifaces[i]; ++i) {
-        std::string path = std::string("/sys/class/net/") + ifaces[i] + "/address";
-        std::ifstream f(path);
-        if (!f) continue;
-        std::string mac;
-        std::getline(f, mac);
-        // Remove colons: "aa:bb:cc:dd:EE:FF" -> "aabbccddeeff"
+    // Enumerate /sys/class/net and use the first real wired interface's MAC,
+    // rather than guessing from a hardcoded (ARM-biased) name list. Skip
+    // loopback, virtual, and wireless interfaces; prefer ethernet (type 1).
+    auto mac_suffix_from = [](const std::string& iface) -> std::string {
+        std::ifstream f("/sys/class/net/" + iface + "/address");
+        if (!f) return {};
+        std::string mac; std::getline(f, mac);
         std::string raw;
         for (char c : mac) if (c != ':') raw += c;
-        if (raw.size() >= 4) {
-            // uppercase last 4 chars
-            std::string suffix = raw.substr(raw.size() - 4);
-            for (auto& c : suffix) c = (char)toupper((unsigned char)c);
-            return suffix;
+        if (raw.size() < 4 || raw == "000000000000") return {};
+        std::string suffix = raw.substr(raw.size() - 4);
+        for (auto& c : suffix) c = (char)toupper((unsigned char)c);
+        return suffix;
+    };
+
+    DIR* d = opendir("/sys/class/net");
+    if (d) {
+        std::vector<std::string> names;
+        struct dirent* e;
+        while ((e = readdir(d)) != nullptr) {
+            std::string n = e->d_name;
+            if (n == "." || n == ".." || n == "lo") continue;
+            if (n.rfind("veth", 0) == 0 || n.rfind("docker", 0) == 0 ||
+                n.rfind("br-", 0) == 0  || n.rfind("virbr", 0) == 0 ||
+                n.rfind("wl", 0) == 0)  // skip wireless
+                continue;
+            names.push_back(n);
+        }
+        closedir(d);
+        std::sort(names.begin(), names.end());  // stable, deterministic pick
+        for (const auto& n : names) {
+            auto s = mac_suffix_from(n);
+            if (!s.empty()) return s;
         }
     }
     return "0000";
@@ -224,6 +312,7 @@ public:
         // Create video decoder
         {
             std::lock_guard<std::mutex> lk(decoder_mutex_);
+            decode_mode_ = Config::instance().device.decode_mode;
             decoder_ = VideoDecoder::create();
             if (!decoder_) {
                 std::cerr << "[Worker" << ch_num_ << "] No video decoder available\n";
@@ -322,6 +411,10 @@ public:
 
         // Set recv name (device alias + output alias) — visible in NDI discovery tools
         recv_->set_recv_name(build_recv_name());
+
+        // Seed transport so the first reload_config doesn't spuriously recreate
+        // the recv (the SDK already read this from ndi-config.v1.json at startup).
+        recv_->set_transport(cfg.transport.rxpm);
 
         if (cfg.finder.discovery_server_mode == "NDIDisServEn" &&
             !cfg.finder.discovery_server_ip.empty()) {
@@ -580,9 +673,33 @@ public:
             }
         }
 
+        // Transport mode — the SDK only reads transport settings from
+        // ndi-config.v1.json at recv creation, so a change requires rewriting
+        // the config and recreating the recv instance.
+        if (recv_ && cfg.transport.rxpm != recv_->get_transport()) {
+            write_ndi_sdk_config(cfg);
+            recv_->reload_transport(cfg.transport.rxpm);
+        }
+
         // Audio enable/disable (ch1 legacy)
         if (ch_num_ == 1) {
             recv_->set_audio_enabled(cfg.decoder.ndi_audio == "NDIAudioEn");
+        }
+
+        // Decode mode (auto/hardware/software) — recreate the decoder so the
+        // factory re-selects the backend. The next compressed frame re-inits it.
+        if (cfg.device.decode_mode != decode_mode_) {
+            std::cout << "[Worker" << ch_num_ << "] decode_mode '" << decode_mode_
+                      << "' -> '" << cfg.device.decode_mode << "' — rebuilding decoder\n";
+            decode_mode_ = cfg.device.decode_mode;
+            std::lock_guard<std::mutex> lk(decoder_mutex_);
+            if (decoder_) { decoder_->flush(); decoder_->destroy(); decoder_.reset(); }
+            decoder_ = VideoDecoder::create();
+            if (decoder_) {
+                decoder_->set_frame_callback([this](DecodedFrame& f) { on_decoded(f); });
+            }
+            decoder_initialized_ = false;   // force re-init on next frame
+            codec_name_ = "none";
         }
 
         // Update NDI recv name if device or output alias changed.
@@ -721,6 +838,8 @@ public:
         {
             std::lock_guard<std::mutex> lk(decoder_mutex_);
             s["codec"]    = codec_name_;
+            s["decode_backend"] = decoder_ ? decoder_->backend_name() : "none";
+            s["hw_decode"]      = decoder_ ? decoder_->is_hardware()  : false;
         }
         std::string sm = "letterbox";
         if (scale_mode_ == ScaleMode::Stretch) sm = "stretch";
@@ -1000,7 +1119,8 @@ private:
                 input_h_ = vf.height;
                 try_match_source_mode(vf.width, vf.height,
                                        vf.frame_rate_n, vf.frame_rate_d);
-                int64_t pts_us = vf.timestamp / 100;
+                // NDI timestamps are in 100 ns units → microseconds = value / 10.
+                int64_t pts_us = vf.timestamp / 10;
                 decoder_->decode(vf.data, vf.size, pts_us);
             }
         } else {
@@ -1240,6 +1360,7 @@ private:
     bool        decoder_initialized_ = false;
     VideoCodec  current_codec_       = VideoCodec::H264;
     std::string codec_name_          = "none";
+    std::string decode_mode_         = "auto";   // tracks device.decode_mode for reload
 
     std::atomic<bool>    connected_{false};
     std::atomic<bool>    splash_requested_{false};  // async splash render (picked up by tick)
@@ -1334,6 +1455,7 @@ int main(int argc, char* argv[]) {
     // extra keys we wrote before init. Re-write now so the codec passthrough settings
     // are present when the recv instances are created (SDK reads them at recv creation).
     write_ndi_sdk_config(cfg);
+    verify_passthrough_config();
 
     // Auto-detect the DRM card that has HDMI/DP connectors.
     // On RPi4, HDMI outputs are on card1 (vc4), not card0 (V3D).
@@ -1358,6 +1480,41 @@ int main(int argc, char* argv[]) {
         std::cout << "[NDIMon-R]   " << c.name
                   << (c.connected ? " (connected)" : " (disconnected)")
                   << " " << c.modes.size() << " modes\n";
+    }
+
+    // Build a stable connector→ch_num map. Backward-compatible with the original
+    // fixed assignment (HDMI-A-1→1, HDMI-A-2→2, DP-1→3) so existing ARM configs
+    // keep their dec{N}-settings.json. Any other connector a NUC might expose
+    // (DP-2, eDP-1, HDMI-A-3, …) gets the lowest free ch, deterministically by
+    // name, so the same hardware always yields the same mapping across reboots.
+    auto is_output_conn = [](const std::string& n) {
+        return n.find("HDMI") != std::string::npos || n.find("DP") != std::string::npos;
+    };
+    std::map<std::string, int> conn_ch;
+    {
+        std::set<int> used;
+        auto fixed_ch = [](const std::string& n) -> int {
+            if (n.find("HDMI-A-1") != std::string::npos) return 1;
+            if (n.find("HDMI-A-2") != std::string::npos) return 2;
+            if (n.find("DP-1") != std::string::npos && n.find("eDP") == std::string::npos) return 3;
+            return 0;
+        };
+        // Pass 1: fixed/known connectors.
+        for (const auto& c : connectors) {
+            if (!is_output_conn(c.name)) continue;
+            int ch = fixed_ch(c.name);
+            if (ch > 0) { conn_ch[c.name] = ch; used.insert(ch); }
+        }
+        // Pass 2: unknown connectors, sorted by name → lowest free ch.
+        std::vector<std::string> unknown;
+        for (const auto& c : connectors)
+            if (is_output_conn(c.name) && !conn_ch.count(c.name)) unknown.push_back(c.name);
+        std::sort(unknown.begin(), unknown.end());
+        for (const auto& n : unknown) {
+            int ch = 1;
+            while (used.count(ch)) ch++;
+            conn_ch[n] = ch; used.insert(ch);
+        }
     }
 
     // Create workers
@@ -1385,15 +1542,11 @@ int main(int argc, char* argv[]) {
     }
 
     for (const auto& conn : connectors) {
-        // Only HDMI-A-x and DP-x
-        if (conn.name.find("HDMI") == std::string::npos &&
-            conn.name.find("DP")   == std::string::npos) continue;
+        // Only HDMI-A-x, DP-x, eDP-x
+        if (!is_output_conn(conn.name)) continue;
 
-        // Map connector to ch_num
-        int ch = 1;
-        if (conn.name.find("HDMI-A-2") != std::string::npos) ch = 2;
-        else if (conn.name.find("DP-1") != std::string::npos) ch = 3;
-        else if (conn.name.find("HDMI-A-1") != std::string::npos) ch = 1;
+        // Stable connector→ch_num from the map built above
+        int ch = conn_ch.count(conn.name) ? conn_ch[conn.name] : 1;
 
         auto out_cfg = cfg.get_output(ch);
 
@@ -1429,14 +1582,17 @@ int main(int argc, char* argv[]) {
     // IPC server
     auto ipc = std::make_unique<IPCServer>();
 
-    // Helper: find worker by output_index
+    // Helper: find worker by output_index (== ch_num - 1).
+    // Look up by ch_num rather than vector position: on boards that expose a
+    // non-standard connector set (e.g. only HDMI-A-2, or DP before HDMI) the
+    // vector index does NOT equal ch_num-1, which would misroute connect/status
+    // commands and silently break auto-reconnect for that output.
     auto get_worker = [&](int idx) -> DisplayWorker* {
-        if (idx < 0 || idx >= (int)workers.size()) {
-            std::cerr << "[NDIMon-R] IPC: invalid output index " << idx
-                      << " (have " << workers.size() << " workers)\n";
-            return nullptr;
-        }
-        return workers[idx].get();
+        for (auto& w : workers)
+            if (w->ch_num() - 1 == idx) return w.get();
+        std::cerr << "[NDIMon-R] IPC: no worker for output index " << idx
+                  << " (have " << workers.size() << " workers)\n";
+        return nullptr;
     };
 
     ipc->set_command_callback([&](const IPCCommand& cmd) {
@@ -1519,6 +1675,7 @@ int main(int argc, char* argv[]) {
             nlohmann::json j;
             j["alive"] = true;
             j["uptime_s"] = (now_ms() - start_time) / 1000;
+            j["passthrough_ok"] = g_passthrough_ok.load();
             j["outputs"] = nlohmann::json::array();
             for (auto& w : workers) {
                 nlohmann::json h;
@@ -1548,6 +1705,7 @@ int main(int argc, char* argv[]) {
         nlohmann::json all = nlohmann::json::array();
         for (auto& w : workers) all.push_back(w->get_status());
         s["outputs"] = all;
+        s["passthrough_ok"] = g_passthrough_ok.load();
         return s;
     });
 

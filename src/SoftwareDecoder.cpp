@@ -1,6 +1,7 @@
 #include "SoftwareDecoder.h"
 #include <iostream>
 #include <cstring>
+#include <thread>
 #include <drm_fourcc.h>
 
 SoftwareDecoder::SoftwareDecoder() = default;
@@ -21,11 +22,24 @@ bool SoftwareDecoder::init(VideoCodec codec) {
     codec_ctx_ = avcodec_alloc_context3(av_codec);
     if (!codec_ctx_) return false;
 
-    // Single-threaded: FF_THREAD_FRAME buffers multiple frames (multi-frame latency).
-    // thread_count=1 with FF_THREAD_SLICE is intra-frame only — no buffering delay.
-    codec_ctx_->thread_count = 1;
-    codec_ctx_->thread_type  = FF_THREAD_SLICE;
-    codec_ctx_->flags  |= AV_CODEC_FLAG_LOW_DELAY;
+    if (low_latency_) {
+        // Low-latency: FF_THREAD_FRAME buffers multiple frames (multi-frame
+        // latency). thread_count=1 with FF_THREAD_SLICE is intra-frame only —
+        // no buffering delay. Used on the ARM software fallback.
+        codec_ctx_->thread_count = 1;
+        codec_ctx_->thread_type  = FF_THREAD_SLICE;
+        codec_ctx_->flags       |= AV_CODEC_FLAG_LOW_DELAY;
+    } else {
+        // Throughput: use all cores. Let FFmpeg use whichever of slice/frame
+        // threading the codec supports. Costs a few frames of latency but is
+        // necessary for 4K software decode on x86 (the NDI SDK has no GPU decode
+        // on Linux, so this is a primary path there). Capped so we don't spawn
+        // an absurd number of threads on high-core machines.
+        unsigned hw = std::thread::hardware_concurrency();
+        if (hw == 0) hw = 4;
+        codec_ctx_->thread_count = (int)(hw > 16 ? 16 : hw);
+        codec_ctx_->thread_type  = FF_THREAD_SLICE | FF_THREAD_FRAME;
+    }
     codec_ctx_->flags2 |= AV_CODEC_FLAG2_FAST;
 
     if (avcodec_open2(codec_ctx_, av_codec, nullptr) < 0) {

@@ -65,8 +65,15 @@ public:
         return current_source_;
     }
 
-    // Set transport mode (TCP/UDP/Multicast)
+    // Set transport mode (TCP/UDP/Multicast/RUDP). Stores the preference only.
     void set_transport(const std::string& rxpm);
+    std::string get_transport() const { return transport_mode_; }
+
+    // Apply a new transport mode at runtime. The SDK reads transport settings
+    // from ndi-config.v1.json only at recv creation, so this destroys and
+    // recreates the recv instance (preserving the active source). The caller
+    // must have already written the new ndi-config.v1.json.
+    void reload_transport(const std::string& rxpm);
 
     // Set discovery server IP (used in find_source and for reconnect)
     void set_discovery_server(const std::string& ip) { discovery_server_ = ip; }
@@ -126,6 +133,10 @@ public:
 
 private:
     void recv_thread();
+    // Destroy the current recv instance and create a fresh one (new name and/or
+    // new ndi-config transport), re-register with the advertiser, and reconnect
+    // to whatever source was active. Used by rename() and reload_transport().
+    void recreate_recv_preserving_source();
     bool create_recv();                               // create without source (discovery only)
     void destroy_recv();                              // only called on full shutdown
     void stop_thread();                               // stop recv thread, keep recv_ alive

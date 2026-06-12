@@ -27,6 +27,16 @@ fi
 echo "[install] Installing binaries..."
 $SUDO cmake --install build
 
+# Record build date for the About page (UTC, date of this install/build).
+$SUDO sh -c "date -u '+%Y-%m-%d' > /etc/ndimon-build-date" 2>/dev/null || true
+
+# Record the source checkout dir + git commit so the web UI's "Check for
+# updates" / "Update now" can git-pull and rebuild from the right place.
+$SUDO sh -c "printf '%s' '$PROJECT_DIR' > /etc/ndimon-source-dir" 2>/dev/null || true
+if command -v git >/dev/null 2>&1 && git -C "$PROJECT_DIR" rev-parse --short HEAD >/dev/null 2>&1; then
+    $SUDO sh -c "git -C '$PROJECT_DIR' rev-parse --short HEAD > /etc/ndimon-build-commit" 2>/dev/null || true
+fi
+
 echo "[install] Installing config files (only if not present)..."
 for f in config/*.json; do
     dest="/etc/$(basename $f)"

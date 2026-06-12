@@ -128,6 +128,7 @@ async function buildStatus() {
     const sources = readJson('/etc/ndimon-sources.json');
     const decCfg  = readJson('/etc/ndimon-dec1-settings.json');
     const findCfg = readJson('/etc/ndimon-find-settings.json');
+    const devCfg  = readJson('/etc/ndimon-device-settings.json');
 
     const sourceList = sources.list
         ? Object.keys(sources.list).filter(k => k !== 'None')
@@ -151,6 +152,8 @@ async function buildStatus() {
         input_height: o.input_height || 0,
         fps:          o.fps          || 0,
         codec:        o.codec        || 'none',
+        decode_backend: o.decode_backend || 'none',
+        hw_decode:    o.hw_decode    || false,
         scale_mode:   o.scale_mode   || 'letterbox',
         drm_ready:    o.drm_ready    || false,
     }));
@@ -188,11 +191,14 @@ async function buildStatus() {
             screensaver: decCfg.ScreenSaverMode || 'BlackSS',
             tally:       decCfg.TallyMode       || 'TallyOff',
             color_space: decCfg.ColorSpace      || 'YUV',
+            decode_mode: devCfg.decode_mode     || 'auto',
         },
         discovery: {
             enabled:   !!(findCfg.NDIDisServIP),
             server_ip: findCfg.NDIDisServIP || '',
         },
+        // Only a real "false" from the decoder is a warning; offline/missing → true.
+        passthrough_ok: ipc.passthrough_ok !== false,
         outputs,
     };
 }

@@ -12,6 +12,13 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "armv7|armhf")
     set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=armv7-a+neon-vfpv4 -mtune=native -DNDEBUG")
     set(CMAKE_C_FLAGS_RELEASE   "-O3 -march=armv7-a+neon-vfpv4 -mtune=native -DNDEBUG")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    # x86-64-v2 baseline (SSE4.2/POPCNT, ~2009+) — runs on every Intel NUC / AMD
+    # box across generations, and stays above the NDI SDK's SSSE3 floor. We do
+    # NOT use -march=native so a binary built on one box runs on a mixed fleet.
+    # -O3 auto-vectorises the scalar color-conversion path (NEON stays ARM-only).
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -msse4.2 -mtune=generic -DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE   "-O3 -msse4.2 -mtune=generic -DNDEBUG")
 else()
     set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
     set(CMAKE_C_FLAGS_RELEASE   "-O3 -DNDEBUG")
@@ -21,6 +28,7 @@ endif()
 option(ENABLE_MPP    "Enable Rockchip MPP hardware decoder"       ON)
 option(ENABLE_V4L2   "Enable V4L2 M2M hardware decoder (RPi)"    ON)
 option(ENABLE_FFMPEG "Enable software decoder fallback (FFmpeg)"  ON)
+option(ENABLE_VAAPI  "Enable VAAPI hardware decoder (Intel/AMD x86)" ON)
 
 # --- Find packages ---
 find_package(PkgConfig REQUIRED)
@@ -74,6 +82,19 @@ if(ENABLE_FFMPEG)
         message(STATUS "FFmpeg found: software decoder enabled")
     else()
         message(STATUS "FFmpeg NOT found, software decoder disabled")
+    endif()
+endif()
+
+# VAAPI (Intel/AMD hardware decoder on x86). Needs libva + libva-drm and
+# FFmpeg's hwcontext (in libavutil, already required above for the SW decoder).
+# Only meaningful on x86; ARM uses MPP/V4L2.
+if(ENABLE_VAAPI AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    pkg_check_modules(VAAPI libva libva-drm)
+    if(VAAPI_FOUND AND HAVE_FFMPEG)
+        set(HAVE_VAAPI TRUE)
+        message(STATUS "VAAPI found: Intel/AMD hardware decoder enabled")
+    else()
+        message(STATUS "VAAPI NOT found (or FFmpeg missing): hardware decode disabled, software only")
     endif()
 endif()
 
@@ -133,6 +154,15 @@ if(HAVE_FFMPEG)
     list(APPEND DECODER_LIBS ${FFMPEG_LIBRARIES})
 endif()
 
+# VAAPIDecoder.cpp is added in Phase 2. Guard on file existence so a Phase 1
+# checkout still builds on x86 before the decoder source lands.
+if(HAVE_VAAPI AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/VAAPIDecoder.cpp)
+    list(APPEND DECODER_SOURCES src/VAAPIDecoder.cpp)
+    list(APPEND DECODER_DEFINES HAVE_VAAPI)
+    list(APPEND DECODER_INCLUDES ${VAAPI_INCLUDE_DIRS})
+    list(APPEND DECODER_LIBS ${VAAPI_LIBRARIES})
+endif()
+
 if(SYSTEMD_FOUND)
     list(APPEND DECODER_DEFINES HAVE_SYSTEMD)
     list(APPEND DECODER_LIBS ${SYSTEMD_LIBRARIES})
@@ -182,5 +212,6 @@ message(STATUS "=== NDIMon-R Build Configuration ===")
 message(STATUS "  Platform: ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "  MPP decoder:      ${HAVE_MPP}")
 message(STATUS "  V4L2 decoder:     ${HAVE_V4L2}")
+message(STATUS "  VAAPI decoder:    ${HAVE_VAAPI}")
 message(STATUS "  FFmpeg decoder:   ${HAVE_FFMPEG}")
 message(STATUS "=====================================")

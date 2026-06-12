@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <poll.h>
 
@@ -36,6 +37,11 @@ bool IPCServer::start(const std::string& socket_path) {
         server_fd_ = -1;
         return false;
     }
+
+    // Restrict the control socket to the owner (ndimon-r and ndimon-api run as
+    // the same user). Without this, any local user could drive the decoder.
+    if (chmod(socket_path_.c_str(), 0600) != 0)
+        std::cerr << "[IPC] WARNING: chmod 0600 on socket failed\n";
 
     listen(server_fd_, 5);
     running_ = true;

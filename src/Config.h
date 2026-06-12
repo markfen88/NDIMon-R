@@ -30,6 +30,7 @@ struct DeviceConfig {
     std::string host_name = "";
     std::string device_ip = "";          // populated at runtime, not persisted
     std::string ndi_recv_name = "";      // NDI alias shown in discovery tools (empty = auto)
+    std::string decode_mode = "auto";    // auto | hardware | software (HX decode path)
 };
 
 struct NDIGroupConfig {

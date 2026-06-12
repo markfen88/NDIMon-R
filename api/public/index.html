@@ -125,6 +125,20 @@
 </head>
 <body>
 
+<!-- ══ LOGIN OVERLAY ══ -->
+<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:2000;background:var(--bg-base);align-items:center;justify-content:center">
+  <div class="card" style="width:340px;max-width:92vw">
+    <div class="card-header"><i class="bi bi-shield-lock me-1"></i>Sign in</div>
+    <div class="card-body">
+      <div class="mb-2"><label class="form-label">Password</label>
+        <input type="password" class="form-control" id="login-pw" onkeydown="if(event.key==='Enter')doLogin()" autofocus></div>
+      <div id="login-err" style="color:var(--danger);font-size:.82rem;min-height:1.1rem"></div>
+      <div class="d-grid"><button class="btn btn-primary" onclick="doLogin()"><i class="bi bi-box-arrow-in-right me-1"></i>Sign in</button></div>
+      <div class="form-text mt-2">Default password is <code>ndimon</code> — change it under Settings after signing in.</div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ TOPBAR ══ -->
 <div class="topbar">
   <div class="brand"><i class="bi bi-broadcast"></i>NDI Decoder</div>
@@ -133,7 +147,16 @@
     <span style="font-size:.82rem;color:var(--text-muted)">Source:</span>
     <span id="topbar-src" style="font-size:.85rem;font-weight:600;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</span>
   </div>
-  <div id="topbar-res" class="ms-auto topbar-detail" style="font-size:.78rem;color:var(--text-muted)">—</div>
+  <div class="ms-auto d-flex align-items-center gap-3">
+    <div id="topbar-res" class="topbar-detail" style="font-size:.78rem;color:var(--text-muted)">—</div>
+    <button class="btn btn-outline-secondary btn-sm" onclick="doLogout()" title="Sign out"><i class="bi bi-box-arrow-right"></i></button>
+  </div>
+</div>
+<div id="pw-warning" style="display:none;position:fixed;top:54px;left:0;right:0;z-index:90;background:var(--warn);color:#1a1300;text-align:center;padding:4px;font-size:.8rem;font-weight:600">
+  Default password in use — <span style="text-decoration:underline;cursor:pointer" onclick="showPage('settings',document.querySelectorAll('.nav-item')[2])">set a password</span> under Settings.
+</div>
+<div id="pt-warning" style="display:none;position:fixed;top:54px;left:0;right:0;z-index:89;background:var(--danger);color:#fff;text-align:center;padding:4px;font-size:.8rem;font-weight:600">
+  HX passthrough not active — H.264/H.265 sources may not hardware-decode. Check the NDI SDK install.
 </div>
 
 <!-- ══ SIDEBAR ══ -->
@@ -247,6 +270,24 @@
             </div>
           </div>
         </div>
+
+        <!-- Source Presets -->
+        <div class="card mt-3">
+          <div class="card-header"><i class="bi bi-bookmark-star"></i>Source Presets</div>
+          <div class="card-body">
+            <div id="preset-list" style="font-size:.85rem">
+              <div class="text-muted">No presets saved.</div>
+            </div>
+            <hr class="section-divider">
+            <label class="form-label">Save current selection as preset</label>
+            <div class="input-group input-group-sm mb-2">
+              <input type="text" class="form-control" id="preset-name" placeholder="Preset name">
+              <select class="form-select" id="preset-src" style="max-width:55%"></select>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="savePreset()"><i class="bi bi-plus-lg me-1"></i>Save Preset</button>
+            <div class="form-text">Recall instantly switches an output to the saved source (no rescan).</div>
+          </div>
+        </div>
       </div>
 
       <div class="col-lg-7">
@@ -319,6 +360,15 @@
                 <option value="RUDP">RUDP</option>
               </select>
             </div>
+            <div class="mb-3" id="decode-mode-row">
+              <label class="form-label">HX Decode <small class="text-muted">(H.264/H.265)</small></label>
+              <select class="form-select" id="decode-mode-sel">
+                <option value="auto">Auto (hardware if available)</option>
+                <option value="hardware">Hardware only</option>
+                <option value="software">Software</option>
+              </select>
+              <div class="form-text" id="decode-backend-hint">Active backend: —</div>
+            </div>
             <button class="btn btn-primary btn-sm" onclick="saveDecoder()"><i class="bi bi-check-lg me-1"></i>Save Decoder Settings</button>
           </div>
         </div>
@@ -351,6 +401,29 @@
     <div class="row g-3">
 
       <div class="col-lg-7">
+
+        <!-- Security -->
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-shield-lock"></i>Security</div>
+          <div class="card-body">
+            <div class="row g-2">
+              <div class="col-md-4">
+                <label class="form-label">Current Password</label>
+                <input type="password" class="form-control" id="pw-current" placeholder="current">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">New Password</label>
+                <input type="password" class="form-control" id="pw-new" placeholder="min 6 chars">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">Confirm</label>
+                <input type="password" class="form-control" id="pw-confirm" placeholder="repeat">
+              </div>
+            </div>
+            <div class="mt-2"><button class="btn btn-primary btn-sm" onclick="changePassword()"><i class="bi bi-check-lg me-1"></i>Change Password</button>
+              <span id="pw-msg" style="font-size:.8rem;margin-left:.5rem;color:var(--text-muted)"></span></div>
+          </div>
+        </div>
 
         <!-- Splash Screen -->
         <div class="card mb-3">
@@ -516,13 +589,27 @@
         <div class="card">
           <div class="card-header"><i class="bi bi-info-circle"></i>Device Information</div>
           <div class="card-body">
-            <div class="stat-row"><span class="stat-label">Model</span><span class="stat-val">NDI Decoder (RK3588)</span></div>
+            <div class="stat-row"><span class="stat-label">Model</span><span class="stat-val" id="sys-model">—</span></div>
             <div class="stat-row"><span class="stat-label">Hostname</span><span class="stat-val" id="sys-host">—</span></div>
             <div class="stat-row"><span class="stat-label">IP Address</span><span class="stat-val" id="sys-ip">—</span></div>
             <div class="stat-row"><span class="stat-label">Platform</span><span class="stat-val" id="sys-plat">—</span></div>
-            <div class="stat-row"><span class="stat-label">NDI SDK</span><span class="stat-val">v6</span></div>
+            <div class="stat-row"><span class="stat-label">NDI SDK</span><span class="stat-val" id="sys-ndi">—</span></div>
             <div class="stat-row"><span class="stat-label">Firmware</span><span class="stat-val" id="sys-fw">—</span></div>
+            <div class="stat-row"><span class="stat-label">Build</span><span class="stat-val" id="sys-build">—</span></div>
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-val" id="sys-up">—</span></div>
+          </div>
+        </div>
+
+        <!-- Software Update -->
+        <div class="card mt-3">
+          <div class="card-header"><i class="bi bi-arrow-up-circle"></i>Software Update</div>
+          <div class="card-body">
+            <div class="stat-row"><span class="stat-label">Update status</span><span class="stat-val" id="upd-status">—</span></div>
+            <div class="d-grid gap-2 mt-2">
+              <button class="btn btn-outline-secondary btn-sm" onclick="checkUpdate()"><i class="bi bi-search me-1"></i>Check for Updates</button>
+              <button class="btn btn-outline-primary btn-sm" id="upd-apply-btn" onclick="applyUpdate()" disabled><i class="bi bi-download me-1"></i>Update Now</button>
+            </div>
+            <div class="form-text">Updates pull the latest code, rebuild, and restart services. The UI will be briefly unavailable.</div>
           </div>
         </div>
       </div>
@@ -653,11 +740,72 @@ let modes = [];
 let toastInst;
 let sourceIPs = {}; // name → IP from NDI finder list
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   toastInst = new bootstrap.Toast(document.getElementById('toast'), { delay:2500 });
+  await startApp();
+});
+
+// ══ Auth ════════════════════════════════════════════════════════
+let _booted = false;
+async function startApp() {
+  let st = {};
+  try { st = await fetch('/api/auth-status').then(r => r.json()); } catch {}
+  if (st.auth_required && !st.logged_in) { showLogin(); return; }
+  hideLogin();
+  if (st.default_password) document.getElementById('pw-warning').style.display = 'block';
+  if (_booted) return;
+  _booted = true;
   initSSE();
   loadInitialData();
-});
+}
+
+function showLogin() {
+  document.getElementById('login-overlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('login-pw')?.focus(), 50);
+}
+function hideLogin() { document.getElementById('login-overlay').style.display = 'none'; }
+
+async function doLogin() {
+  const pw = document.getElementById('login-pw').value;
+  const err = document.getElementById('login-err');
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { err.textContent = d.error || 'login failed'; return; }
+    document.getElementById('login-pw').value = '';
+    await startApp();
+  } catch { err.textContent = 'network error'; }
+}
+
+async function doLogout() {
+  try { await fetch('/api/logout', { method: 'POST' }); } catch {}
+  location.reload();
+}
+
+async function changePassword() {
+  const cur = document.getElementById('pw-current').value;
+  const nw  = document.getElementById('pw-new').value;
+  const cf  = document.getElementById('pw-confirm').value;
+  const msg = document.getElementById('pw-msg');
+  if (nw !== cf) { msg.textContent = 'passwords do not match'; return; }
+  const r = await fetch('/api/password', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current: cur, password: nw }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok && d.ok) {
+    msg.textContent = '';
+    ['pw-current','pw-new','pw-confirm'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('pw-warning').style.display = 'none';
+    toast('Password changed');
+  } else {
+    msg.textContent = d.error || 'failed';
+  }
+}
 
 // ══ Toast ═══════════════════════════════════════════════════════
 function toast(msg, type) {
@@ -675,7 +823,7 @@ function showPage(name, el) {
   if (el) el.classList.add('active');
   if (name === 'settings') loadSettings();
   if (name === 'system')   { loadSysInfo(); loadWatchdog(); }
-  if (name === 'ndi')      { loadSourceIPs().then(renderSrcList); }
+  if (name === 'ndi')      { loadSourceIPs().then(renderSrcList); loadPresets(); }
 }
 
 function gotoNDI() {
@@ -704,6 +852,7 @@ function mergeState(d) {
   if (d.decoder)  S.decoder = d.decoder;
   if (d.discovery) S.discovery = d.discovery;
   if (d.outputs)  S.outputs = d.outputs;
+  if ('passthrough_ok' in d) S.passthrough_ok = d.passthrough_ok;
 }
 
 // Refresh service status every 10s when system page is visible
@@ -950,6 +1099,7 @@ function updateOutputCards() {
   if (srcKey !== _lastSrcKey) {
     _lastSrcKey = srcKey;
     S.outputs.forEach((out, idx) => populateOutputSrcSelector(idx));
+    populatePresetSourceSelect();
   }
 }
 let _lastSrcKey = '';
@@ -1095,6 +1245,9 @@ function updateDash() {
   setBar('dash-mem-bar', mem, true);
   setText('dash-uptime', S.uptime||'—');
   setText('dash-audio', S.audio_enabled?'Enabled':'Disabled');
+  // HX passthrough health banner (only show the red bar when explicitly false)
+  const ptWarn = document.getElementById('pt-warning');
+  if (ptWarn) ptWarn.style.display = (S.passthrough_ok === false) ? 'block' : 'none';
   // System health bars
   setText('sys-cpu-pct', cpu+'%'); setBar('sys-cpu-bar', cpu);
   setText('sys-mem-pct', mem+'%'); setBar('sys-mem-bar', mem, true);
@@ -1125,17 +1278,26 @@ function updateNDIState() {
       const res = out.input_width ? `${out.input_width}×${out.input_height}` : '—';
       const fps = out.fps > 0 ? out.fps.toFixed(1)+' fps' : '—';
       const codec = fmtCodec(out.codec);
+      const dec = out.connected && out.decode_backend && out.decode_backend !== 'none'
+        ? ` <span class="badge ${out.hw_decode?'bg-success':'bg-secondary'}" style="font-size:.62rem">${out.hw_decode?'HW':'SW'} ${esc(out.decode_backend)}</span>`
+        : '';
       return `<div${idx > 0 ? ' style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"' : ''}>
         <div class="stat-row"><span class="stat-label">${esc(label)}</span>${badge}</div>
         <div class="stat-row"><span class="stat-label">Source</span><span class="stat-val">${esc(src)}</span></div>
         <div class="stat-row"><span class="stat-label">Resolution</span><span class="stat-val">${res}</span></div>
-        <div class="stat-row"><span class="stat-label">FPS / Codec</span><span class="stat-val">${fps} / ${codec}</span></div>
+        <div class="stat-row"><span class="stat-label">FPS / Codec</span><span class="stat-val">${fps} / ${codec}${dec}</span></div>
       </div>`;
     }).join('');
   }
   if (S.decoder) {
     setVal('tally-sel', S.decoder.tally);
     setVal('ndi-audio-sel', S.decoder.audio);
+  }
+  // Active HX decode backend hint (Decoder settings card)
+  if (S.outputs?.length) {
+    const backends = [...new Set(S.outputs.filter(o => o.connected && o.decode_backend && o.decode_backend !== 'none')
+                                          .map(o => (o.hw_decode ? 'HW ' : 'SW ') + o.decode_backend))];
+    setText('decode-backend-hint', 'Active backend: ' + (backends.length ? backends.join(', ') : '—'));
   }
   setText('ndi-src-count', S.sources.length);
   if (document.getElementById('page-ndi').classList.contains('active')) renderSrcList();
@@ -1183,6 +1345,7 @@ function renderTemps(id) {
 async function loadSettings() {
   try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('ss-sel',d.ScreenSaverMode); setVal('cs-sel',d.ColorSpace); setVal('aud-sel',d.NDIAudio); } catch {}
   try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
+  try { const d=await api('/v1/DeviceSettings/decode-mode'); setVal('decode-mode-sel',d.decode_mode||'auto'); } catch {}
   try { const d=await api('/v1/NDIFinder/NDIDisServer'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
   try { const g=await api('/v1/NDIFinder/NdiGrpName'); setNdiGroupsFromString(g.ndi_groups||'public'); } catch {}
   try { const ips=await fetch('/v1/NDIFinder/NdiOffSnSrc').then(r=>r.text()); setVal('off-ips',ips.replace(/"/g,'')); } catch {}
@@ -1254,11 +1417,55 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadSysInfo() {
   try {
     const d = await api('/v1/AboutMe');
+    setText('sys-model', d.Model||'—');
     setText('sys-host', d.HostName||d.DeviceName||'—');
     setText('sys-ip',   Array.isArray(d.IPAddresses)?d.IPAddresses[0]:d.IPAddress||'—');
+    setText('sys-ndi',  d.NDIVersion||'—');
     setText('sys-fw',   d.FirmwareVersion||'—');
+    setText('sys-build', d.BuildDate||'—');
   } catch {}
   loadServices();
+  loadUpdateStatus();
+}
+
+// ══ Software update ═════════════════════════════════════════════
+async function loadUpdateStatus() {
+  try {
+    const v = await api('/v1/System/version');
+    const el = document.getElementById('upd-status');
+    const btn = document.getElementById('upd-apply-btn');
+    let txt = v.commit ? `commit ${v.commit}` : (v.firmware || '—');
+    if (!v.update_supported) { txt += ' (manual updates only)'; }
+    setText('upd-status', txt);
+    if (btn) btn.disabled = !v.update_supported;
+  } catch {}
+}
+
+async function checkUpdate() {
+  setText('upd-status', 'Checking…');
+  try {
+    const v = await api('/v1/System/version');
+    const btn = document.getElementById('upd-apply-btn');
+    if (v.updates_available > 0) {
+      setText('upd-status', `${v.updates_available} update(s) available`);
+      if (btn) btn.disabled = false;
+    } else if (v.updates_available === 0) {
+      setText('upd-status', 'Up to date');
+      if (btn) btn.disabled = true;
+    } else {
+      setText('upd-status', v.update_supported ? 'Unable to check' : 'Manual updates only');
+    }
+  } catch { setText('upd-status', 'Check failed'); }
+}
+
+async function applyUpdate() {
+  if (!confirm('Update now? The device will rebuild and restart services — the UI will be briefly unavailable.')) return;
+  toast('Starting update…', 'warning');
+  try {
+    const r = await post('/v1/System/update', {});
+    if (r.ok) setText('upd-status', 'Updating… services will restart');
+    else toast('Update failed: ' + (r.error || 'unknown'), 'danger');
+  } catch { toast('Update request failed', 'danger'); }
 }
 
 // ══ Watchdog ═════════════════════════════════════════════════════
@@ -1308,6 +1515,84 @@ async function refreshWatchdogStats() {
   } catch {}
 }
 
+// ══ Source Presets ══════════════════════════════════════════════
+let _presets = [];
+
+async function loadPresets() {
+  try {
+    const d = await api('/v1/Presets/list');
+    _presets = Array.isArray(d.presets) ? d.presets : [];
+  } catch { _presets = []; }
+  renderPresets();
+  populatePresetSourceSelect();
+}
+
+function populatePresetSourceSelect() {
+  const sel = document.getElementById('preset-src');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  S.sources.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    sel.appendChild(o);
+  });
+  if (prev) sel.value = prev;
+}
+
+function outputOptionsHtml() {
+  const outs = S.outputs || [];
+  if (!outs.length) return '<option value="1">Output 1</option>';
+  return outs.map((o, i) => {
+    const label = o.output_alias || o.connector || `Output ${i+1}`;
+    return `<option value="${(o.output_index ?? i) + 1}">${esc(label)}</option>`;
+  }).join('');
+}
+
+function renderPresets() {
+  const el = document.getElementById('preset-list');
+  if (!el) return;
+  if (!_presets.length) { el.innerHTML = '<div class="text-muted">No presets saved.</div>'; return; }
+  el.innerHTML = _presets.map((p, i) => `
+    <div class="stat-row" style="align-items:center;gap:.4rem">
+      <span class="stat-label" style="flex:1;min-width:0">
+        <strong>${esc(p.name)}</strong>
+        <span style="color:var(--text-muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.source)}</span>
+      </span>
+      <select class="form-select form-select-sm" id="preset-out-${i}" style="width:auto">${outputOptionsHtml()}</select>
+      <button class="btn btn-primary btn-sm" onclick="recallPreset(${i})" title="Recall"><i class="bi bi-play-fill"></i></button>
+      <button class="btn btn-outline-danger btn-sm" onclick="deletePreset(${i})" title="Delete"><i class="bi bi-trash"></i></button>
+    </div>`).join('');
+}
+
+async function savePreset() {
+  const name = (document.getElementById('preset-name')?.value || '').trim();
+  const source = document.getElementById('preset-src')?.value || '';
+  if (!name)   { toast('Enter a preset name', 'warning'); return; }
+  if (!source) { toast('No source selected', 'warning'); return; }
+  const r = await post('/v1/Presets/save', { name, source, ip: sourceIPs[source] || '' });
+  if (r.ok) { document.getElementById('preset-name').value = ''; _presets = r.presets || _presets; renderPresets(); toast('Preset saved'); }
+  else toast('Save failed: ' + (r.error || 'unknown'), 'danger');
+}
+
+async function recallPreset(idx) {
+  const p = _presets[idx];
+  if (!p) return;
+  const outSel = document.getElementById(`preset-out-${idx}`);
+  const output = parseInt(outSel?.value || '1', 10);
+  const r = await post('/v1/Presets/recall', { name: p.name, output });
+  if (r.ok) toast(`Recalled "${p.name}" → output ${output}`);
+  else toast('Recall failed: ' + (r.error || 'unknown'), 'danger');
+}
+
+async function deletePreset(idx) {
+  const p = _presets[idx];
+  if (!p) return;
+  if (!confirm(`Delete preset "${p.name}"?`)) return;
+  const r = await post('/v1/Presets/delete', { name: p.name });
+  if (r.ok) { _presets = r.presets || []; renderPresets(); toast('Preset deleted'); }
+}
+
 // ══ Actions ══════════════════════════════════════════════════════
 async function doConnect(name, ip) {
   await post('/v1/NDIDecode/connectTo', { SourceName:name, SourceIP:ip||'' });
@@ -1347,6 +1632,7 @@ async function saveDecoder() {
     ColorSpace:      document.getElementById('cs-sel').value,
   });
   await post('/v1/NDIDecode/decodeTransport',{Rxpm:document.getElementById('tp-sel').value});
+  await post('/v1/DeviceSettings/decode-mode',{decode_mode:document.getElementById('decode-mode-sel').value});
   toast('Decoder settings saved');
 }
 
@@ -1534,8 +1820,9 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ══ Helpers ══════════════════════════════════════════════════════
-async function api(url) { return fetch(url).then(r=>r.json()); }
-async function post(url,body) { return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json()).catch(()=>({})); }
+function handle401(r) { if (r.status === 401) { showLogin(); throw new Error('unauthorized'); } return r; }
+async function api(url) { return fetch(url).then(handle401).then(r=>r.json()); }
+async function post(url,body) { return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(handle401).then(r=>r.json()).catch(()=>({})); }
 
 function setText(id,v) { const el=document.getElementById(id); if(el) el.textContent=v; }
 function setVal(id,v)  { const el=document.getElementById(id); if(el&&v!=null) el.value=v; }

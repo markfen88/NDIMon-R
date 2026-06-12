@@ -2,12 +2,14 @@
 const express    = require('express');
 const bodyParser = require('body-parser');
 const path       = require('path');
+const auth       = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 80;
 
 // --- Middleware ---
-app.use(bodyParser.json());
+// 20mb limit so base64 logo uploads (Splash/uploadLogo) don't hit the 100kb default.
+app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.text());
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -19,13 +21,17 @@ app.use(express.static(path.join(__dirname, 'public'), {
     }
 }));
 
-// CORS
-app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS,POST,PUT');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    next();
-});
+// Intentionally no CORS headers: the API is same-origin only. Cross-origin
+// browser access (and the CSRF exposure it created) is not supported.
+
+// --- Auth ---
+// Login/logout/auth-status/password live outside the guard; everything under
+// /v1/* and /api/* (and the legacy prefixes) requires a session cookie or
+// "Authorization: Bearer <token>" from POST /api/login.
+auth.installRoutes(app);
+app.use(['/v1', '/api', '/NDIDecode', '/NDIEncoder', '/NDIFinder',
+         '/VideoOutput', '/DeviceSettings', '/System', '/AboutMe'],
+        auth.middleware);
 
 // --- Route modules ---
 app.use('/v1/NDIDecode',    require('./routes/NDIDecode'));
@@ -38,6 +44,7 @@ app.use('/v1/AboutMe',      require('./routes/AboutMe'));
 app.use('/v1/System',       require('./routes/System'));
 
 app.use('/v1/Splash',       require('./routes/Splash'));
+app.use('/v1/Presets',      require('./routes/Presets'));
 
 // --- New unified API routes ---
 app.use('/api',             require('./routes/Status').router);

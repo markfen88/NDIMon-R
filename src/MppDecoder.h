@@ -16,6 +16,8 @@ public:
     void flush() override;
     void destroy() override;
     void release_frame(DecodedFrame& f) override;
+    const char* backend_name() const override { return "mpp"; }
+    bool is_hardware() const override { return true; }
 
 private:
     void drain_frames();
