@@ -91,6 +91,14 @@ public:
     bool show_frame_dma(int dma_fd, uint32_t format,
                         uint32_t frame_w, uint32_t frame_h,
                         uint32_t stride_y, uint32_t stride_uv = 0);
+
+    // Zero-copy import of a DMA-BUF with an explicit multi-plane layout and DRM
+    // format modifier (VAAPI decode surfaces — tiled on Intel). Imports via
+    // drmModeAddFB2WithModifiers and scales through the atomic plane path.
+    bool show_frame_dma_explicit(int dma_fd, uint32_t format,
+                                 uint32_t frame_w, uint32_t frame_h,
+                                 const uint32_t offsets[4], const uint32_t pitches[4],
+                                 int num_planes, uint64_t modifier);
     bool show_splash(bool source_available = false);
     bool show_black();
 

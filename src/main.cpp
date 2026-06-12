@@ -1257,9 +1257,17 @@ private:
             // Prefer DMA-BUF fd path for MPP frames — kernel-managed memory,
             // no virtual address access needed, safe for RGA/DRM import.
             if (f.fd >= 0) {
-                drm_->show_frame_dma(f.fd, f.drm_format,
-                                     f.width, f.height,
-                                     f.hor_stride, f.ver_stride);
+                if (f.prime_explicit) {
+                    // VAAPI: tiled multi-plane surface with a DRM modifier.
+                    drm_->show_frame_dma_explicit(f.fd, f.drm_format,
+                                                  f.width, f.height,
+                                                  f.plane_offset, f.plane_pitch,
+                                                  f.num_planes, f.drm_modifier);
+                } else {
+                    drm_->show_frame_dma(f.fd, f.drm_format,
+                                         f.width, f.height,
+                                         f.hor_stride, f.ver_stride);
+                }
             } else if (f.data) {
                 drm_->show_frame_memory(f.data, f.data_size,
                                         f.width, f.height,

@@ -1883,6 +1883,91 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
 }
 
 // ---------------------------------------------------------------------------
+// show_frame_dma_explicit — zero-copy import of a DMA-BUF with explicit plane
+// offsets/pitches and a DRM format modifier (VAAPI). Decode surfaces on Intel
+// are tiled, so importing them as LINEAR produces garbage — we must pass the
+// modifier via drmModeAddFB2WithModifiers. Scaling is done by the VOP/display
+// engine through the atomic plane path; falls back to full-screen scanout if
+// the atomic scaler is unavailable.
+// ---------------------------------------------------------------------------
+bool DRMDisplay::show_frame_dma_explicit(int dma_fd, uint32_t format,
+                                         uint32_t frame_w, uint32_t frame_h,
+                                         const uint32_t offsets[4], const uint32_t pitches[4],
+                                         int num_planes, uint64_t modifier) {
+    if (!initialized_) return false;
+    std::lock_guard<std::mutex> lk(frame_mutex_);
+    if (num_planes <= 0) num_planes = 1;
+    if (num_planes > 4)  num_planes = 4;
+
+    uint32_t bo = 0;
+    if (drmPrimeFDToHandle(drm_fd_, dma_fd, &bo) != 0) {
+        std::cerr << "[DRM] VAAPI drmPrimeFDToHandle failed: " << strerror(errno) << "\n";
+        return false;
+    }
+
+    uint32_t handles[4] = {}, pitch[4] = {}, off[4] = {};
+    uint64_t mods[4] = {};
+    const bool use_mod = (modifier != 0 && modifier != DRM_FORMAT_MOD_INVALID);
+    for (int i = 0; i < num_planes; i++) {
+        handles[i] = bo;
+        pitch[i]   = pitches[i];
+        off[i]     = offsets[i];
+        mods[i]    = modifier;
+    }
+
+    auto gem_close = [this](uint32_t handle) {
+        struct drm_gem_close c = {}; c.handle = handle;
+        drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
+    };
+
+    uint32_t fb = 0;
+    int r = use_mod
+        ? drmModeAddFB2WithModifiers(drm_fd_, frame_w, frame_h, format,
+                                     handles, pitch, off, mods, &fb, DRM_MODE_FB_MODIFIERS)
+        : drmModeAddFB2(drm_fd_, frame_w, frame_h, format, handles, pitch, off, &fb, 0);
+    if (r != 0) {
+        std::cerr << "[DRM] VAAPI drmModeAddFB2"
+                  << (use_mod ? "WithModifiers" : "") << " failed: " << strerror(errno) << "\n";
+        gem_close(bo);
+        return false;
+    }
+
+    Rect dr  = compute_dst_rect(frame_w, frame_h);
+    Rect src = { 0, 0, frame_w, frame_h };
+
+    bool ok = false;
+    if (atomic_plane_state_ >= 0 && plane_id_) {
+        ok = atomic_plane_commit(fb, src, dr);
+        if (ok) {
+            if (atomic_plane_state_ == 0) {
+                atomic_plane_state_ = 1;
+                std::cout << "[DRM] VAAPI atomic plane commit OK — zero-copy decode path active\n";
+            }
+        } else if (atomic_plane_state_ == 0) {
+            atomic_plane_state_ = -1;
+            std::cerr << "[DRM] VAAPI atomic plane commit failed — full-screen scanout fallback\n";
+        }
+    }
+    if (!ok) {
+        // No hardware scaler: scan the FB out full-screen (no letterbox).
+        ok = commit_fb(fb);
+    }
+    if (!ok) {
+        drmModeRmFB(drm_fd_, fb);
+        gem_close(bo);
+        return false;
+    }
+
+    // Swap import state (free the previous frame's FB + handle).
+    if (import_fb_id_) drmModeRmFB(drm_fd_, import_fb_id_);
+    if (import_bo_)    gem_close(import_bo_);
+    import_fb_id_ = fb;
+    import_bo_    = bo;
+    streaming_    = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // show_splash  — reads layout/colour settings from Config::instance().splash
 // ---------------------------------------------------------------------------
 bool DRMDisplay::show_splash(bool source_available) {

@@ -23,6 +23,17 @@ struct DecodedFrame {
     uint32_t hor_stride = 0;
     uint32_t ver_stride = 0;
     uint32_t drm_format = kDrmFormatNV12;
+
+    // Explicit multi-plane DMA-BUF layout. MPP/V4L2 leave these at defaults and
+    // the display uses its implicit contiguous-NV12 import. VAAPI sets
+    // prime_explicit=true and provides per-plane offsets/pitches plus the DRM
+    // format modifier (decode surfaces are tiled on Intel, so the modifier is
+    // required to import them correctly).
+    bool     prime_explicit  = false;
+    int      num_planes      = 0;
+    uint32_t plane_offset[4] = {0, 0, 0, 0};
+    uint32_t plane_pitch[4]  = {0, 0, 0, 0};
+    uint64_t drm_modifier    = 0;   // DRM_FORMAT_MOD_LINEAR
 };
 
 class VideoDecoder {

@@ -266,10 +266,19 @@ defined(__ARM_NEON)`) with scalar `#else` paths that `-O3` auto-vectorises on x8
 - **Connector→ch mapping** in main.cpp is now a stable map: keeps HDMI-A-1→1,
   HDMI-A-2→2, DP-1→3 (backward compat) and assigns DP-2/eDP-1/etc the lowest free
   ch deterministically. `get_primary_mac_suffix()` enumerates /sys/class/net.
-- **PHASE 2 (next)**: `src/VAAPIDecoder.{h,cpp}` — FFmpeg AV_HWDEVICE_TYPE_VAAPI,
-  `vaExportSurfaceHandle(DRM_PRIME_2)` NV12 dmabuf → existing `show_frame_dma()`/
-  `atomic_plane_commit()`. Roadmap: NVIDIA NVDEC, Intel oneVPL/QSV; multi-4K
-  saturation indicator.
+- **PHASE 2 (done)**: `src/VAAPIDecoder.{h,cpp}` — FFmpeg `AV_HWDEVICE_TYPE_VAAPI`,
+  `vaExportSurfaceHandle(DRM_PRIME_2, COMPOSED_LAYERS)` → `DecodedFrame.prime_explicit`
+  with per-plane offsets/pitches + `drm_modifier`. New
+  `DRMDisplay::show_frame_dma_explicit()` imports via `drmModeAddFB2WithModifiers`
+  (decode surfaces are tiled on Intel — LINEAR import = garbage) and scales through
+  `atomic_plane_commit`, with a full-screen scanout fallback. If VA export or DRM
+  import fails the decoder transparently downloads to CPU NV12 (`zero_copy_=false`,
+  still HW-decoded). `DecodedFrame` gained prime_explicit/num_planes/plane_offset[4]/
+  plane_pitch[4]/drm_modifier (defaults keep MPP/V4L2 on the legacy path).
+  NOT compile-tested (no libva/ffmpeg headers in dev env) — MUST build on a NUC.
+- **Roadmap (Phase 3)**: NVIDIA NVDEC, Intel oneVPL/QSV; multi-4K saturation
+  indicator; vainfo-driven UI diagnostics. Known caveat: surface released right
+  after import (parity with MPP) → possible tearing under load.
 
 ## Coding Conventions
 
