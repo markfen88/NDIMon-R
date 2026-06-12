@@ -158,6 +158,9 @@
 <div id="pt-warning" style="display:none;position:fixed;top:54px;left:0;right:0;z-index:89;background:var(--danger);color:#fff;text-align:center;padding:4px;font-size:.8rem;font-weight:600">
   HX passthrough not active — H.264/H.265 sources may not hardware-decode. Check the NDI SDK install.
 </div>
+<div id="sat-warning" style="display:none;position:fixed;top:54px;left:0;right:0;z-index:88;background:var(--warn);color:#1a1300;text-align:center;padding:4px;font-size:.8rem;font-weight:600">
+  Decode engine saturated — an output can't keep up with its source. Lower resolution/streams or check decode mode.
+</div>
 
 <!-- ══ SIDEBAR ══ -->
 <nav class="sidebar">
@@ -594,6 +597,7 @@
             <div class="stat-row"><span class="stat-label">IP Address</span><span class="stat-val" id="sys-ip">—</span></div>
             <div class="stat-row"><span class="stat-label">Platform</span><span class="stat-val" id="sys-plat">—</span></div>
             <div class="stat-row"><span class="stat-label">NDI SDK</span><span class="stat-val" id="sys-ndi">—</span></div>
+            <div class="stat-row" id="sys-vaapi-row" style="display:none"><span class="stat-label">GPU Decode</span><span class="stat-val" id="sys-vaapi">—</span></div>
             <div class="stat-row"><span class="stat-label">Firmware</span><span class="stat-val" id="sys-fw">—</span></div>
             <div class="stat-row"><span class="stat-label">Build</span><span class="stat-val" id="sys-build">—</span></div>
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-val" id="sys-up">—</span></div>
@@ -1248,6 +1252,9 @@ function updateDash() {
   // HX passthrough health banner (only show the red bar when explicitly false)
   const ptWarn = document.getElementById('pt-warning');
   if (ptWarn) ptWarn.style.display = (S.passthrough_ok === false) ? 'block' : 'none';
+  // Decode saturation banner (any output behind its source)
+  const satWarn = document.getElementById('sat-warning');
+  if (satWarn) satWarn.style.display = (S.outputs||[]).some(o => o.decode_saturated) ? 'block' : 'none';
   // System health bars
   setText('sys-cpu-pct', cpu+'%'); setBar('sys-cpu-bar', cpu);
   setText('sys-mem-pct', mem+'%'); setBar('sys-mem-bar', mem, true);
@@ -1280,6 +1287,7 @@ function updateNDIState() {
       const codec = fmtCodec(out.codec);
       const dec = out.connected && out.decode_backend && out.decode_backend !== 'none'
         ? ` <span class="badge ${out.hw_decode?'bg-success':'bg-secondary'}" style="font-size:.62rem">${out.hw_decode?'HW':'SW'} ${esc(out.decode_backend)}</span>`
+          + (out.decode_saturated ? ` <span class="badge bg-warning" style="font-size:.62rem" title="Decoder can't keep up with the source">SATURATED ${out.decode_fps?Math.round(out.decode_fps)+'fps':''}</span>` : '')
         : '';
       return `<div${idx > 0 ? ' style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)"' : ''}>
         <div class="stat-row"><span class="stat-label">${esc(label)}</span>${badge}</div>
@@ -1426,6 +1434,18 @@ async function loadSysInfo() {
   } catch {}
   loadServices();
   loadUpdateStatus();
+  loadVaapiInfo();
+}
+
+async function loadVaapiInfo() {
+  try {
+    const v = await api('/v1/System/vaapi-info');
+    const row = document.getElementById('sys-vaapi-row');
+    if (!v.available) { if (row) row.style.display = 'none'; return; }
+    if (row) row.style.display = '';
+    const profs = (v.decode_profiles||[]).join(', ') || 'none';
+    setText('sys-vaapi', `${v.driver||'VAAPI'} — ${profs}`);
+  } catch {}
 }
 
 // ══ Software update ═════════════════════════════════════════════

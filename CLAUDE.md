@@ -276,9 +276,14 @@ defined(__ARM_NEON)`) with scalar `#else` paths that `-O3` auto-vectorises on x8
   still HW-decoded). `DecodedFrame` gained prime_explicit/num_planes/plane_offset[4]/
   plane_pitch[4]/drm_modifier (defaults keep MPP/V4L2 on the legacy path).
   NOT compile-tested (no libva/ffmpeg headers in dev env) — MUST build on a NUC.
-- **Roadmap (Phase 3)**: NVIDIA NVDEC, Intel oneVPL/QSV; multi-4K saturation
-  indicator; vainfo-driven UI diagnostics. Known caveat: surface released right
-  after import (parity with MPP) → possible tearing under load.
+- **PHASE 3 (done)**: decode saturation indicator — worker tracks decoded fps
+  (`decoded_count_`→`decode_fps_`); `decode_saturated_` trips when an HX stream's
+  decode fps stays <85% of source fps for ≥3s (`hx_stream_` gates it; uncompressed
+  FrameSync never trips). Surfaced as status `decode_fps`/`decode_saturated` →
+  per-output SATURATED badge + top banner. `/v1/System/vaapi-info` parses
+  /etc/ndimon-vaapi-info (vainfo) → System page shows driver + decode profiles.
+- **Roadmap (Phase 4+)**: NVIDIA NVDEC, Intel oneVPL/QSV. Known caveat: surface
+  released right after import (parity with MPP) → possible tearing under load.
 
 ## Coding Conventions
 

@@ -52,7 +52,9 @@ On Linux the NDI SDK decodes only in software, so HX (H.264/H.265) hardware deco
 - **Hardware** — force hardware (falls back to software if unavailable, shown in status)
 - **Software** — FFmpeg software decode (multi-threaded on x86)
 
-The active backend (e.g. `HW vaapi`, `SW software`) is shown per output on the NDI page. ARM keeps its MPP/V4L2 + NEON path as the default; the selector primarily affects x86. (VAAPI hardware decode lands in the next release; x86 currently runs multi-threaded software decode.)
+The active backend (e.g. `HW vaapi`, `SW software`) is shown per output on the NDI page, along with a **SATURATED** badge (and a top banner) if a decoder can't keep up with its source — useful when running several 4K HX streams on one box. ARM keeps its MPP/V4L2 + NEON path as the default; the selector primarily affects x86.
+
+On x86 the System page shows the detected GPU decode driver and supported VAAPI profiles (H.264/HEVC/…). Intel (iHD/i965) and AMD (Mesa) are supported across generations via VAAPI; NVIDIA (NVDEC) and Intel oneVPL/QSV are on the roadmap.
 
 ---
 

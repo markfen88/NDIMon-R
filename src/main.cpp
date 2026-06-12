@@ -841,6 +841,8 @@ public:
             s["decode_backend"] = decoder_ ? decoder_->backend_name() : "none";
             s["hw_decode"]      = decoder_ ? decoder_->is_hardware()  : false;
         }
+        s["decode_fps"]       = decode_fps_.load();
+        s["decode_saturated"] = decode_saturated_.load();
         std::string sm = "letterbox";
         if (scale_mode_ == ScaleMode::Stretch) sm = "stretch";
         else if (scale_mode_ == ScaleMode::Crop) sm = "crop";
@@ -950,6 +952,26 @@ public:
                 fps_ = fps;
                 fps_last_total_ = total;
             }
+            // Decoder throughput (frames actually decoded per second).
+            int dc = decoded_count_.load();
+            decode_fps_ = (ms > 0) ? (dc - decode_last_count_) * 1000.0 / ms : 0.0;
+            decode_last_count_ = dc;
+
+            // Best-effort GPU/decoder saturation signal: only meaningful for an
+            // HX (compressed) stream that's connected and receiving. If the
+            // decoder can't keep pace with the source for a few seconds, the
+            // hardware decode engine (or CPU) is saturated. Uncompressed
+            // (FrameSync) streams have no decoder, so this never trips for them.
+            bool behind = connected_.load() && hx_stream_.load() &&
+                          fps_.load() > 5.0 &&
+                          decode_fps_.load() < fps_.load() * 0.85;
+            if (behind) {
+                if (decode_behind_secs_ < 1000) decode_behind_secs_++;
+            } else {
+                decode_behind_secs_ = 0;
+            }
+            decode_saturated_ = (decode_behind_secs_ >= 3);
+
             fps_last_time_ = now;
         }
 
@@ -1091,6 +1113,7 @@ private:
     void on_video(NDIVideoFrame& vf) {
         last_video_frame_ms_ = now_ms();
         bool is_compressed = (vf.stride == 0 && vf.size > 0);
+        hx_stream_ = is_compressed;   // drives decode-saturation detection
 
         if (is_compressed) {
             VideoCodec codec = VideoCodec::H264;
@@ -1250,6 +1273,7 @@ private:
 
     void on_decoded(DecodedFrame& f) {
         last_decoded_frame_ms_ = now_ms();
+        decoded_count_++;
         // NOTE: called from decode() → drain_frames() → frame_cb_(),
         // which means decoder_mutex_ is already held by on_video().
         // Do NOT attempt to re-lock decoder_mutex_ here — it will deadlock.
@@ -1374,6 +1398,14 @@ private:
     std::atomic<bool>    splash_requested_{false};  // async splash render (picked up by tick)
     std::atomic<int>     input_w_{0}, input_h_{0};
     std::atomic<double>  fps_{0.0};
+
+    // Decode throughput / saturation tracking
+    std::atomic<int>     decoded_count_{0};      // total frames sent to display
+    std::atomic<double>  decode_fps_{0.0};
+    std::atomic<bool>    hx_stream_{false};      // current stream is compressed (HX)
+    std::atomic<bool>    decode_saturated_{false};
+    int                  decode_last_count_ = 0;
+    int                  decode_behind_secs_ = 0;
 
     // Health tracking timestamps (monotonic ms)
     std::atomic<int64_t> last_video_frame_ms_{0};

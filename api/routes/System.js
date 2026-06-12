@@ -79,6 +79,24 @@ router.post('/softreboot', (req, res) => {
     }, 500);
 });
 
+// GET /vaapi-info — VAAPI driver + supported decode profiles (x86 only).
+// Parsed from /etc/ndimon-vaapi-info (vainfo output recorded at install).
+router.get('/vaapi-info', (req, res) => {
+    const raw = readTrim('/etc/ndimon-vaapi-info');
+    if (!raw) return res.json({ available: false });
+    let driver = '';
+    const profiles = [];
+    for (const line of raw.split('\n')) {
+        const d = line.match(/Driver version:\s*(.+)/);
+        if (d) driver = d[1].trim();
+        // e.g. "VAProfileH264High           : VAEntrypointVLD"
+        const p = line.match(/VAProfile(\S+)\s*:\s*VAEntrypointVLD/);
+        if (p) profiles.push(p[1]);
+    }
+    const decode = [...new Set(profiles)].filter(p => /H264|HEVC|VP9|AV1/i.test(p));
+    res.json({ available: true, driver, decode_profiles: decode });
+});
+
 // Status
 router.get('/status', async (req, res) => {
     const status = await sendIPC({ action: 'status' });

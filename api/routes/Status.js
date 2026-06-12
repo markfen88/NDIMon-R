@@ -154,6 +154,8 @@ async function buildStatus() {
         codec:        o.codec        || 'none',
         decode_backend: o.decode_backend || 'none',
         hw_decode:    o.hw_decode    || false,
+        decode_fps:   o.decode_fps   || 0,
+        decode_saturated: o.decode_saturated || false,
         scale_mode:   o.scale_mode   || 'letterbox',
         drm_ready:    o.drm_ready    || false,
     }));
