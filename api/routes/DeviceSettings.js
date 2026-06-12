@@ -5,8 +5,48 @@ const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
 const { execFile } = require('child_process');
 
 const DEVICE_SETTINGS = '/etc/ndimon-device-settings.json';
+const TUNING_SETTINGS = '/etc/ndimon-tuning.json';
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
+
+// Latency tuning. All keys optional; defaults preserve current behaviour.
+const TUNING_DEFAULTS = {
+    display_queue_depth: 2,
+    decode_low_latency: false,
+    vaapi_low_delay: false,
+    framesync_bypass: false,
+    realtime_threads: false,
+    cpu_performance_governor: false,
+    audio_periods: 4,
+    audio_period_frames: 1024,
+};
+
+function clampInt(v, lo, hi, dflt) {
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return dflt;
+    return Math.max(lo, Math.min(hi, n));
+}
+
+// GET /tuning
+router.get('/tuning', (req, res) => {
+    res.json(Object.assign({}, TUNING_DEFAULTS, readJson(TUNING_SETTINGS)));
+});
+
+// POST /tuning — merge provided keys, validate, persist, reload.
+router.post('/tuning', (req, res) => {
+    const cur  = Object.assign({}, TUNING_DEFAULTS, readJson(TUNING_SETTINGS));
+    const body = req.body || {};
+    if ('display_queue_depth' in body) cur.display_queue_depth = clampInt(body.display_queue_depth, 1, 4, cur.display_queue_depth);
+    if ('audio_periods' in body)       cur.audio_periods       = clampInt(body.audio_periods, 2, 8, cur.audio_periods);
+    if ('audio_period_frames' in body) cur.audio_period_frames = clampInt(body.audio_period_frames, 128, 8192, cur.audio_period_frames);
+    for (const k of ['decode_low_latency','vaapi_low_delay','framesync_bypass','realtime_threads','cpu_performance_governor'])
+        if (k in body) cur[k] = Boolean(body[k]);
+    writeJson(TUNING_SETTINGS, cur);
+    sendIPC({ action: 'reload_config' });
+    res.json({ ok: true, tuning: cur });
+});
+
+// GET|POST /operationmode
 
 // GET|POST /operationmode
 router.get('/operationmode', (req, res) => {

@@ -7,6 +7,8 @@
 #include <cstring>
 #include <atomic>
 #include <regex>
+#include <pthread.h>
+#include <sched.h>
 
 // Extract a named XML attribute value from a simple single-element XML string.
 // e.g. xml_attr("<source name=\"foo\" url=\"bar\"/>", "name") -> "foo"
@@ -461,6 +463,16 @@ static NDIVideoFrame make_video_frame(NDIlib_video_frame_v2_t& raw) {
 void NDIReceiver::recv_thread() {
     std::cout << "[NDIRecv] START recv thread\n";
 
+    if (realtime_.load()) {
+        struct sched_param sp = {};
+        sp.sched_priority = 51;   // slightly above the display thread
+        if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0)
+            std::cout << "[NDIRecv] real-time priority (SCHED_FIFO 51)\n";
+        else
+            std::cerr << "[NDIRecv] WARNING: could not set real-time priority "
+                         "(needs CAP_SYS_NICE)\n";
+    }
+
     bool was_connected = false;
     auto probe_start   = std::chrono::steady_clock::now();
     bool probe_active  = !current_source_.empty() && current_source_ != "None";
@@ -474,6 +486,15 @@ void NDIReceiver::recv_thread() {
         if (!recv_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
+        }
+
+        // If FrameSync bypass was toggled on at runtime, drop the active
+        // FrameSync so this thread reverts to the low-latency capture_v3 path.
+        if (framesync_ && framesync_bypass_.load()) {
+            NDIlib_framesync_destroy(framesync_);
+            framesync_ = nullptr;
+            first_frame_logged_ = false;
+            std::cout << "[NDIRecv] FrameSync bypass enabled at runtime — switching to capture_v3\n";
         }
 
         // ---- Connection status management ----
@@ -677,6 +698,11 @@ void NDIReceiver::recv_thread() {
                             // Create FrameSync for standard streams — provides
                             // display-sync frame timing and A/V sync with automatic
                             // frame duplication/dropping and silence insertion.
+                            // Skipped in low-latency bypass mode (capture_v3 push).
+                            if (framesync_bypass_) {
+                                std::cout << "[NDIRecv] FrameSync bypass — Standard NDI on capture_v3 (low latency)\n";
+                                // fall through: deliver this frame via the push path
+                            } else
                             framesync_ = NDIlib_framesync_create(recv_);
                             if (framesync_) {
                                 first_frame_logged_ = false;  // reset so FrameSync logs its FourCC

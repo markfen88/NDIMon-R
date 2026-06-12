@@ -428,6 +428,45 @@
           </div>
         </div>
 
+        <!-- Latency Tuning -->
+        <div class="card mb-3">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <span><i class="bi bi-speedometer"></i>Latency Tuning</span>
+            <button class="btn btn-outline-primary btn-sm" onclick="applyLatencyPreset()" title="Set all options for lowest latency">Low-latency preset</button>
+          </div>
+          <div class="card-body">
+            <div class="form-text mb-2">All optional — defaults match standard behaviour. Lower latency trades off smoothing/robustness.</div>
+            <div class="row g-2">
+              <div class="col-md-6">
+                <label class="form-label">Display queue depth</label>
+                <select class="form-select form-select-sm" id="tn-queue">
+                  <option value="1">1 (lowest latency)</option>
+                  <option value="2">2 (default)</option>
+                  <option value="3">3</option>
+                  <option value="4">4 (smoothest)</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">ALSA periods</label>
+                <input type="number" class="form-control form-control-sm" id="tn-aperiods" min="2" max="8" step="1">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label">Period frames</label>
+                <input type="number" class="form-control form-control-sm" id="tn-aframes" min="128" max="8192" step="128">
+              </div>
+            </div>
+            <div class="mt-2 d-flex flex-column gap-1">
+              <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="tn-fsbypass"><label class="form-check-label" for="tn-fsbypass">FrameSync bypass <small class="text-muted">(Standard NDI — lower latency, weaker A/V sync)</small></label></div>
+              <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="tn-decll"><label class="form-check-label" for="tn-decll">Low-latency software decode <small class="text-muted">(single-thread; x86)</small></label></div>
+              <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="tn-vaapill"><label class="form-check-label" for="tn-vaapill">VAAPI low-delay <small class="text-muted">(skip reorder buffer)</small></label></div>
+              <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="tn-rt"><label class="form-check-label" for="tn-rt">Real-time thread priority <small class="text-muted">(SCHED_FIFO)</small></label></div>
+              <div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="tn-gov"><label class="form-check-label" for="tn-gov">CPU performance governor</label></div>
+            </div>
+            <div class="mt-2"><button class="btn btn-primary btn-sm" onclick="saveTuning()"><i class="bi bi-check-lg me-1"></i>Save Tuning</button>
+              <span class="form-text ms-2">Some options apply on the next source reconnect.</span></div>
+          </div>
+        </div>
+
         <!-- Splash Screen -->
         <div class="card mb-3">
           <div class="card-header"><i class="bi bi-image"></i>Splash Screen</div>
@@ -1354,6 +1393,7 @@ async function loadSettings() {
   try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('ss-sel',d.ScreenSaverMode); setVal('cs-sel',d.ColorSpace); setVal('aud-sel',d.NDIAudio); } catch {}
   try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
   try { const d=await api('/v1/DeviceSettings/decode-mode'); setVal('decode-mode-sel',d.decode_mode||'auto'); } catch {}
+  loadTuning();
   try { const d=await api('/v1/NDIFinder/NDIDisServer'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
   try { const g=await api('/v1/NDIFinder/NdiGrpName'); setNdiGroupsFromString(g.ndi_groups||'public'); } catch {}
   try { const ips=await fetch('/v1/NDIFinder/NdiOffSnSrc').then(r=>r.text()); setVal('off-ips',ips.replace(/"/g,'')); } catch {}
@@ -1654,6 +1694,48 @@ async function saveDecoder() {
   await post('/v1/NDIDecode/decodeTransport',{Rxpm:document.getElementById('tp-sel').value});
   await post('/v1/DeviceSettings/decode-mode',{decode_mode:document.getElementById('decode-mode-sel').value});
   toast('Decoder settings saved');
+}
+
+// ══ Latency Tuning ═══════════════════════════════════════════════
+async function loadTuning() {
+  try {
+    const t = await api('/v1/DeviceSettings/tuning');
+    setVal('tn-queue', String(t.display_queue_depth ?? 2));
+    setVal('tn-aperiods', t.audio_periods ?? 4);
+    setVal('tn-aframes', t.audio_period_frames ?? 1024);
+    setCheck('tn-fsbypass', !!t.framesync_bypass);
+    setCheck('tn-decll', !!t.decode_low_latency);
+    setCheck('tn-vaapill', !!t.vaapi_low_delay);
+    setCheck('tn-rt', !!t.realtime_threads);
+    setCheck('tn-gov', !!t.cpu_performance_governor);
+  } catch {}
+}
+
+async function saveTuning() {
+  const body = {
+    display_queue_depth: parseInt(document.getElementById('tn-queue').value, 10),
+    audio_periods:       parseInt(document.getElementById('tn-aperiods').value, 10),
+    audio_period_frames: parseInt(document.getElementById('tn-aframes').value, 10),
+    framesync_bypass:    document.getElementById('tn-fsbypass').checked,
+    decode_low_latency:  document.getElementById('tn-decll').checked,
+    vaapi_low_delay:     document.getElementById('tn-vaapill').checked,
+    realtime_threads:    document.getElementById('tn-rt').checked,
+    cpu_performance_governor: document.getElementById('tn-gov').checked,
+  };
+  const r = await post('/v1/DeviceSettings/tuning', body);
+  if (r.ok) toast('Latency tuning saved'); else toast('Save failed', 'danger');
+}
+
+function applyLatencyPreset() {
+  setVal('tn-queue', '1');
+  setVal('tn-aperiods', 2);
+  setVal('tn-aframes', 512);
+  setCheck('tn-fsbypass', true);
+  setCheck('tn-decll', true);
+  setCheck('tn-vaapill', true);
+  setCheck('tn-rt', true);
+  setCheck('tn-gov', true);
+  toast('Low-latency preset filled — click Save Tuning to apply', 'warning');
 }
 
 async function saveAudioSetting() {

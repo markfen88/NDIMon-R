@@ -56,6 +56,22 @@ The active backend (e.g. `HW vaapi`, `SW software`) is shown per output on the N
 
 On x86 the System page shows the detected GPU decode driver and supported VAAPI profiles (H.264/HEVC/…). Intel (iHD/i965) and AMD (Mesa) are supported across generations via VAAPI; NVIDIA (NVDEC) and Intel oneVPL/QSV are on the roadmap.
 
+### Latency tuning (optional)
+
+**Settings → Latency Tuning** exposes opt-in knobs for reducing glass-to-glass latency. All default to standard behaviour; each trades smoothing or robustness for latency:
+
+| Option | Effect |
+|--------|--------|
+| Display queue depth | Bound on the uncompressed display queue (1 = lowest latency, 2 = default) |
+| FrameSync bypass | Standard NDI pulls via `capture_v3` push instead of `NDIlib_framesync` — removes the jitter-buffer latency but weakens automatic A/V sync |
+| Low-latency software decode | Forces single-thread/low-delay FFmpeg decode (x86) instead of multi-core throughput |
+| VAAPI low-delay | Sets `AV_CODEC_FLAG_LOW_DELAY` so the GPU decoder skips reorder buffering |
+| Real-time thread priority | Runs the receive + display threads at `SCHED_FIFO` to cut scheduling jitter |
+| CPU performance governor | Pins the CPU frequency governor to `performance` at startup |
+| ALSA periods / period frames | Smaller audio buffer for lower audio latency (more underrun risk) |
+
+A **Low-latency preset** button fills all of these for minimum latency. Some options apply on the next source reconnect. Settings are stored in `/etc/ndimon-tuning.json`.
+
 ---
 
 ## Quick Install
@@ -109,6 +125,7 @@ Config files live in `/etc/`. They are created from `config/` defaults on first 
 | `/etc/ndimon-rx-settings.json` | Transport mode (TCP / UDP / Multicast / RUDP) — applied live to the receiver |
 | `/etc/ndimon-presets.json` | Saved source presets (written by the API) |
 | `/etc/ndimon-auth.json` | Web UI password hash (scrypt; created on first password change) |
+| `/etc/ndimon-tuning.json` | Optional latency-tuning knobs (written by the API) |
 | `/etc/ndi-group.json` | NDI groups to subscribe to (default: `public`) |
 | `/etc/ndi-config.json` | Off-subnet source IPs (comma-separated) |
 | `/etc/ndimon-sources.json` | NDI source list cache (written by ndimon-finder) |

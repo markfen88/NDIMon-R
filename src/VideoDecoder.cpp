@@ -65,8 +65,11 @@ std::unique_ptr<VideoDecoder> VideoDecoder::create() {
         // On x86, software decode is a primary path (the NDI SDK has no GPU
         // decode on Linux) and 4K needs the cores → throughput threading.
         // On ARM the software path is a rare fallback → keep low-latency.
-        if (PlatformDetect::is_x86())
-            sw->set_low_latency(false);
+        // The decode_low_latency tuning flag forces single-thread/low-delay
+        // everywhere (trades 4K throughput for minimum latency).
+        bool low_latency = !PlatformDetect::is_x86() ||
+                           Config::instance().tuning.decode_low_latency;
+        sw->set_low_latency(low_latency);
         return sw;
     }
 #endif

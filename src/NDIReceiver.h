@@ -104,6 +104,13 @@ public:
     // Enable/disable audio
     void set_audio_enabled(bool enable) { audio_enabled_ = enable; }
 
+    // Latency tuning. FrameSync bypass: for Standard NDI, pull video via the
+    // capture_v3 push path instead of NDIlib_framesync — lower latency, but
+    // without FrameSync's automatic A/V sync / frame timing smoothing.
+    void set_framesync_bypass(bool b) { framesync_bypass_ = b; }
+    // Run the recv thread at SCHED_FIFO real-time priority.
+    void set_realtime(bool b) { realtime_ = b; }
+
     // Set metadata XML to send to the source/DS on every connection.
     // Replaces any previously queued metadata. Safe to call at any time.
     void set_connect_metadata(const std::string& xml) { connect_metadata_ = xml; }
@@ -148,6 +155,8 @@ private:
     std::thread recv_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> audio_enabled_{true};
+    std::atomic<bool> framesync_bypass_{false};
+    std::atomic<bool> realtime_{false};
     std::atomic<NDIStreamType> stream_type_{NDIStreamType::Unknown};
 
     // Protects current_source_ / current_ip_ — written by recv_thread on

@@ -82,6 +82,19 @@ struct OsdConfig {
     std::string text    = "";   // static string displayed top-centre
 };
 
+// Optional latency-tuning knobs. All defaults preserve current behaviour, so an
+// existing install is unchanged until the user opts in via the web UI.
+struct TuningConfig {
+    int  display_queue_depth      = 2;     // uncompressed display queue (1..4); 1 = lowest latency
+    bool decode_low_latency       = false; // force single-thread/low-delay software decode
+    bool vaapi_low_delay          = false; // AV_CODEC_FLAG_LOW_DELAY on the VAAPI decoder
+    bool framesync_bypass         = false; // Standard NDI: skip FrameSync (lower latency, weaker A/V sync)
+    bool realtime_threads         = false; // SCHED_FIFO on recv + display threads
+    bool cpu_performance_governor = false; // best-effort set the CPU governor to "performance" at start
+    int  audio_periods            = 4;     // ALSA periods (2..4); fewer = lower audio latency
+    int  audio_period_frames      = 1024;  // ALSA period size in frames
+};
+
 class Config {
 public:
     static Config& instance();
@@ -103,6 +116,7 @@ public:
     NDIGroupConfig  ndi_group;
     SplashConfig    splash;
     OsdConfig       osd;
+    TuningConfig    tuning;
 
     // Source connection (ch1 / legacy)
     std::string connected_source_name;

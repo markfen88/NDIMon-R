@@ -285,6 +285,27 @@ defined(__ARM_NEON)`) with scalar `#else` paths that `-O3` auto-vectorises on x8
 - **Roadmap (Phase 4+)**: NVIDIA NVDEC, Intel oneVPL/QSV. Known caveat: surface
   released right after import (parity with MPP) → possible tearing under load.
 
+## Latency Tuning (optional, all default to current behaviour)
+
+`Config::tuning` (`TuningConfig`) loaded from `/etc/ndimon-tuning.json` (API-owned,
+`/v1/DeviceSettings/tuning` GET/POST). Knobs + where applied:
+- `display_queue_depth` (1–4) → worker `queue_depth_`, bounds the uncompressed
+  display queue in `on_video` (1 = lowest latency). Applies live via reload.
+- `framesync_bypass` → `NDIReceiver::set_framesync_bypass`; Standard NDI skips
+  `NDIlib_framesync` and uses the capture_v3 push path. recv_thread tears down an
+  active framesync at runtime when toggled on. Lower latency, weaker A/V sync.
+- `decode_low_latency` → factory passes `SoftwareDecoder::set_low_latency(true)`
+  even on x86 (single-thread + LOW_DELAY instead of multi-core throughput).
+- `vaapi_low_delay` → `AV_CODEC_FLAG_LOW_DELAY` in `VAAPIDecoder::init`.
+- `realtime_threads` → recv + display threads self-elevate to SCHED_FIFO
+  (recv prio 51, display 50). Needs CAP_SYS_NICE; the systemd unit sets
+  `LimitRTPRIO=99` + `AmbientCapabilities=CAP_SYS_NICE`. Best-effort, logs on fail.
+- `cpu_performance_governor` → `set_performance_governor()` writes sysfs
+  scaling_governor at startup.
+- `audio_periods`/`audio_period_frames` → `AlsaAudio::init` ALSA buffer sizing.
+UI: Settings → Latency Tuning card + "Low-latency preset" button. Most knobs apply
+live via reload_config; RT/audio take effect on next reconnect.
+
 ## Coding Conventions
 
 - C++17, `-O3` with ARM NEON (`-march=armv8-a+simd`)

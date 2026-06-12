@@ -128,7 +128,8 @@ std::string AlsaAudio::find_hdmi_device(const std::string& connector_name) {
     return device;
 }
 
-bool AlsaAudio::init(const std::string& device, int sample_rate, int channels) {
+bool AlsaAudio::init(const std::string& device, int sample_rate, int channels,
+                     int periods_req, int period_frames_req) {
     sample_rate_ = sample_rate;
     channels_    = channels;
     device_name_ = device;
@@ -175,9 +176,10 @@ bool AlsaAudio::init(const std::string& device, int sample_rate, int channels) {
                   << " channels (requested " << channels << ")\n";
     }
 
-    // Buffer: 4 periods × 1024 frames = ~85ms at 48kHz
-    unsigned int periods = 4;
-    snd_pcm_uframes_t period_size = 1024;
+    // Buffer: default 4 periods × 1024 frames ≈ 85ms at 48kHz. Configurable for
+    // latency tuning (fewer/smaller = lower audio latency, more underrun risk).
+    unsigned int periods = (periods_req >= 2) ? (unsigned int)periods_req : 4;
+    snd_pcm_uframes_t period_size = (period_frames_req >= 128) ? (snd_pcm_uframes_t)period_frames_req : 1024;
     snd_pcm_hw_params_set_periods_near(pcm_, hw_params, &periods, 0);
     snd_pcm_hw_params_set_period_size_near(pcm_, hw_params, &period_size, 0);
 

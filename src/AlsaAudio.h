@@ -10,7 +10,8 @@ public:
     ~AlsaAudio();
 
     bool init(const std::string& device = "default",
-              int sample_rate = 48000, int channels = 2);
+              int sample_rate = 48000, int channels = 2,
+              int periods = 4, int period_frames = 1024);
     void destroy();
 
     bool is_initialized() const { return pcm_ != nullptr; }

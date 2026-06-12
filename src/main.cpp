@@ -13,6 +13,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <mutex>
 #include <condition_variable>
@@ -25,6 +26,8 @@
 #include <iterator>
 #include <algorithm>
 #include <dirent.h>
+#include <pthread.h>
+#include <sched.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -226,6 +229,43 @@ static void signal_handler(int) {
     g_running = false;
 }
 
+// Elevate the calling thread to SCHED_FIFO real-time priority. Best-effort:
+// requires CAP_SYS_NICE (the service runs privileged); logs and continues on
+// failure so a hardened/unprivileged install still works.
+static void elevate_thread_realtime(const char* tag, int prio) {
+    struct sched_param sp = {};
+    sp.sched_priority = prio;
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp) == 0)
+        std::cout << "[" << tag << "] real-time priority (SCHED_FIFO " << prio << ")\n";
+    else
+        std::cerr << "[" << tag << "] WARNING: could not set real-time priority "
+                     "(needs CAP_SYS_NICE) — continuing at normal priority\n";
+}
+
+// Best-effort: set every CPU's frequency governor to "performance" so bursty
+// decode doesn't pay a ramp-up latency penalty. Writes sysfs directly (no
+// cpupower dependency); silently skips CPUs we can't write.
+static void set_performance_governor() {
+    DIR* d = opendir("/sys/devices/system/cpu");
+    if (!d) return;
+    int set = 0;
+    struct dirent* e;
+    while ((e = readdir(d)) != nullptr) {
+        if (strncmp(e->d_name, "cpu", 3) != 0) continue;
+        if (e->d_name[3] < '0' || e->d_name[3] > '9') continue;  // cpu0, cpu1, … only
+        std::string path = std::string("/sys/devices/system/cpu/") + e->d_name +
+                           "/cpufreq/scaling_governor";
+        std::ofstream f(path);
+        if (f) { f << "performance"; if (f.good()) set++; }
+    }
+    closedir(d);
+    if (set > 0)
+        std::cout << "[NDIMon-R] CPU governor set to performance on " << set << " core(s)\n";
+    else
+        std::cerr << "[NDIMon-R] WARNING: could not set performance governor "
+                     "(no cpufreq or no permission)\n";
+}
+
 // Format a DRM connector name into a short human-readable output label.
 // "HDMI-A-1" -> "HDMI-1", "HDMI-A-2" -> "HDMI-2", "DP-1" -> "DP-1"
 static std::string default_output_alias(const std::string& conn) {
@@ -327,7 +367,9 @@ public:
         if (has_audio_ && !audio_in_use_.exchange(true)) {
             auto audio = std::make_unique<AlsaAudio>();
             std::string hdmi_dev = AlsaAudio::find_hdmi_device(connector_name_);
-            if (audio->init(hdmi_dev, 48000, 2)) {
+            auto& tcfg = Config::instance().tuning;
+            if (audio->init(hdmi_dev, 48000, 2,
+                            tcfg.audio_periods, tcfg.audio_period_frames)) {
                 audio_ = std::move(audio);
                 std::cout << "[Worker" << ch_num_ << "] ALSA audio initialized\n";
             } else {
@@ -415,6 +457,12 @@ public:
         // Seed transport so the first reload_config doesn't spuriously recreate
         // the recv (the SDK already read this from ndi-config.v1.json at startup).
         recv_->set_transport(cfg.transport.rxpm);
+
+        // Apply latency tuning
+        queue_depth_ = cfg.tuning.display_queue_depth;
+        rt_threads_  = cfg.tuning.realtime_threads;
+        recv_->set_framesync_bypass(cfg.tuning.framesync_bypass);
+        recv_->set_realtime(cfg.tuning.realtime_threads);
 
         if (cfg.finder.discovery_server_mode == "NDIDisServEn" &&
             !cfg.finder.discovery_server_ip.empty()) {
@@ -659,6 +707,16 @@ public:
         if (drm_) {
             drm_->set_osd_enabled(cfg.osd.enabled);
             drm_->set_osd_text(cfg.osd.text);
+        }
+
+        // Latency tuning. Queue depth and FrameSync bypass apply live; RT-thread
+        // and audio-buffer changes take effect on the next (re)connect, which we
+        // note rather than forcibly restarting the pipeline.
+        queue_depth_ = cfg.tuning.display_queue_depth;
+        rt_threads_  = cfg.tuning.realtime_threads;
+        if (recv_) {
+            recv_->set_framesync_bypass(cfg.tuning.framesync_bypass);
+            recv_->set_realtime(cfg.tuning.realtime_threads);
         }
 
         // Discovery server — recreate advertiser if DS address changed
@@ -1186,8 +1244,10 @@ private:
             rf.stride = vf.stride; rf.drm_format = drm_fmt;
             {
                 std::lock_guard<std::mutex> lk(frame_mtx_);
-                // Drop oldest frame if display thread can't keep up
-                while (frame_queue_.size() >= 2) {
+                // Drop oldest frame if display thread can't keep up. The bound
+                // is the configured queue depth (1 = lowest latency).
+                size_t maxq = (size_t)queue_depth_.load();
+                while (frame_queue_.size() >= maxq) {
                     auto& old = frame_queue_.front();
                     if (old.owns_ndi_frame && recv_)
                         recv_->free_video(&old.ndi_frame);
@@ -1337,6 +1397,7 @@ private:
     std::thread             display_thr_;
 
     void display_loop() {
+        if (rt_threads_.load()) elevate_thread_realtime("display", 50);
         while (display_running_) {
             RawFrame rf;
             {
@@ -1399,6 +1460,10 @@ private:
     std::atomic<int>     input_w_{0}, input_h_{0};
     std::atomic<double>  fps_{0.0};
 
+    // Latency tuning (applied from Config::tuning in start()/reload_config)
+    std::atomic<int>     queue_depth_{2};        // uncompressed display queue bound
+    std::atomic<bool>    rt_threads_{false};     // display/recv threads at SCHED_FIFO
+
     // Decode throughput / saturation tracking
     std::atomic<int>     decoded_count_{0};      // total frames sent to display
     std::atomic<double>  decode_fps_{0.0};
@@ -1459,6 +1524,9 @@ int main(int argc, char* argv[]) {
     auto& cfg = Config::instance();
     cfg.load();
     cfg.device.device_ip = get_primary_ip();
+
+    // Optional: pin CPU frequency governor for consistent low-latency decode.
+    if (cfg.tuning.cpu_performance_governor) set_performance_governor();
 
     // Set default NDI alias if not configured: "NDIMON-XXXX"
     if (cfg.device.ndi_recv_name.empty()) {

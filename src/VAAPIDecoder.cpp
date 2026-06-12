@@ -1,4 +1,5 @@
 #include "VAAPIDecoder.h"
+#include "Config.h"
 #include <iostream>
 #include <cstring>
 #include <new>
@@ -51,6 +52,10 @@ bool VAAPIDecoder::init(VideoCodec codec) {
     codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
     codec_ctx_->get_format     = get_vaapi_format;
     codec_ctx_->flags2        |= AV_CODEC_FLAG2_FAST;
+    // Optional low-delay: NDI HX is typically encoded with few/no B-frames, so
+    // skipping the reorder buffer cuts a frame or two of decode latency.
+    if (Config::instance().tuning.vaapi_low_delay)
+        codec_ctx_->flags |= AV_CODEC_FLAG_LOW_DELAY;
 
     if (avcodec_open2(codec_ctx_, dec, nullptr) < 0) {
         std::cerr << "[vaapi] avcodec_open2 failed\n";

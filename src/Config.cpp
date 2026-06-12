@@ -14,6 +14,7 @@ static const char* DEVICE_SETTINGS  = "/etc/ndimon-device-settings.json";
 static const char* NDI_CONFIG       = "/etc/ndi-config.json";
 static const char* NDI_GROUP        = "/etc/ndi-group.json";
 static const char* OSD_SETTINGS     = "/etc/ndimon-osd-settings.json";
+static const char* TUNING_SETTINGS  = "/etc/ndimon-tuning.json";
 
 Config& Config::instance() {
     static Config cfg;
@@ -132,6 +133,26 @@ void Config::load() {
     if (!od.empty() && od.is_object()) {
         osd.enabled = od.value("enabled", false);
         osd.text    = od.value("text",    "");
+    }
+
+    // Latency tuning (all optional; defaults preserve current behaviour)
+    auto tn = read_json(TUNING_SETTINGS);
+    if (!tn.empty() && tn.is_object()) {
+        tuning.display_queue_depth      = tn.value("display_queue_depth", 2);
+        tuning.decode_low_latency       = tn.value("decode_low_latency", false);
+        tuning.vaapi_low_delay          = tn.value("vaapi_low_delay", false);
+        tuning.framesync_bypass         = tn.value("framesync_bypass", false);
+        tuning.realtime_threads         = tn.value("realtime_threads", false);
+        tuning.cpu_performance_governor = tn.value("cpu_performance_governor", false);
+        tuning.audio_periods            = tn.value("audio_periods", 4);
+        tuning.audio_period_frames      = tn.value("audio_period_frames", 1024);
+        // Clamp to safe ranges
+        if (tuning.display_queue_depth < 1) tuning.display_queue_depth = 1;
+        if (tuning.display_queue_depth > 4) tuning.display_queue_depth = 4;
+        if (tuning.audio_periods < 2) tuning.audio_periods = 2;
+        if (tuning.audio_periods > 8) tuning.audio_periods = 8;
+        if (tuning.audio_period_frames < 128)  tuning.audio_period_frames = 128;
+        if (tuning.audio_period_frames > 8192) tuning.audio_period_frames = 8192;
     }
 }
 
