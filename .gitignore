@@ -1,0 +1,14 @@
+build/
+api/node_modules/
+*.o
+*.a
+*.d
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+Makefile
+.env
+.deploy-env
+*.log
+/tmp/
