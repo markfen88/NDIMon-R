@@ -85,7 +85,7 @@ systemd/             — Service files
 - **FrameSync for Standard NDI** — uncompressed streams use `NDIlib_framesync` for A/V sync, display timing, automatic frame duplication/dropping, and silence insertion
 - **Zero-copy pipeline** — DMA-BUF from decoder to DRM framebuffer (MPP/V4L2); uncompressed frames hold SDK reference and free from display thread
 - **`color_format_fastest`** — SDK ignores `color_format_BGRX_BGRA` on ARM and always delivers UYVY. `color_format_fastest` avoids unnecessary conversion attempts. Single-threaded NEON UYVY→XRGB conversion (RowPool thread pool was removed — saturated memory bandwidth on RK3399)
-- **Factory pattern for decoders** — `VideoDecoder::create()` auto-selects MPP > V4L2 > Software
+- **Factory pattern for decoders** — `VideoDecoder::create()` auto-selects MPP > V4L2 > VAAPI > Software. First HX frame `init()` failure falls back to `create_software()`.
 - **DRM leases** — each output connector gets independent DRM master rights
 - **Node.js owns reconnect logic** — C++ pushes IPC events, API handles retry scheduling
 - **Splash screen on disconnect** — `disconnect_source()` drains the frame queue, clears `streaming_` flag, and renders splash. `show_splash()` always renders (caller responsible for stopping pipeline first)
@@ -107,7 +107,7 @@ and network failures. The device recovers from any failure without human interve
 
 ### Recovery hierarchy (fastest to slowest):
 1. **Display flip reset** — `health_check()` calls `reset_flip_pending()` after ~3s of HDMI freeze
-2. **Active watchdog reconnect** — `/api/health` reports `stalled` when `stall_count_ >= 60` (~30s); `ndimon-watchdog` reconnects if `watchdog_mode=active` (default is `passive`)
+2. **Active watchdog reconnect** — `/api/health` reports `stalled` when `stall_count_ >= 60` (~30s); `ndimon-watchdog` reconnects if `watchdog_mode=active` (default is `active`)
 3. **Systemd watchdog restart** — process killed and restarted (`WatchdogSec=30`)
 4. **Systemd Restart=always** — covers crashes, OOM, unexpected exit
 
@@ -134,6 +134,7 @@ and network failures. The device recovers from any failure without human interve
 ## NDI SDK Usage Notes
 
 - `ndi-config.v1.json` must be written **before** `NDIlib_initialize()` for discovery server and codec passthrough
+- Finder and decoder share one NDI home: `/var/lib/ndimon/.ndi` (systemd `HOME=` + `pin_ndi_home()`). Official NDI config is per effective user — do not let finder and decoder use different `$HOME`.
 - SDK rewrites this file during init — we write it again afterward to restore passthrough settings
 - `NDIlib_recv_advertiser` registers the device as a receiver with the discovery server
 - Routing metadata (`<ndi_routing>`) from DS is handled via `allow_controlling=true` — do NOT call `connect()` from routing callbacks (causes feedback loop / SEGV)
@@ -252,7 +253,9 @@ defined(__ARM_NEON)`) with scalar `#else` paths that `-O3` auto-vectorises on x8
 
 - **decode_mode** (`auto|hardware|software`, device-level in ndimon-device-settings.json):
   `VideoDecoder::create()` consults it + platform. ARM `auto` = MPP/V4L2 unchanged.
-  x86 `auto`/`hardware` = VAAPI if `HAVE_VAAPI` + render node, else software.
+  x86 `auto`/`hardware` = VAAPI if `HAVE_VAAPI` + render node + not NVIDIA, else software.
+  NVIDIA skips VAAPI (no NVDEC yet). If HW `init(codec)` fails (Pi 5 H.264, Pi HEVC
+  stateless, broken VAAPI), the worker replaces the decoder with FFmpeg software.
   "hardware" with no HW = best-effort fallback to software (logged; visible as
   `decode_backend` in status). Changing it at runtime rebuilds the worker decoder.
 - **Backend reporting**: `VideoDecoder::backend_name()`/`is_hardware()` →

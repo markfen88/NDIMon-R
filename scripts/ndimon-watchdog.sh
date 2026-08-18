@@ -40,7 +40,7 @@ log() { echo "[$(date '+%H:%M:%S')] [watchdog] $*"; }
 get_watchdog_mode() {
     if [ -f "$DEVICE_SETTINGS" ]; then
         local mode
-        mode=$(python3 -c "import json,sys; print(json.load(open('$DEVICE_SETTINGS')).get('watchdog_mode','passive'))" 2>/dev/null || echo "passive")
+        mode=$(python3 -c "import json,sys; print(json.load(open('$DEVICE_SETTINGS')).get('watchdog_mode','active'))" 2>/dev/null || echo "active")
         echo "$mode"
     else
         echo "passive"

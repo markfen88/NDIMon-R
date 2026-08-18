@@ -104,7 +104,7 @@ router.post('/decode-mode', (req, res) => {
 // GET /watchdog-mode
 router.get('/watchdog-mode', (req, res) => {
     const cfg = readJson(DEVICE_SETTINGS);
-    res.json({ watchdog_mode: cfg.watchdog_mode || 'passive' });
+    res.json({ watchdog_mode: cfg.watchdog_mode || 'active' });
 });
 
 // POST /watchdog-mode  — body: { watchdog_mode: "disabled"|"passive"|"active" }

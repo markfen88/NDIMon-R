@@ -33,8 +33,15 @@ if [ "$(id -u)" = "0" ]; then
         useradd --system --home /var/lib/ndimon --shell /usr/sbin/nologin --comment "NDIMon-R" ndimon
         echo "[install] Created system user ndimon"
     fi
-    mkdir -p /var/lib/ndimon
-    chown ndimon:ndimon /var/lib/ndimon
+    mkdir -p /var/lib/ndimon/.ndi
+    chown -R ndimon:ndimon /var/lib/ndimon
+    chmod 2770 /var/lib/ndimon /var/lib/ndimon/.ndi
+    # Share one NDI config with the decoder (which is root but HOME is pinned here).
+    if [ -f /root/.ndi/ndi-config.v1.json ] && [ ! -f /var/lib/ndimon/.ndi/ndi-config.v1.json ]; then
+        cp /root/.ndi/ndi-config.v1.json /var/lib/ndimon/.ndi/
+        chown ndimon:ndimon /var/lib/ndimon/.ndi/ndi-config.v1.json
+        echo "[install] Migrated NDI config /root/.ndi → /var/lib/ndimon/.ndi"
+    fi
     install -m 0755 "$PROJECT_DIR/scripts/ndimon-priv.sh" /usr/local/sbin/ndimon-priv
     install -m 0440 "$PROJECT_DIR/packaging/sudoers.ndimon" /etc/sudoers.d/ndimon
     visudo -cf /etc/sudoers.d/ndimon >/dev/null || {
@@ -44,7 +51,7 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 # Record firmware / build metadata for the About page.
-$SUDO sh -c "echo '1.1.0' > /etc/ndimon-firmware-version" 2>/dev/null || true
+$SUDO sh -c "echo '1.1.1' > /etc/ndimon-firmware-version" 2>/dev/null || true
 $SUDO sh -c "date -u '+%Y-%m-%d' > /etc/ndimon-build-date" 2>/dev/null || true
 
 # Record the source checkout dir + git commit so the web UI's "Check for
@@ -141,9 +148,9 @@ done
 
 if [ "$(id -u)" != "0" ]; then
     # User units already run as the logged-in user; drop system User=/Group=.
-    for name in ndimon-api.service ndimon-finder.service; do
+    for name in ndimon-api.service ndimon-finder.service ndimon-r.service; do
         [ -f "$SYSTEMD_DIR/$name" ] || continue
-        sed -i '/^User=/d;/^Group=/d;/^AmbientCapabilities=/d;/^StateDirectory=/d' "$SYSTEMD_DIR/$name"
+        sed -i '/^User=/d;/^Group=/d;/^AmbientCapabilities=/d;/^StateDirectory=/d;/^Environment=HOME=\/var\/lib\/ndimon/d' "$SYSTEMD_DIR/$name"
     done
 fi
 

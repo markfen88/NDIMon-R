@@ -1507,7 +1507,7 @@ async function applyUpdate() {
 async function loadWatchdog() {
   try {
     const d = await api('/v1/DeviceSettings/watchdog-mode');
-    setVal('wd-mode', d.watchdog_mode || 'passive');
+    setVal('wd-mode', d.watchdog_mode || 'active');
   } catch {}
   refreshWatchdogStats();
 }

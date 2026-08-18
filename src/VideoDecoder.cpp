@@ -44,11 +44,15 @@ std::unique_ptr<VideoDecoder> VideoDecoder::create() {
 #endif
 
 #ifdef HAVE_VAAPI
-    if (allow_hw && PlatformDetect::is_x86() && PlatformDetect::has_render_node()) {
+    if (allow_hw && PlatformDetect::is_x86() && PlatformDetect::has_render_node()
+        && !PlatformDetect::has_nvidia()) {
         std::cout << "[VideoDecoder] Using VAAPI hardware decoder ("
                   << PlatformDetect::cpu_vendor() << ")\n";
         return std::make_unique<VAAPIDecoder>();
     }
+    if (allow_hw && PlatformDetect::has_nvidia())
+        std::cout << "[VideoDecoder] NVIDIA GPU present — skipping VAAPI "
+                     "(no NVDEC backend yet; using software)\n";
 #endif
 
     // Best-effort: if hardware was explicitly requested but none is available,
@@ -59,18 +63,21 @@ std::unique_ptr<VideoDecoder> VideoDecoder::create() {
                      "available — falling back to software\n";
 
 #ifdef HAVE_FFMPEG
-    {
-        std::cout << "[VideoDecoder] Using software decoder (FFmpeg)\n";
-        auto sw = std::make_unique<SoftwareDecoder>();
-        // On x86, software decode is a primary path (the NDI SDK has no GPU
-        // decode on Linux) and 4K needs the cores → throughput threading.
-        // On ARM the software path is a rare fallback → keep low-latency.
-        if (PlatformDetect::is_x86())
-            sw->set_low_latency(false);
-        return sw;
-    }
+    return create_software();
 #endif
 
     std::cerr << "[VideoDecoder] No decoder available for this platform!\n";
     return nullptr;
+}
+
+std::unique_ptr<VideoDecoder> VideoDecoder::create_software() {
+#ifdef HAVE_FFMPEG
+    auto sw = std::make_unique<SoftwareDecoder>();
+    if (PlatformDetect::is_x86())
+        sw->set_low_latency(false);
+    std::cout << "[VideoDecoder] Using software decoder (FFmpeg)\n";
+    return sw;
+#else
+    return nullptr;
+#endif
 }

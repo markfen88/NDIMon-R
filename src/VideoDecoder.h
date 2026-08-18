@@ -57,6 +57,8 @@ public:
 
     // Factory: creates best decoder for the current platform
     static std::unique_ptr<VideoDecoder> create();
+    // FFmpeg software decoder (used when hardware init fails at first HX frame).
+    static std::unique_ptr<VideoDecoder> create_software();
 
 protected:
     FrameCallback frame_cb_;

@@ -17,6 +17,8 @@ ExecStart=/usr/local/bin/ndimon-r
 ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon0/bind'
 ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon1/bind'
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/aarch64-linux-gnu:/usr/lib/x86_64-linux-gnu
+# Share ~/.ndi with ndimon-finder (user ndimon). Official NDI config is per $HOME.
+Environment=HOME=/var/lib/ndimon
 NoNewPrivileges=true
 # High priority for real-time video
 Nice=-10

@@ -16,6 +16,9 @@
 #include <cstdio>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <grp.h>
+#include <pwd.h>
+#include <cstdlib>
 
 #ifdef HAVE_SYSTEMD
 #include <systemd/sd-daemon.h>
@@ -125,13 +128,38 @@ static std::string transport_json(const std::string& rxpm) {
          + "    \"multicast\": { \"recv\": { \"enable\": " + m + " } },\n";
 }
 
+static std::string ndimon_ndi_home() {
+    if (access("/var/lib/ndimon", W_OK) == 0)
+        return "/var/lib/ndimon";
+    const char* home = getenv("HOME");
+    if (home && home[0]) return home;
+    return "/root";
+}
+
+static void pin_ndi_home() {
+    std::string h = ndimon_ndi_home();
+    setenv("HOME", h.c_str(), 1);
+}
+
+static void relax_ndi_config_perms(const std::string& dir, const std::string& file) {
+    chmod(dir.c_str(), 0770);
+    chmod(file.c_str(), 0664);
+    struct passwd* pw = getpwnam("ndimon");
+    struct group*  gr = getgrnam("ndimon");
+    uid_t uid = pw ? pw->pw_uid : static_cast<uid_t>(-1);
+    gid_t gid = gr ? gr->gr_gid : static_cast<gid_t>(-1);
+    if (gid != static_cast<gid_t>(-1)) {
+        chown(dir.c_str(), uid, gid);
+        chown(file.c_str(), uid, gid);
+    }
+}
+
 // Write ~/.ndi/ndi-config.v1.json before NDIlib_initialize() so NDI SDK 6.2+
 // picks up the discovery server address and groups at startup.
 static void write_ndi_sdk_config(const FindSettings& s) {
-    const char* home = getenv("HOME");
-    if (!home || !home[0]) home = "/root";
-    std::string ndi_dir = std::string(home) + "/.ndi";
-    mkdir(ndi_dir.c_str(), 0755);
+    pin_ndi_home();
+    std::string ndi_dir = ndimon_ndi_home() + "/.ndi";
+    mkdir(ndi_dir.c_str(), 0770);
     std::string path = ndi_dir + "/ndi-config.v1.json";
 
     std::string groups   = json_escape(s.groups.empty() ? "public" : s.groups);
@@ -165,8 +193,14 @@ static void write_ndi_sdk_config(const FindSettings& s) {
         "}\n";
 
     std::ofstream f(path);
-    if (f) { f << json; std::cout << "[ NDIFinder ] NDI config written: " << path << "\n"; }
-    else   { std::cerr << "[ NDIFinder ] WARNING: could not write " << path << "\n"; }
+    if (f) {
+        f << json;
+        f.close();
+        relax_ndi_config_perms(ndi_dir, path);
+        std::cout << "[ NDIFinder ] NDI config written: " << path << "\n";
+    } else {
+        std::cerr << "[ NDIFinder ] WARNING: could not write " << path << "\n";
+    }
 }
 
 static FindSettings load_settings() {

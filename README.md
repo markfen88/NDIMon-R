@@ -9,7 +9,7 @@
 
 ## Overview
 
-NDIMon-R turns a low-cost ARM single-board computer into a dedicated NDI decoder that outputs live video over HDMI or DisplayPort. It uses the hardware video engine on Rockchip and Raspberry Pi SoCs for zero-CPU H.264/H.265 decode, and falls back to software (FFmpeg) decode on any aarch64 board.
+NDIMon-R turns a low-cost ARM or x86 mini PC into a dedicated NDI decoder that outputs live video over HDMI or DisplayPort. It uses the hardware video engine on Rockchip (MPP), Raspberry Pi 4 (V4L2 H.264), and Intel/AMD (VAAPI) for H.264/H.265, and falls back to FFmpeg software decode when hardware is missing (Pi 5 H.264, Pi HEVC, NVIDIA, generic ARM).
 
 A Node.js REST API and web UI run alongside the C++ decoder core, providing source selection, output configuration, and status monitoring.
 
@@ -17,7 +17,7 @@ A Node.js REST API and web UI run alongside the C++ decoder core, providing sour
 
 ## Features
 
-- **Hardware H.264/H.265 decode** — Rockchip MPP (RK3588/RK3399) and V4L2 M2M (Raspberry Pi 4/5)
+- **Hardware H.264/H.265 decode** — Rockchip MPP, Pi 4 V4L2 M2M (H.264), Intel/AMD VAAPI; FFmpeg fallback when HW init fails
 - **Multi-output support** — independent NDI sources on HDMI-A-1, HDMI-A-2, and DP-1 simultaneously
 - **Authenticated web UI + REST API** — password-protected, same-origin; default password `ndimon` (change on first login)
 - **Source presets** — save named NDI sources and recall them to any output instantly (no rescan)
@@ -39,17 +39,18 @@ A Node.js REST API and web UI run alongside the C++ decoder core, providing sour
 |-------|-----|---------------|--------|
 | Radxa Rock 5B | RK3588 | Rockchip MPP | Tested |
 | Radxa Rock 4C | RK3399 | Rockchip MPP | Tested |
-| Raspberry Pi 4 | BCM2711 | V4L2 M2M | Tested |
-| Raspberry Pi 5 | BCM2712 | V4L2 M2M | Tested |
+| Raspberry Pi 4 | BCM2711 | V4L2 M2M H.264; H.265 via FFmpeg | Supported |
+| Raspberry Pi 5 | BCM2712 | FFmpeg software (no H.264 HW; HEVC is stateless, not used yet) | Supported |
 | Any aarch64 board | — | FFmpeg (software) | Fallback |
 | Intel/AMD x86-64 (NUC, mini-PC) | — | VAAPI (Intel/AMD) + FFmpeg software | Supported |
+| NVIDIA Linux | — | FFmpeg software (NVDEC not implemented) | Software |
 
 Runs on Debian Bookworm/Trixie, Ubuntu Noble (24.04), Armbian, and Raspberry Pi OS. The installer auto-detects ARM vs x86-64 and installs the right NDI library, decoders, and (on x86) VAAPI drivers.
 
 ### Decode mode (x86)
 
 On Linux the NDI SDK decodes only in software, so HX (H.264/H.265) hardware decode is done by NDIMon-R itself. **Settings → Decoder → HX Decode** selects:
-- **Auto** — hardware (VAAPI/MPP/V4L2) if available, else software
+- **Auto** — hardware (VAAPI/MPP/V4L2) if available, else software. Hardware init failure also falls back to FFmpeg.
 - **Hardware** — force hardware (falls back to software if unavailable, shown in status)
 - **Software** — FFmpeg software decode (multi-threaded on x86)
 

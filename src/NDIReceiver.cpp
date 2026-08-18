@@ -620,23 +620,36 @@ void NDIReceiver::recv_thread() {
             }
             NDIlib_framesync_free_video(framesync_, &video_frame);
 
-            // Pull audio at native channel count (48kHz, 1024 samples = ~21ms)
-            // Requesting 0 channels = native format; downmix to stereo in ALSA sink
+            // Pull audio sized to elapsed time so we don't over-request vs the
+            // ~8 ms loop. NDI FrameSync should be driven from a local timebase;
+            // ALSA write blocking plus this sample count keep A/V near realtime.
             if (audio_enabled_ && audio_cb_) {
-                NDIlib_audio_frame_v2_t audio_frame{};
-                NDIlib_framesync_capture_audio(framesync_, &audio_frame,
-                                               48000, 0, 1024);
-                if (audio_frame.p_data) {
-                    NDIAudioFrame af;
-                    af.sample_rate    = audio_frame.sample_rate;
-                    af.channels       = audio_frame.no_channels;
-                    af.num_samples    = audio_frame.no_samples;
-                    af.channel_stride = audio_frame.channel_stride_in_bytes;
-                    af.data           = audio_frame.p_data;
-                    af.ndi_frame      = nullptr;  // framesync frames use separate free
-                    audio_cb_(af);
+                auto now = std::chrono::steady_clock::now();
+                int samples = 1024;
+                if (fs_audio_have_) {
+                    auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+                        now - fs_audio_last_).count();
+                    samples = static_cast<int>(48000LL * us / 1000000LL);
                 }
-                NDIlib_framesync_free_audio(framesync_, &audio_frame);
+                if (samples >= 160) {
+                    if (samples > 2048) samples = 2048;
+                    NDIlib_audio_frame_v2_t audio_frame{};
+                    NDIlib_framesync_capture_audio(framesync_, &audio_frame,
+                                                   48000, 0, samples);
+                    if (audio_frame.p_data) {
+                        NDIAudioFrame af;
+                        af.sample_rate    = audio_frame.sample_rate;
+                        af.channels       = audio_frame.no_channels;
+                        af.num_samples    = audio_frame.no_samples;
+                        af.channel_stride = audio_frame.channel_stride_in_bytes;
+                        af.data           = audio_frame.p_data;
+                        af.ndi_frame      = nullptr;
+                        audio_cb_(af);
+                    }
+                    NDIlib_framesync_free_audio(framesync_, &audio_frame);
+                    fs_audio_last_ = now;
+                    fs_audio_have_ = true;
+                }
             }
 
             // FrameSync doesn't deliver metadata — poll recv for metadata/status
@@ -716,6 +729,7 @@ void NDIReceiver::recv_thread() {
                             framesync_ = NDIlib_framesync_create(recv_);
                             if (framesync_) {
                                 first_frame_logged_ = false;  // reset so FrameSync logs its FourCC
+                                fs_audio_have_ = false;
                                 std::cout << "[NDIRecv] FrameSync enabled for Standard NDI\n";
                                 // Free the current frame and let FrameSync take over
                                 NDIlib_recv_free_video_v2(recv_, &video_frame);

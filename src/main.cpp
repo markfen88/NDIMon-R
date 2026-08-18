@@ -27,6 +27,8 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <ifaddrs.h>
@@ -89,11 +91,39 @@ static std::string transport_json(const std::string& rxpm) {
          + "    \"multicast\": { \"recv\": { \"enable\": " + m + " } },\n";
 }
 
-static void write_ndi_sdk_config(const Config& cfg) {
+static std::string ndimon_ndi_home() {
+    if (access("/var/lib/ndimon", W_OK) == 0)
+        return "/var/lib/ndimon";
     const char* home = getenv("HOME");
-    if (!home || !home[0]) home = "/root";
-    std::string ndi_dir = std::string(home) + "/.ndi";
-    mkdir(ndi_dir.c_str(), 0755);
+    if (home && home[0]) return home;
+    return "/root";
+}
+
+// Pin HOME so NDIlib_initialize() and our writer use the same ~/.ndi.
+// Finder runs as user ndimon (HOME=/var/lib/ndimon); decoder is root but
+// must share that directory or discovery/transport/DS settings desync.
+static void pin_ndi_home() {
+    std::string h = ndimon_ndi_home();
+    setenv("HOME", h.c_str(), 1);
+}
+
+static void relax_ndi_config_perms(const std::string& dir, const std::string& file) {
+    chmod(dir.c_str(), 0770);
+    chmod(file.c_str(), 0664);
+    struct passwd* pw = getpwnam("ndimon");
+    struct group*  gr = getgrnam("ndimon");
+    uid_t uid = pw ? pw->pw_uid : static_cast<uid_t>(-1);
+    gid_t gid = gr ? gr->gr_gid : static_cast<gid_t>(-1);
+    if (gid != static_cast<gid_t>(-1)) {
+        chown(dir.c_str(), uid, gid);
+        chown(file.c_str(), uid, gid);
+    }
+}
+
+static void write_ndi_sdk_config(const Config& cfg) {
+    pin_ndi_home();
+    std::string ndi_dir = ndimon_ndi_home() + "/.ndi";
+    mkdir(ndi_dir.c_str(), 0770);
     std::string path = ndi_dir + "/ndi-config.v1.json";
 
     std::string groups = json_escape(cfg.ndi_group.groups.empty() ? "public" : cfg.ndi_group.groups);
@@ -129,17 +159,22 @@ static void write_ndi_sdk_config(const Config& cfg) {
         "}\n";
 
     std::ofstream f(path);
-    if (f) { f << json; std::cout << "[NDIMon-R] NDI config written (transport="
-                                  << cfg.transport.rxpm << "): " << path << "\n"; }
-    else   { std::cerr << "[NDIMon-R] WARNING: could not write " << path << "\n"; }
+    if (f) {
+        f << json;
+        f.close();
+        relax_ndi_config_perms(ndi_dir, path);
+        std::cout << "[NDIMon-R] NDI config written (transport="
+                  << cfg.transport.rxpm << "): " << path << "\n";
+    } else {
+        std::cerr << "[NDIMon-R] WARNING: could not write " << path << "\n";
+    }
 }
 
 // Read back ndi-config.v1.json and confirm h264/h265 passthrough survived the
 // SDK's init-time rewrite. Sets g_passthrough_ok and logs a clear warning.
 static void verify_passthrough_config() {
-    const char* home = getenv("HOME");
-    if (!home || !home[0]) home = "/root";
-    std::string path = std::string(home) + "/.ndi/ndi-config.v1.json";
+    pin_ndi_home();
+    std::string path = ndimon_ndi_home() + "/.ndi/ndi-config.v1.json";
     std::ifstream f(path);
     if (!f) { g_passthrough_ok = false; return; }
     std::string content((std::istreambuf_iterator<char>(f)),
@@ -1135,9 +1170,27 @@ private:
                 current_codec_      = codec;
                 codec_name_         = (codec == VideoCodec::H265) ? "H265" : "H264";
                 decoder_initialized_ = decoder_->init(codec);
+                if (!decoder_initialized_ && decoder_->is_hardware()) {
+                    std::cerr << "[Worker" << ch_num_ << "] "
+                              << decoder_->backend_name()
+                              << " init failed for " << codec_name_
+                              << " — falling back to software\n";
+                    decoder_->destroy();
+                    decoder_.reset();
+                    decoder_ = VideoDecoder::create_software();
+                    if (decoder_) {
+                        decoder_->set_frame_callback(
+                            [this](DecodedFrame& f) { on_decoded(f); });
+                        decoder_initialized_ = decoder_->init(codec);
+                    }
+                }
                 if (decoder_initialized_) {
                     std::cout << "[Worker" << ch_num_ << "] Codec: " << codec_name_
-                              << " " << vf.width << "x" << vf.height << "\n";
+                              << " " << vf.width << "x" << vf.height
+                              << " backend=" << decoder_->backend_name() << "\n";
+                } else {
+                    std::cerr << "[Worker" << ch_num_ << "] HX decode init failed ("
+                              << codec_name_ << ")\n";
                 }
             }
             if (decoder_initialized_) {
@@ -1513,6 +1566,8 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "[NDIMon-R] Set hostname to: " << cfg.device.ndi_recv_name << "\n";
     }
+
+    pin_ndi_home();
 
     // Write ~/.ndi/ndi-config.v1.json BEFORE NDIlib_initialize() so the SDK
     // picks up the discovery server address and groups at startup (NDI 6.2+).

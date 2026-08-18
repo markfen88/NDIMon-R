@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <Processing.NDI.Lib.h>
@@ -169,6 +170,9 @@ private:
     std::atomic<int64_t> recv_heartbeat_ms_{0};
 
     bool first_frame_logged_ = false;  // log FourCC/size of very first frame for diagnostics
+
+    std::chrono::steady_clock::time_point fs_audio_last_{};
+    bool fs_audio_have_{false};
 
     static bool ndi_initialized_;
 };

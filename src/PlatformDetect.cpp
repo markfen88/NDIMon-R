@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <dirent.h>
 #include <cstring>
+#include <unistd.h>
 
 Platform PlatformDetect::detect() {
     // Check /proc/device-tree/compatible (most reliable on embedded Linux)
@@ -72,6 +73,11 @@ bool PlatformDetect::has_render_node() {
     }
     closedir(d);
     return found;
+}
+
+bool PlatformDetect::has_nvidia() {
+    return access("/dev/nvidiactl", F_OK) == 0 ||
+           access("/dev/nvidia0", F_OK) == 0;
 }
 
 std::string PlatformDetect::name() {

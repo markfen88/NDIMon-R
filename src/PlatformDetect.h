@@ -18,4 +18,8 @@ public:
     // prerequisite for VAAPI hardware decode. Cheap probe; the VAAPIDecoder
     // does the authoritative capability check at init.
     static bool has_render_node();
+
+    // True if the NVIDIA proprietary device nodes exist. VAAPI on those
+    // GPUs is not NVDEC; skip VAAPI and use software until an NVDEC backend exists.
+    static bool has_nvidia();
 };
