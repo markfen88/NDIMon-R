@@ -5,7 +5,7 @@
 // immediate and does not wait for a network rescan.
 const express = require('express');
 const router  = express.Router();
-const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
+const { readJson, writeJson, sendIPC, corsHeaders, parseChannel } = require('./lib');
 const { notifyManualConnect, stopReconnectLoop } = require('./Status');
 
 const PRESETS_FILE = '/etc/ndimon-presets.json';
@@ -64,8 +64,9 @@ router.post('/delete', (req, res) => {
 router.post('/recall', (req, res) => {
     const body = req.body || {};
     const name = String(body.name || '').trim();
-    const output = (parseInt(body.output, 10) || 1) - 1;   // 0-based index
-    const ch = output + 1;
+    const ch = parseChannel(body.output, 0);
+    if (!ch) return res.status(400).json({ ok: false, error: 'output must be 1–8' });
+    const output = ch - 1;
 
     const preset = loadPresets().find(p => p.name === name);
     if (!preset) return res.status(404).json({ ok: false, error: 'preset not found' });

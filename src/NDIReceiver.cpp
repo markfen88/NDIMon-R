@@ -8,6 +8,22 @@
 #include <atomic>
 #include <regex>
 
+static std::string xml_escape(const std::string& s) {
+    std::string o;
+    o.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&':  o += "&amp;";  break;
+            case '<':  o += "&lt;";   break;
+            case '>':  o += "&gt;";   break;
+            case '"':  o += "&quot;"; break;
+            case '\'': o += "&apos;"; break;
+            default:   o += c;
+        }
+    }
+    return o;
+}
+
 // Extract a named XML attribute value from a simple single-element XML string.
 // e.g. xml_attr("<source name=\"foo\" url=\"bar\"/>", "name") -> "foo"
 static std::string xml_attr(const std::string& xml, const std::string& attr) {
@@ -463,7 +479,13 @@ void NDIReceiver::recv_thread() {
 
     bool was_connected = false;
     auto probe_start   = std::chrono::steady_clock::now();
-    bool probe_active  = !current_source_.empty() && current_source_ != "None";
+    std::string src_snap, ip_snap;
+    {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        src_snap = current_source_;
+        ip_snap  = current_ip_;
+    }
+    bool probe_active  = !src_snap.empty() && src_snap != "None";
     auto last_meta_send = std::chrono::steady_clock::now();
 
     try {
@@ -488,11 +510,16 @@ void NDIReceiver::recv_thread() {
                 NDIlib_framesync_destroy(framesync_);
                 framesync_ = nullptr;
             }
-            std::cout << "[NDIRecv] Connected to " << current_source_ << "\n";
-            if (conn_cb_) conn_cb_(true, current_source_);
-            if (!current_source_.empty() && current_source_ != "None") {
-                std::string routing = "<ndi_routing><source name=\"" + current_source_
-                                    + "\" url=\"" + current_ip_ + "\"/></ndi_routing>";
+            {
+                std::lock_guard<std::mutex> lk(state_mutex_);
+                src_snap = current_source_;
+                ip_snap  = current_ip_;
+            }
+            std::cout << "[NDIRecv] Connected to " << src_snap << "\n";
+            if (conn_cb_) conn_cb_(true, src_snap);
+            if (!src_snap.empty() && src_snap != "None") {
+                std::string routing = "<ndi_routing><source name=\"" + xml_escape(src_snap)
+                                    + "\" url=\"" + xml_escape(ip_snap) + "\"/></ndi_routing>";
                 NDIlib_metadata_frame_t meta = {};
                 meta.p_data = const_cast<char*>(routing.c_str());
                 NDIlib_recv_send_metadata(recv_, &meta);
@@ -501,7 +528,11 @@ void NDIReceiver::recv_thread() {
             last_meta_send = std::chrono::steady_clock::now();
         } else if (connections == 0 && was_connected) {
             was_connected = false;
-            probe_active  = !current_source_.empty() && current_source_ != "None";
+            {
+                std::lock_guard<std::mutex> lk(state_mutex_);
+                src_snap = current_source_;
+            }
+            probe_active  = !src_snap.empty() && src_snap != "None";
             probe_start   = std::chrono::steady_clock::now();
             if (framesync_) {
                 NDIlib_framesync_destroy(framesync_);
@@ -509,8 +540,8 @@ void NDIReceiver::recv_thread() {
             }
             stream_type_ = NDIStreamType::Unknown;
             if (running_) {
-                std::cout << "[NDIRecv] Disconnected from " << current_source_ << "\n";
-                if (conn_cb_) conn_cb_(false, current_source_);
+                std::cout << "[NDIRecv] Disconnected from " << src_snap << "\n";
+                if (conn_cb_) conn_cb_(false, src_snap);
                 if (recv_) NDIlib_recv_connect(recv_, nullptr);
             }
         } else if (!was_connected && probe_active && running_) {
@@ -518,22 +549,27 @@ void NDIReceiver::recv_thread() {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 clock::now() - probe_start).count();
             if (elapsed >= 5) {
-                std::cout << "[NDIRecv] Source unavailable: " << current_source_ << "\n";
-                if (conn_cb_) conn_cb_(false, current_source_);
+                std::cout << "[NDIRecv] Source unavailable: " << src_snap << "\n";
+                if (conn_cb_) conn_cb_(false, src_snap);
                 probe_start = clock::now();
             }
         }
 
         // ---- Periodic routing ACK ----
+        {
+            std::lock_guard<std::mutex> lk(state_mutex_);
+            src_snap = current_source_;
+            ip_snap  = current_ip_;
+        }
         if (was_connected && running_ &&
-            !current_source_.empty() && current_source_ != "None") {
+            !src_snap.empty() && src_snap != "None") {
             using clock = std::chrono::steady_clock;
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 clock::now() - last_meta_send).count();
             if (elapsed >= 30) {
                 // Routing ACK
-                std::string routing = "<ndi_routing><source name=\"" + current_source_
-                                    + "\" url=\"" + current_ip_ + "\"/></ndi_routing>";
+                std::string routing = "<ndi_routing><source name=\"" + xml_escape(src_snap)
+                                    + "\" url=\"" + xml_escape(ip_snap) + "\"/></ndi_routing>";
                 NDIlib_metadata_frame_t meta = {};
                 meta.p_data = const_cast<char*>(routing.c_str());
                 NDIlib_recv_send_metadata(recv_, &meta);

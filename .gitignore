@@ -12,3 +12,5 @@ Makefile
 .deploy-env
 *.log
 /tmp/
+# Vizrt NDI docs dump — local reference only, do not publish
+docs/ndi/vendor/

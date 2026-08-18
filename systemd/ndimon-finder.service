@@ -5,10 +5,17 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=ndimon
+Group=ndimon
 Restart=always
 RestartSec=5
 ExecStart=/usr/local/bin/ndimon-finder
 Environment=LD_LIBRARY_PATH=/usr/local/lib
+Environment=HOME=/var/lib/ndimon
+StateDirectory=ndimon
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/etc /tmp /var/lib/ndimon
 
 [Install]
 WantedBy=multi-user.target

@@ -1,7 +1,7 @@
 'use strict';
 const express = require('express');
 const router  = express.Router();
-const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
+const { readJson, writeJson, sendIPC, corsHeaders, parseChannel } = require('./lib');
 const { stopReconnectLoop: cancelReconnect, notifyManualConnect } = require('./Status');
 
 const DEC1_SETTINGS = '/etc/ndimon-dec1-settings.json';
@@ -18,28 +18,7 @@ router.get('/decodestatus', (req, res) => {
 
 // GET|POST /decodesetup
 router.get('/decodesetup', (req, res) => {
-    const cfg = readJson(DEC1_SETTINGS);
-    const { NDIAudio, ScreenSaverMode, TallyMode, ColorSpace, ChNum } = req.query;
-    let write = false;
-
-    if (NDIAudio && ['NDIAudioEn','NDIAudioDis'].includes(NDIAudio) && NDIAudio !== cfg.NDIAudio) {
-        cfg.NDIAudio = NDIAudio; write = true;
-    }
-    if (ScreenSaverMode && ['SplashSS','BlackSS','CaptureSS'].includes(ScreenSaverMode) && ScreenSaverMode !== cfg.ScreenSaverMode) {
-        cfg.ScreenSaverMode = ScreenSaverMode; write = true;
-    }
-    if (TallyMode && ['TallyOn','TallyOff','VideoMode'].includes(TallyMode) && TallyMode !== cfg.TallyMode) {
-        cfg.TallyMode = TallyMode; write = true;
-    }
-    if (ColorSpace && ['RGB','YUV'].includes(ColorSpace) && ColorSpace !== cfg.ColorSpace) {
-        cfg.ColorSpace = ColorSpace; write = true;
-    }
-
-    if (write) {
-        writeJson(DEC1_SETTINGS, cfg);
-        sendIPC({ action: 'reload_config' });
-    }
-    res.json(cfg);
+    res.json(readJson(DEC1_SETTINGS));
 });
 
 router.post('/decodesetup', (req, res) => {
@@ -70,14 +49,7 @@ router.post('/decodesetup', (req, res) => {
 
 // GET|POST /decodeTransport
 router.get('/decodeTransport', (req, res) => {
-    const cfg = readJson(RX_SETTINGS);
-    const { Rxpm } = req.query;
-    if (Rxpm && ['Multicast','TCP','M-TCP','RUDP','UDP'].includes(Rxpm) && Rxpm !== cfg.Rxpm) {
-        cfg.Rxpm = Rxpm;
-        writeJson(RX_SETTINGS, cfg);
-        sendIPC({ action: 'reload_config' });
-    }
-    res.json(cfg);
+    res.json(readJson(RX_SETTINGS));
 });
 
 router.post('/decodeTransport', (req, res) => {
@@ -94,33 +66,14 @@ router.post('/decodeTransport', (req, res) => {
 // GET|POST /connectTo - select NDI source to decode
 // Output param (1-based ch_num) selects which display output to connect; defaults to 1.
 router.get('/connectTo', (req, res) => {
-    const { SourceName, SourceIP, Output = 1 } = req.query;
-    const outputIdx = (parseInt(Output, 10) || 1) - 1;
-    const ch = outputIdx + 1;
-    const settingsFile = `/etc/ndimon-dec${ch}-settings.json`;
-    cancelReconnect(outputIdx);  // explicit user action — cancel pending auto-reconnect
-    if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);
-    const cfg = readJson(settingsFile);
-    if (SourceName && SourceName !== 'None') {
-        cfg.SourceName = SourceName;
-        cfg.SourceIP   = SourceIP || '';
-        cfg.SourceSelection = 'NDI';
-        writeJson(settingsFile, cfg);
-        sendIPC({ action: 'connect', source_name: SourceName, source_ip: SourceIP || '',
-                  output: outputIdx });
-    } else {
-        cfg.SourceName = '';
-        cfg.SourceIP   = '';
-        writeJson(settingsFile, cfg);
-        sendIPC({ action: 'forget_source', output: outputIdx });
-    }
-    res.json({ ok: true, SourceName });
+    res.status(405).json({ ok: false, error: 'use POST' });
 });
 
 router.post('/connectTo', (req, res) => {
     const { SourceName, SourceIP, Output = 1 } = req.body || {};
-    const outputIdx = (parseInt(Output, 10) || 1) - 1;
-    const ch = outputIdx + 1;
+    const ch = parseChannel(Output, 0);
+    if (!ch) return res.status(400).json({ ok: false, error: 'output must be 1–8' });
+    const outputIdx = ch - 1;
     const settingsFile = `/etc/ndimon-dec${ch}-settings.json`;
     cancelReconnect(outputIdx);  // explicit user action — cancel pending auto-reconnect
     if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);

@@ -1022,19 +1022,22 @@ private:
                 std::cerr << "[Worker" << ch_num_ << "] HEALTH: decoder stall detected\n";
         }
 
-        // 4. Display freeze: decoded frames arriving but no display commit for 3s
+        // 4. Display freeze: decoded OR uncompressed frames arriving but no commit
         auto display_age = display_stale_ms();
-        if (decoded_age >= 0 && decoded_age < 2000 && display_age > 3000) {
+        bool frames_flowing = (decoded_age >= 0 && decoded_age < 2000) ||
+                              (video_age >= 0 && video_age < 2000 && !hx_stream_.load());
+        if (frames_flowing && display_age > 3000) {
             healthy = false;
-            if (stall_count_ == 6)
+            if (stall_count_ == 6) {
                 std::cerr << "[Worker" << ch_num_ << "] HEALTH: display freeze detected\n";
+                if (drm_) drm_->reset_flip_pending();
+            }
         }
 
         if (healthy) {
             stall_count_ = 0;
-        } else {
+        } else if (stall_count_ < 1000) {
             stall_count_++;
-            if (stall_count_ == 60) stall_count_ = 0;  // reset counter, don't act
         }
     }
 
@@ -1184,6 +1187,7 @@ private:
             }
             rf.width = vf.width; rf.height = vf.height;
             rf.stride = vf.stride; rf.drm_format = drm_fmt;
+            last_decoded_frame_ms_ = now_ms(); // uncompressed skips HW decoder
             {
                 std::lock_guard<std::mutex> lk(frame_mtx_);
                 // Drop oldest frame if display thread can't keep up
@@ -1274,35 +1278,25 @@ private:
     void on_decoded(DecodedFrame& f) {
         last_decoded_frame_ms_ = now_ms();
         decoded_count_++;
-        // NOTE: called from decode() → drain_frames() → frame_cb_(),
-        // which means decoder_mutex_ is already held by on_video().
-        // Do NOT attempt to re-lock decoder_mutex_ here — it will deadlock.
-        if (drm_ && drm_->is_initialized()) {
-            // Prefer DMA-BUF fd path for MPP frames — kernel-managed memory,
-            // no virtual address access needed, safe for RGA/DRM import.
-            if (f.fd >= 0) {
-                if (f.prime_explicit) {
-                    // VAAPI: tiled multi-plane surface with a DRM modifier.
-                    drm_->show_frame_dma_explicit(f.fd, f.drm_format,
-                                                  f.width, f.height,
-                                                  f.plane_offset, f.plane_pitch,
-                                                  f.num_planes, f.drm_modifier);
-                } else {
-                    drm_->show_frame_dma(f.fd, f.drm_format,
-                                         f.width, f.height,
-                                         f.hor_stride, f.ver_stride);
-                }
-            } else if (f.data) {
-                drm_->show_frame_memory(f.data, f.data_size,
-                                        f.width, f.height,
-                                        f.hor_stride, f.drm_format);
+        // Steal the frame so MPP/V4L2/FFmpeg drain does not release it when
+        // this callback returns. Display thread renders then release_frame().
+        DecodedFrame held = f;
+        f.opaque = nullptr;
+        f.fd = -1;
+        f.data = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(frame_mtx_);
+            std::vector<DecodedFrame> dropped;
+            while (hx_queue_.size() >= 2) {
+                dropped.push_back(std::move(hx_queue_.front()));
+                hx_queue_.pop();
             }
-            last_display_commit_ms_ = now_ms();
+            hx_queue_.push(std::move(held));
+            for (auto& old : dropped) {
+                if (decoder_) decoder_->release_frame(old);
+            }
         }
-        // release_frame clears f.opaque so MppDecoder::drain_frames()
-        // skips its own release. decoder_ is guaranteed non-null here
-        // because we're called from within decoder_->decode().
-        decoder_->release_frame(f);
+        frame_cv_.notify_one();
     }
 
     // -------------------------------------------------------------------------
@@ -1333,38 +1327,77 @@ private:
     std::mutex              frame_mtx_;
     std::condition_variable frame_cv_;
     std::queue<RawFrame>    frame_queue_;   // bounded to 2 frames (drop oldest)
+    std::queue<DecodedFrame> hx_queue_;     // HX DMA/CPU frames for display thread
     std::atomic<bool>       display_running_{false};
     std::thread             display_thr_;
+
+    void show_hx_frame(DecodedFrame& f) {
+        if (!drm_ || !drm_->is_initialized()) return;
+        if (f.fd >= 0) {
+            if (f.prime_explicit) {
+                drm_->show_frame_dma_explicit(f.fd, f.drm_format,
+                                              f.width, f.height,
+                                              f.plane_offset, f.plane_pitch,
+                                              f.num_planes, f.drm_modifier);
+            } else {
+                drm_->show_frame_dma(f.fd, f.drm_format,
+                                     f.width, f.height,
+                                     f.hor_stride, f.ver_stride);
+            }
+        } else if (f.data) {
+            drm_->show_frame_memory(f.data, f.data_size,
+                                    f.width, f.height,
+                                    f.hor_stride, f.drm_format);
+        }
+        last_display_commit_ms_ = now_ms();
+    }
 
     void display_loop() {
         while (display_running_) {
             RawFrame rf;
+            DecodedFrame hx;
+            bool have_raw = false, have_hx = false;
             {
                 std::unique_lock<std::mutex> lk(frame_mtx_);
                 frame_cv_.wait_for(lk, std::chrono::milliseconds(50), [this] {
-                    return !frame_queue_.empty() || !display_running_;
+                    return !frame_queue_.empty() || !hx_queue_.empty() || !display_running_;
                 });
                 if (!display_running_) break;
-                if (frame_queue_.empty()) continue;
-                rf = std::move(frame_queue_.front());
-                frame_queue_.pop();
+                if (!hx_queue_.empty()) {
+                    hx = std::move(hx_queue_.front());
+                    hx_queue_.pop();
+                    have_hx = true;
+                } else if (!frame_queue_.empty()) {
+                    rf = std::move(frame_queue_.front());
+                    frame_queue_.pop();
+                    have_raw = true;
+                }
             }
-            if (drm_ && drm_->is_initialized()) {
-                drm_->show_frame_memory(rf.data(), rf.size(),
-                                        rf.width, rf.height, rf.stride, rf.drm_format);
-                last_display_commit_ms_ = now_ms();
+            if (have_hx) {
+                show_hx_frame(hx);
+                std::lock_guard<std::mutex> lk(decoder_mutex_);
+                if (decoder_) decoder_->release_frame(hx);
+            } else if (have_raw) {
+                if (drm_ && drm_->is_initialized()) {
+                    drm_->show_frame_memory(rf.data(), rf.size(),
+                                            rf.width, rf.height, rf.stride, rf.drm_format);
+                    last_display_commit_ms_ = now_ms();
+                }
+                if (rf.owns_ndi_frame && recv_)
+                    recv_->free_video(&rf.ndi_frame);
             }
-            // Free SDK frame after rendering (cross-thread free is supported)
-            if (rf.owns_ndi_frame && recv_)
-                recv_->free_video(&rf.ndi_frame);
         }
-        // Drain remaining frames on shutdown
         std::lock_guard<std::mutex> lk(frame_mtx_);
         while (!frame_queue_.empty()) {
             auto& rf = frame_queue_.front();
             if (rf.owns_ndi_frame && recv_)
                 recv_->free_video(&rf.ndi_frame);
             frame_queue_.pop();
+        }
+        while (!hx_queue_.empty()) {
+            auto f = std::move(hx_queue_.front());
+            hx_queue_.pop();
+            if (decoder_) decoder_->release_frame(f);
         }
     }
 
@@ -1628,6 +1661,10 @@ int main(int argc, char* argv[]) {
     // vector index does NOT equal ch_num-1, which would misroute connect/status
     // commands and silently break auto-reconnect for that output.
     auto get_worker = [&](int idx) -> DisplayWorker* {
+        if (idx < 0 || idx > 7) {
+            std::cerr << "[NDIMon-R] IPC: output index " << idx << " out of range\n";
+            return nullptr;
+        }
         for (auto& w : workers)
             if (w->ch_num() - 1 == idx) return w.get();
         std::cerr << "[NDIMon-R] IPC: no worker for output index " << idx

@@ -5,11 +5,18 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=ndimon
+Group=ndimon
 Restart=always
 RestartSec=3
 WorkingDirectory=NDIMON_INSTALL_DIR/api
 ExecStart=/usr/bin/node server.js
 Environment=PORT=80
+# Port 80 without being root. sudo to ndimon-priv is allowed (no NoNewPrivileges).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc /tmp /opt/ndimon-r /var/tmp
 
 [Install]
 WantedBy=multi-user.target

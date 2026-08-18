@@ -70,11 +70,13 @@ bool VAAPIDecoder::init(VideoCodec codec) {
 bool VAAPIDecoder::decode(const uint8_t* data, size_t size, int64_t pts_us) {
     if (!initialized_) return false;
 
-    pkt_->data = (uint8_t*)data;
-    pkt_->size = (int)size;
-    pkt_->pts  = pts_us;
+    av_packet_unref(pkt_);
+    if (av_new_packet(pkt_, (int)size) < 0) return false;
+    memcpy(pkt_->data, data, size);
+    pkt_->pts = pts_us;
 
     int ret = avcodec_send_packet(codec_ctx_, pkt_);
+    av_packet_unref(pkt_);
     if (ret < 0 && ret != AVERROR(EAGAIN)) return false;
 
     drain_frames();

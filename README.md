@@ -27,6 +27,7 @@ A Node.js REST API and web UI run alongside the C++ decoder core, providing sour
 - **Transport selection** — TCP / UDP / Multicast / RUDP, applied live to the NDI receiver
 - **Auto-reconnect** — exponential backoff reconnect on signal loss
 - **Splash screen** — customisable idle/live backgrounds with logo and OSD overlay
+- **NTP system clock** — optional NTP host; persistent across reboots via systemd-timesyncd/chrony
 - **Hotplug** — display workers initialise on hotplug when no monitor is connected at boot
 - **In-place updates** — check/apply software updates from the web UI
 
@@ -41,7 +42,7 @@ A Node.js REST API and web UI run alongside the C++ decoder core, providing sour
 | Raspberry Pi 4 | BCM2711 | V4L2 M2M | Tested |
 | Raspberry Pi 5 | BCM2712 | V4L2 M2M | Tested |
 | Any aarch64 board | — | FFmpeg (software) | Fallback |
-| Intel/AMD x86-64 (NUC, mini-PC) | — | FFmpeg software (VAAPI HW decode in progress) | Software supported |
+| Intel/AMD x86-64 (NUC, mini-PC) | — | VAAPI (Intel/AMD) + FFmpeg software | Supported |
 
 Runs on Debian Bookworm/Trixie, Ubuntu Noble (24.04), Armbian, and Raspberry Pi OS. The installer auto-detects ARM vs x86-64 and installs the right NDI library, decoders, and (on x86) VAAPI drivers.
 
@@ -86,10 +87,11 @@ bash install.sh --no-build   # Skip build (binary already compiled)
 
 1. **`scripts/setup-deps.sh`** — Installs system packages, Rockchip MPP (if applicable), NDI SDK v6, and Node.js v20
 2. **`scripts/build.sh`** — Runs CMake and compiles `ndimon-r` and `ndimon-finder`
-3. **`scripts/install.sh`** — Installs binaries to `/usr/local/bin`, copies default config files to `/etc/`, installs npm packages, and enables three systemd services:
-   - `ndimon-r` — the main decoder process (C++)
-   - `ndimon-finder` — NDI source discovery helper
-   - `ndimon-api` — web UI and REST API (Node.js, port 80)
+3. **`scripts/install.sh`** — Installs binaries to `/usr/local/bin`, copies default config files to `/etc/`, installs npm packages, and enables four systemd services:
+   - `ndimon-r` — the main decoder process (C++, root for DRM)
+   - `ndimon-finder` — NDI source discovery helper (user `ndimon`)
+   - `ndimon-api` — web UI and REST API (Node.js, port 80, user `ndimon`)
+   - `ndimon-watchdog` — health polling and optional auto-reconnect
 
 ### Root vs user install
 
@@ -105,7 +107,7 @@ Config files live in `/etc/`. They are created from `config/` defaults on first 
 |------|---------|
 | `/etc/ndimon-dec1-settings.json` | Audio, screensaver, tally, color space |
 | `/etc/ndimon-find-settings.json` | NDI Discovery Server IP and enable/disable |
-| `/etc/ndimon-device-settings.json` | Device alias (NDI receiver name shown in discovery) |
+| `/etc/ndimon-device-settings.json` | Device alias, watchdog mode, NTP server |
 | `/etc/ndimon-rx-settings.json` | Transport mode (TCP / UDP / Multicast / RUDP) — applied live to the receiver |
 | `/etc/ndimon-presets.json` | Saved source presets (written by the API) |
 | `/etc/ndimon-auth.json` | Web UI password hash (scrypt; created on first password change) |
@@ -128,10 +130,20 @@ To use an NDI Discovery Server, edit `/etc/ndimon-find-settings.json`:
 Then reload:
 
 ```bash
-sudo systemctl restart ndimon-r ndimon-finder ndimon-api
+sudo systemctl restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
 # or for user services:
-systemctl --user restart ndimon-r ndimon-finder ndimon-api
+systemctl --user restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
 ```
+
+### Time sync (NTP)
+
+NDI has no time-sync server. Frame timestamps follow the appliance **OS system
+clock**. Set an NTP host under **NDI Discovery → NTP Time Server** (stored in
+`/etc/ndimon-device-settings.json`). That writes
+`/etc/systemd/timesyncd.conf.d/ndimon.conf` (or a chrony source file), enables
+the NTP daemon so it starts at boot, and turns on `timedatectl set-ntp true`.
+Blank keeps the OS default servers; NTP itself stays enabled. The API reapplies
+the saved server on every start so the setting survives reboot.
 
 ---
 
@@ -167,6 +179,7 @@ From the web UI you can:
 | `/v1/VideoOutput/setresolution` | POST | Set output resolution |
 | `/v1/NDIFinder/NDIDisServer` | GET/POST | Discovery server config |
 | `/v1/DeviceSettings/ndi-alias` | GET/POST | NDI receiver name |
+| `/v1/DeviceSettings/ntp` | GET/POST | NTP server (`{ntp_server}`) + sync status |
 | `/v1/Splash/config` | GET/POST | Splash screen appearance |
 | `/v1/System/version` | GET | Version info + update availability |
 | `/v1/System/update` | POST | Pull, rebuild, and restart services |
@@ -272,6 +285,12 @@ This rebuilds the binaries and reinstalls services without touching existing con
 │  ndimon-finder           │
 │  Writes /etc/ndimon-    │
 │  sources.json           │
+└─────────────────────────┘
+
+┌─────────────────────────┐
+│  ndimon-watchdog         │
+│  Polls /api/health;      │
+│  optional reconnect      │
 └─────────────────────────┘
 ```
 

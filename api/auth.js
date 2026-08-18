@@ -71,9 +71,13 @@ function createSession() {
     const token = crypto.randomBytes(32).toString('hex');
     sessions.set(token, Date.now() + SESSION_TTL_MS);
     // Opportunistic prune
-    if (sessions.size > 100) {
+    if (sessions.size > 64) {
         const now = Date.now();
         for (const [t, exp] of sessions) if (exp < now) sessions.delete(t);
+        while (sessions.size > 64) {
+            const oldest = sessions.keys().next().value;
+            sessions.delete(oldest);
+        }
     }
     return token;
 }
@@ -120,6 +124,7 @@ function recordFailure(ip) {
 
 // Paths that work without a session (login + auth probe).
 const EXEMPT = new Set(['/api/login', '/api/auth-status']);
+const LOOPBACK_ONLY = new Set(['/api/health']);
 
 function isLoopback(req) {
     const a = req.socket.remoteAddress || '';
@@ -130,10 +135,11 @@ function isLoopback(req) {
 // Note: when mounted with a path prefix, req.path is relative to the mount
 // point — use baseUrl + path to get the full request path.
 function middleware(req, res, next) {
-    if (EXEMPT.has((req.baseUrl || '') + req.path)) return next();
-    // On-device tooling (the watchdog polls /api/health) is trusted: a local
-    // user already controls the box. Remote requests must authenticate.
-    if (isLoopback(req)) return next();
+    const full = (req.baseUrl || '') + req.path;
+    if (EXEMPT.has(full)) return next();
+    // Watchdog polls /api/health on loopback. No other route is trusted
+    // just because it looks local (proxies / port-forwards).
+    if (LOOPBACK_ONLY.has(full) && isLoopback(req)) return next();
     if (isValidToken(tokenFromRequest(req))) return next();
     res.status(401).json({ ok: false, error: 'unauthorized' });
 }

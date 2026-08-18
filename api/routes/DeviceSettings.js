@@ -1,7 +1,7 @@
 'use strict';
 const express = require('express');
 const router  = express.Router();
-const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
+const { readJson, writeJson, sendIPC, corsHeaders, parseChannel, runPriv } = require('./lib');
 const { execFile } = require('child_process');
 
 const DEVICE_SETTINGS = '/etc/ndimon-device-settings.json';
@@ -12,12 +12,6 @@ router.use((req, res, next) => { corsHeaders(res); next(); });
 router.get('/operationmode', (req, res) => {
     res.header('Content-Type','text/plain');
     const cfg = readJson(DEVICE_SETTINGS);
-    const { mode } = req.query;
-    if (mode && ['encode','decode'].includes(mode) && mode !== cfg.mode) {
-        cfg.mode = mode;
-        writeJson(DEVICE_SETTINGS, cfg);
-        sendIPC({ action: 'reload_config' });
-    }
     res.send(cfg.mode || 'decode');
 });
 
@@ -58,8 +52,8 @@ router.post('/ndi-alias', (req, res) => {
         const hostname = name.replace(/[^A-Za-z0-9-]+/g, '-')
                              .replace(/^-+|-+$/g, '')
                              .slice(0, 63) || 'ndimon';
-        execFile('hostnamectl', ['set-hostname', hostname], err => {
-            if (err) console.warn('[DeviceSettings] hostnamectl:', err.message);
+        runPriv(['hostname', hostname], err => {
+            if (err) console.warn('[DeviceSettings] hostname:', err.message);
         });
     }
     sendIPC({ action: 'reload_config' });
@@ -68,7 +62,8 @@ router.post('/ndi-alias', (req, res) => {
 
 // GET /output-alias?ch=1  — returns output alias for given channel
 router.get('/output-alias', (req, res) => {
-    const ch = parseInt(req.query.ch || 1, 10);
+    const ch = parseChannel(req.query.ch || 1, 0);
+    if (!ch) return res.status(400).json({ ok: false, error: 'ch must be 1–8' });
     const path = `/etc/ndimon-dec${ch}-settings.json`;
     const cfg = readJson(path);
     res.json({ output_alias: cfg.output_alias || '', ch });
@@ -77,7 +72,8 @@ router.get('/output-alias', (req, res) => {
 // POST /output-alias  — body: { ch: 1, output_alias: "Main Screen" }
 router.post('/output-alias', (req, res) => {
     const { ch = 1, output_alias = '' } = req.body || {};
-    const chNum = parseInt(ch, 10);
+    const chNum = parseChannel(ch, 0);
+    if (!chNum) return res.status(400).json({ ok: false, error: 'ch must be 1–8' });
     const path = `/etc/ndimon-dec${chNum}-settings.json`;
     const cfg = readJson(path) || {};
     cfg.output_alias = (output_alias || '').trim();
@@ -124,4 +120,73 @@ router.post('/watchdog-mode', (req, res) => {
     res.json({ ok: true, watchdog_mode: mode });
 });
 
+// NTP / OS system clock. NDI has no time-sync server — timestamps follow
+// CLOCK_REALTIME. We persist the host in /etc (survives reboot) and enable
+// the distro NTP daemon (systemd-timesyncd or chrony) so it starts at boot.
+function isValidNtpHost(s) {
+    if (!s) return true;
+    if (s.length > 253) return false;
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(s))
+        return s.split('.').every(o => { const n = Number(o); return n >= 0 && n <= 255; });
+    return /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/.test(s);
+}
+
+// Write JSON in-process; OS clock + daemon enablement go through ndimon-priv.
+function applyOsNtp(server) {
+    runPriv(['set-ntp', server || ''], { timeout: 15000 }, err => {
+        if (err) console.warn('[ntp] priv set-ntp:', err.message);
+    });
+}
+
+// Re-apply a saved server after reboot / API restart. Empty means "OS default"
+// — do not disable NTP on every start.
+function applySavedNtp() {
+    const cfg = readJson(DEVICE_SETTINGS);
+    const server = (cfg.ntp_server || '').trim();
+    if (!server || !isValidNtpHost(server)) return;
+    try {
+        applyOsNtp(server);
+        console.log('[ntp] re-applied OS clock sync →', server);
+    } catch (e) {
+        console.warn('[ntp] re-apply failed:', e.message);
+    }
+}
+
+function timedatectlValue(args, cb) {
+    execFile('timedatectl', args, { timeout: 4000 }, (err, stdout) => {
+        cb(err ? '' : String(stdout).trim());
+    });
+}
+
+// GET /ntp  — configured server + live systemd-timesyncd status
+router.get('/ntp', (req, res) => {
+    const cfg = readJson(DEVICE_SETTINGS);
+    timedatectlValue(['show', '-p', 'NTPSynchronized', '--value'], synchronized => {
+        timedatectlValue(['show-timesync', '-p', 'ServerName', '--value'], active => {
+            res.json({
+                ntp_server: cfg.ntp_server || '',
+                synchronized: synchronized === 'yes',
+                active_server: active || '',
+            });
+        });
+    });
+});
+
+// POST /ntp  — body: { ntp_server: "pool.ntp.org" }  (blank = OS default)
+router.post('/ntp', (req, res) => {
+    const server = ((req.body && req.body.ntp_server) || '').trim();
+    if (!isValidNtpHost(server))
+        return res.status(400).json({ ok: false, error: 'invalid NTP host' });
+    const cfg = readJson(DEVICE_SETTINGS);
+    cfg.ntp_server = server;
+    writeJson(DEVICE_SETTINGS, cfg);
+    try {
+        applyOsNtp(server);
+    } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message, ntp_server: server });
+    }
+    res.json({ ok: true, ntp_server: server });
+});
+
+router.applySavedNtp = applySavedNtp;
 module.exports = router;

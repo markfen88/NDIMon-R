@@ -169,8 +169,15 @@ install_ndi_sdk() {
     trap "rm -rf $tmpdir" EXIT
 
     info "Downloading NDI SDK (~60MB)..."
-    if ! wget -q --show-progress -O "$tmpdir/ndi.tar.gz" "$NDI_SDK_URL"; then
+    if ! wget -q --https-only --show-progress -O "$tmpdir/ndi.tar.gz" "$NDI_SDK_URL"; then
         warn "NDI SDK download failed"
+        return 1
+    fi
+    local ndi_sha
+    ndi_sha=$(sha256sum "$tmpdir/ndi.tar.gz" | awk '{print $1}')
+    info "NDI SDK sha256: $ndi_sha"
+    if [[ -n "${NDI_SDK_SHA256:-}" && "$ndi_sha" != "$NDI_SDK_SHA256" ]]; then
+        warn "NDI SDK checksum mismatch (expected $NDI_SDK_SHA256)"
         return 1
     fi
 
@@ -283,7 +290,12 @@ install_ffmpeg7() {
     # Pinning to a non-LTS release ties our HX H.265 path to Plucky's
     # 9-month lifecycle.
     local _tmplist; _tmplist=$(mktemp /etc/apt/sources.list.d/_tmp_plucky_XXXXXX.list)
-    echo "deb [arch=${FFMPEG_APT_ARCH} trusted=yes] ${UBUNTU_MIRROR} plucky main universe" \
+    local _keyring=/usr/share/keyrings/ubuntu-archive-ndimon.gpg
+    if [[ ! -f "$_keyring" ]]; then
+        curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x871920D1991BC93C" \
+            | gpg --dearmor -o "$_keyring" || { warn "Could not fetch Ubuntu archive key"; return 1; }
+    fi
+    echo "deb [arch=${FFMPEG_APT_ARCH} signed-by=${_keyring}] ${UBUNTU_MIRROR} plucky main universe" \
         > "$_tmplist"
     apt-get update -o Dir::Etc::sourcelist="$_tmplist" \
         -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0 -qq 2>/dev/null || true
@@ -322,11 +334,14 @@ fi
 if [[ $_node_ok -eq 1 ]] && command -v npm &>/dev/null; then
     ok "Node.js already installed: $(node --version) / npm $(npm --version)"
 else
-    info "Installing Node.js v20 LTS via NodeSource..."
-    # Remove distro-packaged nodejs first to avoid conflicts
+    info "Installing Node.js v20 LTS via NodeSource (signed apt repo)..."
     apt-get remove -yq nodejs npm 2>/dev/null || true
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - 2>/dev/null || \
-        curl -fsSL https://deb.nodesource.com/setup_20.x | DEBIAN_CODENAME="${CODENAME:-bookworm}" bash -
+    mkdir -p /usr/share/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg
+    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list
+    apt-get update -qq
     apt-get install -yq nodejs
     ok "Node.js installed: $(node --version) / npm $(npm --version 2>/dev/null || echo '?')"
 fi

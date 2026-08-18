@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NDIMon-R VERSION 1.0.0 LANGUAGES CXX C)
+project(NDIMon-R VERSION 1.1.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -154,8 +154,7 @@ if(HAVE_FFMPEG)
     list(APPEND DECODER_LIBS ${FFMPEG_LIBRARIES})
 endif()
 
-# VAAPIDecoder.cpp is added in Phase 2. Guard on file existence so a Phase 1
-# checkout still builds on x86 before the decoder source lands.
+# VAAPI decoder (Intel/AMD x86)
 if(HAVE_VAAPI AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/VAAPIDecoder.cpp)
     list(APPEND DECODER_SOURCES src/VAAPIDecoder.cpp)
     list(APPEND DECODER_DEFINES HAVE_VAAPI)

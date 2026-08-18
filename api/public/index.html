@@ -314,6 +314,11 @@
               <div class="form-text">Enter the Discovery Server IP to enable, or leave blank to disable.</div>
             </div>
             <div class="mb-3">
+              <label class="form-label">NTP Time Server</label>
+              <input type="text" class="form-control" id="ntp-server" placeholder="Leave blank for OS default (e.g. pool.ntp.org)">
+              <div class="form-text" id="ntp-status">Sets the OS system clock (survives reboot). NDI timestamps follow this clock.</div>
+            </div>
+            <div class="mb-3">
               <label class="form-label">NDI Groups</label>
               <div class="input-group input-group-sm mb-2">
                 <input type="text" class="form-control" id="ndi-grp-input" placeholder="Enter group name">
@@ -1355,6 +1360,16 @@ async function loadSettings() {
   try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
   try { const d=await api('/v1/DeviceSettings/decode-mode'); setVal('decode-mode-sel',d.decode_mode||'auto'); } catch {}
   try { const d=await api('/v1/NDIFinder/NDIDisServer'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
+  try {
+    const n=await api('/v1/DeviceSettings/ntp');
+    setVal('ntp-server', n.ntp_server||'');
+    const st=document.getElementById('ntp-status');
+    if (st) {
+      const sync = n.synchronized ? 'synchronized' : 'not synchronized';
+      const srv  = n.active_server ? ` to ${n.active_server}` : '';
+      st.textContent = `OS clock ${sync}${srv}. Setting is persistent across reboots.`;
+    }
+  } catch {}
   try { const g=await api('/v1/NDIFinder/NdiGrpName'); setNdiGroupsFromString(g.ndi_groups||'public'); } catch {}
   try { const ips=await fetch('/v1/NDIFinder/NdiOffSnSrc').then(r=>r.text()); setVal('off-ips',ips.replace(/"/g,'')); } catch {}
   try { const d=await api('/v1/DeviceSettings/ndi-alias'); setVal('ndi-alias',d.ndi_recv_name||''); } catch {}
@@ -1739,6 +1754,8 @@ async function saveNetSettings() {
   await fetch('/v1/NDIFinder/NdiOffSnSrc',{method:'POST',headers:{'Content-Type':'text/plain'},body:ips});
   const alias = document.getElementById('ndi-alias').value.trim();
   await post('/v1/DeviceSettings/ndi-alias',{ndi_recv_name:alias});
+  const ntp = document.getElementById('ntp-server').value.trim();
+  await post('/v1/DeviceSettings/ntp',{ntp_server:ntp});
   toast('Network settings saved');
   refreshSources();
 }
@@ -1803,7 +1820,7 @@ function renderNdiGroups() {
   if (!container) return;
   container.innerHTML = ndiGroups.map((g, i) =>
     `<span class="badge bg-primary d-inline-flex align-items-center gap-1" style="font-size:.8rem;padding:.35em .6em">
-      ${g}<span style="cursor:pointer;opacity:.7;margin-left:2px" onclick="removeNdiGroup(${i})">&times;</span>
+      ${esc(g)}<span style="cursor:pointer;opacity:.7;margin-left:2px" onclick="removeNdiGroup(${i})">&times;</span>
     </span>`
   ).join('');
 }
@@ -1861,8 +1878,9 @@ function fmtCodec(c) {
 }
 
 function esc(s,forAttr) {
-  if(forAttr) return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const html = String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  if(forAttr) return html.replace(/\\/g,'\\\\').replace(/'/g,'\\\'');
+  return html;
 }
 </script>
 </body>

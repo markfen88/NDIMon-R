@@ -27,7 +27,24 @@ fi
 echo "[install] Installing binaries..."
 $SUDO cmake --install build
 
-# Record build date for the About page (UTC, date of this install/build).
+# Dedicated unprivileged user for the API and finder (decoder stays root for DRM).
+if [ "$(id -u)" = "0" ]; then
+    if ! id ndimon >/dev/null 2>&1; then
+        useradd --system --home /var/lib/ndimon --shell /usr/sbin/nologin --comment "NDIMon-R" ndimon
+        echo "[install] Created system user ndimon"
+    fi
+    mkdir -p /var/lib/ndimon
+    chown ndimon:ndimon /var/lib/ndimon
+    install -m 0755 "$PROJECT_DIR/scripts/ndimon-priv.sh" /usr/local/sbin/ndimon-priv
+    install -m 0440 "$PROJECT_DIR/packaging/sudoers.ndimon" /etc/sudoers.d/ndimon
+    visudo -cf /etc/sudoers.d/ndimon >/dev/null || {
+        echo "[install] ERROR: sudoers.ndimon failed visudo; not installing it"
+        rm -f /etc/sudoers.d/ndimon
+    }
+fi
+
+# Record firmware / build metadata for the About page.
+$SUDO sh -c "echo '1.1.0' > /etc/ndimon-firmware-version" 2>/dev/null || true
 $SUDO sh -c "date -u '+%Y-%m-%d' > /etc/ndimon-build-date" 2>/dev/null || true
 
 # Record the source checkout dir + git commit so the web UI's "Check for
@@ -50,6 +67,14 @@ done
 
 # Create param file if missing
 [ -f /etc/ndi_src_find_param ] || $SUDO touch /etc/ndi_src_find_param
+
+if [ "$(id -u)" = "0" ]; then
+    echo "[install] Setting config ownership for ndimon user..."
+    chown ndimon:ndimon /etc/ndimon-*.json /etc/ndi-config.json /etc/ndi-group.json \
+        /etc/ndi_src_find_param /etc/ndimon-auth.json /etc/ndimon-presets.json 2>/dev/null || true
+    chmod 640 /etc/ndimon-*.json /etc/ndi-config.json /etc/ndi-group.json 2>/dev/null || true
+    chmod 600 /etc/ndimon-auth.json 2>/dev/null || true
+fi
 
 # --- RGA device symlink ---
 # On newer kernels (6.x) the Rockchip RGA is registered as /dev/video* instead
@@ -113,6 +138,14 @@ for svc in "$PROJECT_DIR/systemd/"*.service; do
               "$svc" > "$SYSTEMD_DIR/$name"
     echo "  Installed $name → $SYSTEMD_DIR/$name"
 done
+
+if [ "$(id -u)" != "0" ]; then
+    # User units already run as the logged-in user; drop system User=/Group=.
+    for name in ndimon-api.service ndimon-finder.service; do
+        [ -f "$SYSTEMD_DIR/$name" ] || continue
+        sed -i '/^User=/d;/^Group=/d;/^AmbientCapabilities=/d;/^StateDirectory=/d' "$SYSTEMD_DIR/$name"
+    done
+fi
 
 if [ "$(id -u)" != "0" ]; then
     echo "[install] Enabling systemd linger so services persist after logout..."

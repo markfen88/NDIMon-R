@@ -2,8 +2,7 @@
 const express = require('express');
 const router  = express.Router();
 const fs      = require('fs');
-const { readJson, writeJson, sendIPC, corsHeaders } = require('./lib');
-const { exec } = require('child_process');
+const { readJson, writeJson, sendIPC, corsHeaders, runPriv } = require('./lib');
 
 const PARAM_FILE    = '/etc/ndi_src_find_param';
 const SRC_LIST      = '/etc/ndimon-sources.json';
@@ -15,20 +14,16 @@ router.use((req, res, next) => { corsHeaders(res); next(); });
 
 function triggerRefresh() {
     try { fs.writeFileSync(PARAM_FILE, '-run'); } catch {}
-    exec('systemctl --user restart ndimon-finder.service 2>/dev/null || systemctl restart ndimon-finder.service 2>/dev/null', { timeout: 2000 }, err => {
-        if (err) console.warn('[NDIFinder] restart ndimon-finder:', err.message);
-    });
+    runPriv(['restart-finder'], { timeout: 2000 }, () => {});
 }
 
 // GET|POST /refresh
-router.get('/refresh',  (req, res) => { triggerRefresh(); res.header('Content-Type','text/plain').send('success'); });
+router.get('/refresh',  (req, res) => { res.status(405).json({ ok: false, error: 'use POST' }); });
 router.post('/refresh', (req, res) => { triggerRefresh(); res.header('Content-Type','text/plain').send('success'); });
 
 // GET|POST /reset
 router.get('/reset',  (req, res) => {
-    try { fs.writeFileSync(PARAM_FILE, '-rs'); } catch {}
-    writeJson(SRC_LIST, { count: 1, list: { None: 'None' } });
-    res.header('Content-Type','text/plain').send('success');
+    res.status(405).json({ ok: false, error: 'use POST' });
 });
 router.post('/reset', (req, res) => {
     try { fs.writeFileSync(PARAM_FILE, '-rs'); } catch {}
@@ -50,9 +45,11 @@ router.post('/NdiOffSnSrc', (req, res) => {
     res.header('Content-Type','text/plain');
     const ips = (req.body || '').replace(/['"]/g,'').replace(/ /g,'');
     // Validate IPs
-    const valid = ips.split(',').every(ip =>
-        ip === '' || /^(\d{1,3}\.){3}\d{1,3}$/.test(ip)
-    );
+    const valid = ips.split(',').every(ip => {
+        if (ip === '') return true;
+        const p = ip.split('.');
+        return p.length === 4 && p.every(o => /^\d+$/.test(o) && Number(o) >= 0 && Number(o) <= 255);
+    });
     if (!valid) return res.send('Bad request - Invalid IP');
     const tmp = NDI_CONFIG + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(ips));
@@ -103,7 +100,7 @@ router.post('/NDIDisServer', (req, res) => {
         cfg.NDIDisServ   = newMode;
         writeJson(FIND_SETTINGS, cfg);
         sendIPC({ action: 'reload_config' });
-        exec('systemctl restart ndimon-finder', { timeout: 10000 }, (err) => {
+        runPriv(['restart-finder'], { timeout: 10000 }, err => {
             if (err) console.error('[NDIFinder] Failed to restart finder:', err.message);
         });
     }

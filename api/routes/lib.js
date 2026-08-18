@@ -2,9 +2,23 @@
 const fs           = require('fs');
 const net          = require('net');
 const path         = require('path');
+const { execFile } = require('child_process');
 const EventEmitter = require('events');
 
 const IPC_SOCKET = '/tmp/ndi-decoder.sock';
+const MAX_OUTPUTS = 8;
+
+function parseChannel(v, fallback = 1) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n) || n < 1 || n > MAX_OUTPUTS) return fallback;
+    return n;
+}
+
+function parseOutputIndex(v, fallback = 0) {
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n) || n < 0 || n >= MAX_OUTPUTS) return fallback;
+    return n;
+}
 
 // EventEmitter for events pushed from C++ decoder
 const ipcEvents = new EventEmitter();
@@ -78,7 +92,7 @@ function readJson(file) {
 function writeJson(file, obj) {
     const tmp = file + '.tmp';
     try {
-        fs.writeFileSync(tmp, JSON.stringify(obj));
+        fs.writeFileSync(tmp, JSON.stringify(obj), { mode: 0o640 });
         fs.renameSync(tmp, file);
     } catch (e) {
         console.error('[lib] writeJson', file, e.message);
@@ -94,4 +108,36 @@ function corsHeaders(res) {
     res.header('Connection', 'close');
 }
 
-module.exports = { sendIPC, readJson, writeJson, corsHeaders, ipcEvents };
+// Root-only operations go through /usr/local/sbin/ndimon-priv (sudoers).
+const PRIV = '/usr/local/sbin/ndimon-priv';
+
+function runPriv(args, opts, cb) {
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    const timeout = (opts && opts.timeout) || 10000;
+    const done = cb || (() => {});
+    const run = (bin, argv) => execFile(bin, argv, { timeout }, done);
+    if (fs.existsSync(PRIV)) {
+        if (process.getuid && process.getuid() === 0) return run(PRIV, args);
+        return run('sudo', ['-n', PRIV, ...args]);
+    }
+    const cmd = args[0];
+    const rest = args.slice(1);
+    if (cmd === 'reboot') return run('reboot', []);
+    if (cmd === 'hostname') return run('hostnamectl', ['set-hostname', rest[0] || 'ndimon']);
+    if (cmd === 'restart-finder') {
+        return execFile('systemctl', ['restart', 'ndimon-finder.service'], { timeout }, (err, stdout, stderr) => {
+            if (!err) return done(null, stdout, stderr);
+            execFile('systemctl', ['--user', 'restart', 'ndimon-finder.service'], { timeout }, done);
+        });
+    }
+    if (cmd === 'restart-stack')
+        return run('systemctl', ['restart', 'ndimon-r.service', 'ndimon-finder.service',
+                                 'ndimon-api.service', 'ndimon-watchdog.service']);
+    if (cmd === 'restart-service')
+        return run('systemctl', ['restart', `${rest[0]}.service`]);
+    if (cmd === 'set-ntp') return done(new Error('ndimon-priv not installed'));
+    return done(new Error('unknown priv command'));
+}
+
+module.exports = { sendIPC, readJson, writeJson, corsHeaders, ipcEvents,
+                   parseChannel, parseOutputIndex, MAX_OUTPUTS, runPriv };

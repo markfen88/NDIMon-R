@@ -3,8 +3,8 @@ const express = require('express');
 const router  = express.Router();
 const os      = require('os');
 const fs      = require('fs');
-const { execSync, exec } = require('child_process');
-const { sendIPC, readJson, writeJson, corsHeaders, ipcEvents } = require('./lib');
+const { execFileSync, execFile } = require('child_process');
+const { sendIPC, readJson, writeJson, corsHeaders, ipcEvents, runPriv } = require('./lib');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
 
@@ -325,6 +325,11 @@ router.get('/events', (req, res) => {
     res.write('data: {"type":"connected"}\n\n');
 
     sseClients.add(res);
+    if (sseClients.size > 20) {
+        const oldest = sseClients.values().next().value;
+        try { oldest.end(); } catch {}
+        sseClients.delete(oldest);
+    }
     req.on('close', () => sseClients.delete(res));
 });
 
@@ -335,10 +340,10 @@ const MANAGED_SERVICES = ['ndimon-r', 'ndimon-finder', 'ndimon-api', 'ndimon-wat
 
 function getServiceStatus(name) {
     try {
-        const raw = execSync(
-            `systemctl show ${name}.service --no-pager --property=ActiveState,SubState,MainPID,ExecMainStartTimestamp`,
-            { timeout: 3000, encoding: 'utf8' }
-        );
+        const raw = execFileSync('systemctl', [
+            'show', `${name}.service`, '--no-pager',
+            '--property=ActiveState,SubState,MainPID,ExecMainStartTimestamp',
+        ], { timeout: 3000, encoding: 'utf8' });
         const props = {};
         for (const line of raw.split('\n')) {
             const eq = line.indexOf('=');
@@ -368,7 +373,7 @@ router.post('/services/:name/restart', (req, res) => {
     if (!MANAGED_SERVICES.includes(name)) {
         return res.status(400).json({ ok: false, error: `Unknown service: ${name}` });
     }
-    exec(`systemctl restart ${name}.service`, { timeout: 15000 }, (err) => {
+    runPriv(['restart-service', name], { timeout: 15000 }, err => {
         if (err) {
             res.status(500).json({ ok: false, error: `Failed to restart ${name}: ${err.message}` });
         } else {

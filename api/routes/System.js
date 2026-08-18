@@ -2,8 +2,9 @@
 const express    = require('express');
 const router     = express.Router();
 const fs         = require('fs');
+const path       = require('path');
 const { execFile, spawn } = require('child_process');
-const { sendIPC, corsHeaders } = require('./lib');
+const { sendIPC, corsHeaders, runPriv } = require('./lib');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
 
@@ -42,15 +43,18 @@ router.get('/version', (req, res) => {
 router.post('/update', (req, res) => {
     const dir = sourceDir();
     if (!dir) return res.status(501).json({ ok: false, error: 'no source checkout recorded' });
+    if (!dir || !path.isAbsolute(dir) || dir.includes('\0') || dir.includes('..'))
+        return res.status(501).json({ ok: false, error: 'invalid source checkout' });
+    if (!fs.existsSync(path.join(dir, 'install.sh')))
+        return res.status(501).json({ ok: false, error: 'install.sh missing' });
     if (updateState.running) return res.status(409).json({ ok: false, error: 'update already running' });
 
     updateState = { running: true, started: Date.now(), log: '' };
-    // Detached: own session so it survives the ndimon-api restart that update.sh
-    // performs. Output goes to a log file the UI can't read, but /version reports
-    // running state and the new commit once finished.
     const logFd = fs.openSync('/tmp/ndimon-update.log', 'w');
+    // $1 is the source dir — never interpolate it into the shell script.
     const child = spawn('bash', ['-c',
-        `git -C '${dir}' pull --ff-only && bash '${dir}/install.sh' --no-deps`],
+        'git -C "$1" pull --ff-only && bash "$1/install.sh" --no-deps',
+        'ndimon-update', dir],
         { detached: true, stdio: ['ignore', logFd, logFd] });
     child.unref();
     // Best-effort clear of the running flag (the API may be restarted before this).
@@ -63,19 +67,15 @@ router.post('/update', (req, res) => {
 router.post('/reboot', (req, res) => {
     res.json({ ok: true });
     setTimeout(() => {
-        execFile('reboot', [], () => {});
+        runPriv(['reboot'], () => {});
     }, 1000);
 });
 
 // Soft reboot (restart the NDIMon services).
-// Try system-wide units first, then user units (non-root installs).
-const SERVICES = ['ndimon-r.service', 'ndimon-finder.service', 'ndimon-api.service'];
 router.post('/softreboot', (req, res) => {
     res.json({ ok: true });
     setTimeout(() => {
-        execFile('systemctl', ['restart', ...SERVICES], err => {
-            if (err) execFile('systemctl', ['--user', 'restart', ...SERVICES], () => {});
-        });
+        runPriv(['restart-stack'], () => {});
     }, 500);
 });
 

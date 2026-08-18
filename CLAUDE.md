@@ -26,10 +26,11 @@ NDI Network -> [NDIReceiver] -> [VideoDecoder] -> [DRMDisplay] -> HDMI/DP
               [IPCServer] <-> [Node.js REST API] <-> Web UI
 ```
 
-**Three systemd services:**
-- `ndimon-r` — C++ decoder core (this codebase)
-- `ndimon-finder` — NDI source discovery (writes /etc/ndimon-sources.json)
-- `ndimon-api` — Node.js Express REST API on port 80
+**Four systemd services:**
+- `ndimon-r` — C++ decoder core (root; DRM master)
+- `ndimon-finder` — NDI source discovery as user `ndimon` (writes /etc/ndimon-sources.json)
+- `ndimon-api` — Node.js Express REST API on port 80 as user `ndimon`
+- `ndimon-watchdog` — polls `/api/health`; optional reconnect when `watchdog_mode=active`
 
 ## Build
 
@@ -105,17 +106,18 @@ and network failures. The device recovers from any failure without human interve
 - `forget_source()` explicitly clears saved source (user action only)
 
 ### Recovery hierarchy (fastest to slowest):
-1. **Targeted component restart** — decoder re-init, display flip reset (~100ms)
-2. **Full pipeline reconnect** — disconnect + connect cycle (~3-5s)
-3. **Systemd watchdog restart** — process killed and restarted (~5s)
+1. **Display flip reset** — `health_check()` calls `reset_flip_pending()` after ~3s of HDMI freeze
+2. **Active watchdog reconnect** — `/api/health` reports `stalled` when `stall_count_ >= 60` (~30s); `ndimon-watchdog` reconnects if `watchdog_mode=active` (default is `passive`)
+3. **Systemd watchdog restart** — process killed and restarted (`WatchdogSec=30`)
 4. **Systemd Restart=always** — covers crashes, OOM, unexpected exit
 
 ### Health monitoring (`DisplayWorker::tick()` at 500ms):
 - Recv thread heartbeat — detect NDI SDK thread hang
 - Video frame timestamp — detect source/network stall
-- Decoder output timestamp — detect hardware decoder hang
-- Display commit timestamp — detect HDMI output freeze
+- Decoder output timestamp — detect hardware decoder hang (HX and uncompressed)
+- Display commit timestamp — detect HDMI output freeze; flip-pending reset on stall count 6
 - FPS tracking — cosmetic + health assessment
+- `stall_count_` increments while unhealthy (capped at 1000) so watchdog can see `stalled`
 
 ### Thresholds:
 - Recv stall: >5s since last heartbeat → full reconnect at 15s
@@ -225,10 +227,12 @@ Multicast also requires the sender to be multicasting.
 
 `api/auth.js` guards all `/v1/*` and `/api/*` routes (session cookie or
 `Authorization: Bearer`). Password hash (scrypt) lives in `/etc/ndimon-auth.json`;
-default password is `ndimon` until changed (UI shows a warning banner). CORS
-allow-all was removed — the API is same-origin only. `POST /v1/System/reboot`
-(GET removed). All hand-built JSON config writes escape interpolated strings;
-all shell-outs use `execFile`/`spawn` (no shell) — no more `hostnamectl` injection.
+default password is `ndimon` until changed (UI shows a warning banner). Only
+loopback `GET /api/health` skips auth (watchdog). CORS allow-all was removed —
+the API is same-origin only, plus an Origin/Host check on mutating requests.
+`POST /v1/System/reboot` (GET removed). All hand-built JSON config writes escape
+interpolated strings; privileged OS actions go through `/usr/local/sbin/ndimon-priv`
+(sudoers, no shell). NTP host is `ntp_server` in device settings.
 
 ### Source Presets & Software Update
 
@@ -238,7 +242,7 @@ source+IP for instant switching (no rescan). `/v1/System/version` reports the
 installed version + git update availability (recorded `/etc/ndimon-source-dir`,
 `/etc/ndimon-build-commit`); `/v1/System/update` git-pulls + rebuilds detached.
 
-## x86-64 Support (Phase 1 done; VAAPI decoder = Phase 2)
+## x86-64 Support (VAAPI decoder included)
 
 NUC/mini-PC appliances are supported. KEY FACT (verified at docs.ndi.video): the
 NDI SDK has NO GPU decode on Linux — it's FFmpeg software-only. So HX hardware

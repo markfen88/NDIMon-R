@@ -7,9 +7,32 @@ const auth       = require('./auth');
 const app = express();
 const PORT = process.env.PORT || 80;
 
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+});
+
+// Browser POST/PUT/PATCH/DELETE must match Host. SameSite=Lax already blocks
+// cross-site cookie POST; this rejects forged Origin when a browser sends one.
+app.use((req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    const origin = req.headers.origin;
+    if (!origin) return next();
+    try {
+        if (new URL(origin).host !== req.headers.host) {
+            return res.status(403).json({ ok: false, error: 'csrf' });
+        }
+    } catch {
+        return res.status(403).json({ ok: false, error: 'csrf' });
+    }
+    next();
+});
+
 // --- Middleware ---
-// 20mb limit so base64 logo uploads (Splash/uploadLogo) don't hit the 100kb default.
-app.use(bodyParser.json({ limit: '20mb' }));
+// 4mb covers splash logo uploads without a 20mb JSON DoS surface.
+app.use(bodyParser.json({ limit: '4mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.text());
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -65,5 +88,8 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`[NDIMon-R] API running on port ${PORT}`);
-
+    // Re-apply NTP to the OS clock after reboot (config lives in /etc).
+    try { require('./routes/DeviceSettings').applySavedNtp(); } catch (e) {
+        console.warn('[ntp] startup apply failed:', e.message);
+    }
 });

@@ -239,11 +239,29 @@ bool V4L2Decoder::decode(const uint8_t* data, size_t size, int64_t pts_us) {
     if (!initialized_ || fd_ < 0) return false;
     if (size == 0) return true;
 
-    // Rotate through output buffers; try dequeue first to reclaim used ones
-    int idx = next_out_buf_;
-    next_out_buf_ = (next_out_buf_ + 1) % out_buf_count_;
-
-    if (!out_bufs_[idx].data) return false;
+    // Wait for a free OUTPUT buffer before writing — do not overwrite a buffer
+    // still owned by the driver.
+    int idx = -1;
+    if (out_queued_ < out_buf_count_) {
+        idx = next_out_buf_;
+        next_out_buf_ = (next_out_buf_ + 1) % out_buf_count_;
+    } else {
+        for (int attempt = 0; attempt < 8; attempt++) {
+            struct v4l2_buffer dq = {};
+            struct v4l2_plane  dqp = {};
+            dq.type     = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+            dq.memory   = V4L2_MEMORY_MMAP;
+            dq.m.planes = &dqp;
+            dq.length   = 1;
+            if (xioctl(fd_, VIDIOC_DQBUF, &dq) == 0) {
+                idx = dq.index;
+                break;
+            }
+            struct pollfd pfd = { fd_, POLLOUT, 0 };
+            poll(&pfd, 1, 50);
+        }
+    }
+    if (idx < 0 || !out_bufs_[idx].data) return false;
     if (size > out_bufs_[idx].length) {
         std::cerr << "[V4L2Dec] Frame too large " << size
                   << " > " << out_bufs_[idx].length << "\n";
@@ -265,16 +283,10 @@ bool V4L2Decoder::decode(const uint8_t* data, size_t size, int64_t pts_us) {
     buf.timestamp.tv_usec = pts_us % 1000000;
 
     if (xioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
-        // Buffer may still be queued from last time; try dequeueing
-        struct v4l2_buffer dq = {};
-        struct v4l2_plane  dqp = {};
-        dq.type     = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-        dq.memory   = V4L2_MEMORY_MMAP;
-        dq.m.planes = &dqp;
-        dq.length   = 1;
-        xioctl(fd_, VIDIOC_DQBUF, &dq);
-        xioctl(fd_, VIDIOC_QBUF, &buf);
+        std::cerr << "[V4L2Dec] VIDIOC_QBUF failed: " << strerror(errno) << "\n";
+        return false;
     }
+    if (out_queued_ < out_buf_count_) out_queued_++;
     return true;
 }
 
@@ -436,4 +448,6 @@ void V4L2Decoder::destroy() {
     free_buffers();
     if (fd_ >= 0) { close(fd_); fd_ = -1; }
     initialized_ = false;
+    next_out_buf_ = 0;
+    out_queued_ = 0;
 }

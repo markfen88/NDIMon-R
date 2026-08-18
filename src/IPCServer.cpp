@@ -6,8 +6,10 @@
 #include <string>
 #include <unistd.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/un.h>
 #include <poll.h>
 
@@ -38,10 +40,14 @@ bool IPCServer::start(const std::string& socket_path) {
         return false;
     }
 
-    // Restrict the control socket to the owner (ndimon-r and ndimon-api run as
-    // the same user). Without this, any local user could drive the decoder.
-    if (chmod(socket_path_.c_str(), 0600) != 0)
-        std::cerr << "[IPC] WARNING: chmod 0600 on socket failed\n";
+    // Decoder stays root (DRM master). API runs as group ndimon. 0660 +
+    // chgrp lets the API connect without opening the socket to every local user.
+    if (chmod(socket_path_.c_str(), 0660) != 0)
+        std::cerr << "[IPC] WARNING: chmod 0660 on socket failed\n";
+    if (struct group* g = getgrnam("ndimon")) {
+        if (chown(socket_path_.c_str(), static_cast<uid_t>(-1), g->gr_gid) != 0)
+            std::cerr << "[IPC] WARNING: chown ndimon on socket failed\n";
+    }
 
     listen(server_fd_, 5);
     running_ = true;
@@ -133,6 +139,8 @@ bool IPCServer::handle_client(int client_fd) {
         cmd.res_refresh     = j.value("refresh",    0u);
         cmd.res_refresh_hz  = j.value("refresh_hz", 0.0);
         cmd.output_index     = j.value("output",  0);
+        if (cmd.output_index < 0 || cmd.output_index > 7)
+            cmd.output_index = 0;
         cmd.scale_mode_str   = j.value("scale_mode", "");
         cmd.source_available  = j.value("source_available", false);
         cmd.rotation_degrees  = j.value("rotation", 0u);

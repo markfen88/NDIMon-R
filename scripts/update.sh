@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
+echo "[update] Pulling..."
+git pull --ff-only
+
 echo "[update] Building..."
 cmake --build build -j$(nproc)
 
@@ -33,7 +36,7 @@ mv "$NEW_API" "$API_DEST/api"
 rm -rf "$OLD_API"
 
 echo "[update] Restarting services..."
-systemctl restart ndimon-r ndimon-api ndimon-finder 2>/dev/null || true
+systemctl restart ndimon-r ndimon-api ndimon-finder ndimon-watchdog 2>/dev/null || true
 
 echo "[update] Done. Status:"
-systemctl is-active ndimon-r ndimon-api ndimon-finder 2>/dev/null || true
+systemctl is-active ndimon-r ndimon-api ndimon-finder ndimon-watchdog 2>/dev/null || true

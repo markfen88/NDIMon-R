@@ -8,6 +8,9 @@ Type=simple
 Restart=always
 RestartSec=5
 ExecStart=NDIMON_INSTALL_DIR/scripts/ndimon-watchdog.sh
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/tmp /etc
 
 [Install]
 WantedBy=multi-user.target

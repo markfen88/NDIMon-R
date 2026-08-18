@@ -54,5 +54,6 @@ private:
     std::thread      cap_thread_;
     std::atomic<bool> streaming_{false};
     int next_out_buf_ = 0;
+    int out_queued_   = 0;
     bool initialized_ = false;
 };
