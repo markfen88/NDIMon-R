@@ -1,15 +1,24 @@
 #!/bin/bash
+# Quick status dump for a running appliance.
+set -euo pipefail
+
+SERVICES="ndimon-r ndimon-finder ndimon-api ndimon-watchdog"
+
 echo "=== NDIMon-R Services ==="
-systemctl --user status ndimon-r ndimon-finder ndimon-api --no-pager -l 2>/dev/null
+if systemctl is-enabled ndimon-r >/dev/null 2>&1; then
+    systemctl status $SERVICES --no-pager -l 2>/dev/null || true
+else
+    systemctl --user status $SERVICES --no-pager -l 2>/dev/null || true
+fi
 
 echo ""
-echo "=== Source List ==="
-cat /etc/ndimon-sources.json 2>/dev/null | python3 -m json.tool 2>/dev/null || cat /etc/ndimon-sources.json 2>/dev/null
+echo "=== Health (loopback, no auth) ==="
+curl -sS --max-time 3 http://127.0.0.1/api/health 2>/dev/null | python3 -m json.tool 2>/dev/null \
+    || curl -sS --max-time 3 http://127.0.0.1/api/health 2>/dev/null \
+    || echo "(API not reachable on port 80)"
 
 echo ""
-echo "=== Decoder Status ==="
-cat /etc/ndimon-dec1-status.json 2>/dev/null | python3 -m json.tool 2>/dev/null || cat /etc/ndimon-dec1-status.json 2>/dev/null
-
-echo ""
-echo "=== API Status ==="
-curl -s http://localhost/api/status 2>/dev/null | python3 -m json.tool 2>/dev/null
+echo "=== Sources ==="
+python3 -m json.tool /etc/ndimon-sources.json 2>/dev/null \
+    || cat /etc/ndimon-sources.json 2>/dev/null \
+    || echo "(no /etc/ndimon-sources.json)"

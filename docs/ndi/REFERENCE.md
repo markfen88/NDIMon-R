@@ -16,7 +16,7 @@ v6** (not Advanced). Anything marked Advanced below is unavailable to us.
 | Topic | How we do it | NDI docs |
 |-------|----------------|----------|
 | Discovery (mDNS) | `ndimon-finder` Find instance | Discovery & Registration |
-| Discovery Server | `networks.discovery` in `~/.ndi/ndi-config.v1.json`; advertiser when IP set | Discovery Server |
+| Discovery Server | `networks.discovery` in `/var/lib/ndimon/.ndi/ndi-config.v1.json`; advertiser when IP set | Discovery Server |
 | Off-subnet IPs | `networks.ips` | Manual Connection |
 | Groups | `ndi.groups.recv` | NDI Groups (case-sensitive) |
 | Transport | `rudp` / `multicast` / `tcp` keys | Configuration Files |
@@ -52,9 +52,10 @@ Official model:
 5. **AVSync API** is for sample-accurate A/V without resampling (e.g. recording).
    Not the HDMI playback path.
 
-**NDIMon-R option:** `Settings → NDI Discovery → NTP Time Server` writes
-`/etc/systemd/timesyncd.conf.d/ndimon.conf` and enables `systemd-timesyncd`.
-Blank = OS default. This is OS clock sync, which is what NDI actually uses.
+**NDIMon-R option:** `NDI → NDI Discovery → NTP Time Server` writes a
+timesyncd drop-in and/or a chrony source file via `ndimon-priv set-ntp`, then
+enables the matching daemon. Blank = OS default. This is OS clock sync, which
+is what NDI actually uses.
 
 PTP (hardware/NIC) is out of scope unless we add `ptp4l` later; NDI still would
 not speak PTP itself.
@@ -95,6 +96,11 @@ rewrites the file; we write passthrough keys again afterward.
 
 `machinename` override is discouraged (mDNS name clashes). We set hostname via
 `hostnamectl` instead.
+
+On the appliance this file lives at **`/var/lib/ndimon/.ndi/ndi-config.v1.json`**
+(systemd `HOME=` + `pin_ndi_home()`). Finder and decoder must share that
+directory. A process that falls back to `/root/.ndi` or `~/.ndi` will desync
+groups, DS, transport, and HX passthrough.
 
 ---
 

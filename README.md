@@ -1,304 +1,326 @@
 # NDIMon-R
 
-**Hardware-accelerated NDI decoder appliance for ARM single-board computers**
+Dedicated **NDI receiver / HDMI decoder** for Linux appliances.
 
-[![Platform](https://img.shields.io/badge/platform-aarch64-blue)](https://github.com/markfen88/NDIMon-R)
+It takes a live NDI stream off the network, decodes it, and scans it out to HDMI or DisplayPort with DRM/KMS. Audio goes to ALSA. A small web UI on port 80 is the day-to-day control surface.
+
+This is a **decoder**, not an encoder. It does not send NDI.
+
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Platform](https://img.shields.io/badge/arch-aarch64%20%7C%20x86--64-blue)](https://github.com/markfen88/NDIMon-R)
 
 ---
 
-## Overview
+## Contents
 
-NDIMon-R turns a low-cost ARM or x86 mini PC into a dedicated NDI decoder that outputs live video over HDMI or DisplayPort. It uses the hardware video engine on Rockchip (MPP), Raspberry Pi 4 (V4L2 H.264), and Intel/AMD (VAAPI) for H.264/H.265, and falls back to FFmpeg software decode when hardware is missing (Pi 5 H.264, Pi HEVC, NVIDIA, generic ARM).
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Install](#install)
+- [First boot](#first-boot)
+- [Features](#features)
+- [Hardware and codecs](#hardware-and-codecs)
+- [Services](#services)
+- [Configuration](#configuration)
+- [Web UI and API](#web-ui-and-api)
+- [Update](#update)
+- [Troubleshooting](#troubleshooting)
+- [Architecture](#architecture)
+- [License](#license)
 
-A Node.js REST API and web UI run alongside the C++ decoder core, providing source selection, output configuration, and status monitoring.
+---
+
+## What it does
+
+NDIMon-R is meant to sit on an HDMI input, remember the last source, and come back by itself after a reboot or a dropped sender.
+
+Two receive paths:
+
+| Incoming stream | What happens |
+|-----------------|--------------|
+| **Standard NDI** (SpeedHQ / UYVY / NV12) | NDI SDK decodes SpeedHQ. Framesync pulls video/audio to the local HDMI/ALSA clock. Colour convert uses ARM NEON, or Rockchip VOP2 can scan UYVY natively. |
+| **NDI HX** (H.264 / H.265) | SDK is asked for a compressed bitstream (passthrough). NDIMon-R decodes it: Rockchip MPP, Pi 4 V4L2, Intel/AMD VAAPI, or FFmpeg. Linux NDI SDK has **no** GPU decode of its own. |
+
+If a hardware decoder fails to initialise, the worker falls back to FFmpeg so the output is not a black frame.
+
+---
+
+## Requirements
+
+- **OS:** Debian Bookworm/Trixie, Ubuntu 24.04 Noble, Armbian, or Raspberry Pi OS (64-bit).
+- **CPU:** aarch64 or x86-64.
+- **Display:** HDMI or DisplayPort. Do not run a desktop session that holds DRM master (no gnome/weston on that connector).
+- **Network:** Avahi/`avahi-daemon` for mDNS discovery. Optional NDI Discovery Server for other subnets.
+- **Privileges:** full appliance install is **root** (`sudo`). The decoder stays root (DRM); the API and finder run as user `ndimon`.
+- **Build:** happens **on the target**. Do not cross-compile from Windows/macOS and expect it to work.
+
+By installing you accept the [NDI SDK License Agreement](https://www.ndi.tv/license). The SDK tarball is downloaded from NDI (~60 MB) on first `setup-deps`.
+
+---
+
+## Install
+
+On the device:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git
+git clone https://github.com/markfen88/NDIMon-R.git
+cd NDIMon-R
+sudo bash install.sh
+```
+
+That is the whole path: dependencies, NDI SDK v6, CMake build, binaries, systemd units, Node API.
+
+When it finishes, open `http://<device-ip>/`.
+
+### Installer flags
+
+| Command | When to use |
+|---------|-------------|
+| `sudo bash install.sh` | First install, or after a distro change |
+| `sudo bash install.sh --no-deps` | Code update: rebuild and reinstall, keep packages |
+| `sudo bash install.sh --no-build` | Units/API only; binaries already in `build/` |
+
+Top-level `install.sh` always installs **system** units (`/etc/systemd/system`) via `sudo`. Config files already in `/etc/` are never overwritten.
+
+### What each step does
+
+1. **`scripts/setup-deps.sh`** (root) — build tools, libdrm, ALSA, Avahi, FFmpeg headers, Node.js 20, NDI SDK into `/usr/local`. Rockchip MPP on RK boards. VAAPI drivers on x86 (Intel iHD/i965 + Mesa for AMD).
+2. **`scripts/build.sh`** — `cmake -B build` + compile `ndimon-r` and `ndimon-finder`.
+3. **`scripts/install.sh`** (root) — `/usr/local/bin`, `/opt/ndimon-r/api`, user `ndimon`, `/usr/local/sbin/ndimon-priv`, sudoers, `/var/lib/ndimon/.ndi` (shared NDI config home), enable and start the four services.
+
+Optional checksum pin for the NDI tarball: `NDI_SDK_SHA256=<hex> sudo bash install.sh`.
+
+### After install — logs
+
+```bash
+sudo systemctl status ndimon-r ndimon-finder ndimon-api ndimon-watchdog
+sudo journalctl -u ndimon-r -f
+```
+
+Or: `sudo bash scripts/status.sh`
+
+---
+
+## First boot
+
+1. Browse to `http://<device-ip>/`.
+2. Log in. Default password is **`ndimon`**. Change it under **Settings → Security** before the box is on a real network.
+3. Open **NDI**, pick a source. That choice is written to `/etc/ndimon-dec{N}-settings.json` and survives reboot.
+4. Optional, also on **NDI**: Discovery Server IP, NTP host, groups, extra IPs, transport, and HX decode mode.
+
+Factory watchdog mode is **active** (reconnect after a ~30 s stall). Existing `/etc/ndimon-device-settings.json` is not rewritten on update — change it under **System → Watchdog Mode** if an older box is still `passive`.
 
 ---
 
 ## Features
 
-- **Hardware H.264/H.265 decode** — Rockchip MPP, Pi 4 V4L2 M2M (H.264), Intel/AMD VAAPI; FFmpeg fallback when HW init fails
-- **Multi-output support** — independent NDI sources on HDMI-A-1, HDMI-A-2, and DP-1 simultaneously
-- **Authenticated web UI + REST API** — password-protected, same-origin; default password `ndimon` (change on first login)
-- **Source presets** — save named NDI sources and recall them to any output instantly (no rescan)
-- **REST API** — `/v1/` routes for source control, output config, and status
-- **Web UI** — source selection, output config, resolution control, status monitoring
-- **NDI Discovery Server** — receiver-advertiser integration (NDI 6.2) for centralised routing/discovery
-- **Transport selection** — TCP / UDP / Multicast / RUDP, applied live to the NDI receiver
-- **Auto-reconnect** — exponential backoff reconnect on signal loss
-- **Splash screen** — customisable idle/live backgrounds with logo and OSD overlay
-- **NTP system clock** — optional NTP host; persistent across reboots via systemd-timesyncd/chrony
-- **Hotplug** — display workers initialise on hotplug when no monitor is connected at boot
-- **In-place updates** — check/apply software updates from the web UI
+### Receive and display
+
+- Dual-mode NDI: Standard (Framesync) and HX (passthrough → local decoder).
+- Independent source per connector (HDMI-A-1, HDMI-A-2, DP-1, then further connectors in a stable map).
+- Scale: letterbox, stretch, crop. Rotation 0/90/180/270.
+- HDMI mode auto-match to the source, or a locked resolution from the UI.
+- ALSA audio from NDI planar float, downmixed to stereo.
+- Custom splash + OSD when idle or disconnected.
+- Monitor hotplug: receiver still advertises if no display at boot; picture starts when HDMI lands.
+
+### Appliance behaviour
+
+- Last source auto-connects after reboot.
+- Disconnect keeps the saved source (reconnect). Forget source is an explicit UI action.
+- Node.js reconnect with exponential backoff (5 s → 30 s).
+- Watchdog polls `/api/health`; **active** mode disconnects a stalled output so the API reconnects it.
+- systemd `Restart=always`; `ndimon-r` is `Type=notify` with `WatchdogSec=30`.
+- Optional NTP host: writes timesyncd or chrony drop-ins, enables the daemon, reapplies on API start. NDI has no time server of its own.
+- Optional scheduled reboot (System page): local time + weekdays, applied as a systemd timer. Missed windows do not fire on the next boot.
+
+### Discovery and control
+
+- mDNS via Avahi, plus optional NDI Discovery Server (**NDI → NDI Discovery**; blank IP = off).
+- Receiver advertiser so the box shows up as a destination on the DS (`allow_controlling` — the SDK switches sources; we do not `connect()` from a routing callback).
+- NDI groups (case-sensitive). Off-subnet extra IPs.
+- Transport: TCP on a new install (the UI default). RUDP, UDP, Multicast, and M-TCP are selectable; a change rewrites `ndi-config.v1.json` and recreates the recv. RUDP is the NDI SDK’s own default if you pick it. Multicast also requires the sender to be multicasting.
+- Named source presets (instant recall, no rescan).
+
+### Security (LAN appliance)
+
+- Session cookie (HttpOnly, SameSite=Lax) or `Authorization: Bearer`.
+- Same-origin only; mutating requests checked against `Origin` / `Host`.
+- GET is not used to change state (`connectTo`, reboot, finder reset, … return 405).
+- API and finder run as `ndimon`. Reboot, hostname, NTP, and service restarts go through `/usr/local/sbin/ndimon-priv`.
+- IPC socket `/tmp/ndi-decoder.sock` is `0660` `root:ndimon`.
 
 ---
 
-## Supported Hardware
+## Hardware and codecs
 
-| Board | SoC | Decode Engine | Status |
-|-------|-----|---------------|--------|
-| Radxa Rock 5B | RK3588 | Rockchip MPP | Tested |
-| Radxa Rock 4C | RK3399 | Rockchip MPP | Tested |
-| Raspberry Pi 4 | BCM2711 | V4L2 M2M H.264; H.265 via FFmpeg | Supported |
-| Raspberry Pi 5 | BCM2712 | FFmpeg software (no H.264 HW; HEVC is stateless, not used yet) | Supported |
-| Any aarch64 board | — | FFmpeg (software) | Fallback |
-| Intel/AMD x86-64 (NUC, mini-PC) | — | VAAPI (Intel/AMD) + FFmpeg software | Supported |
-| NVIDIA Linux | — | FFmpeg software (NVDEC not implemented) | Software |
+| Board | HX H.264 | HX H.265 | Standard NDI |
+|-------|----------|----------|----------------|
+| Radxa Rock 5B (RK3588) | MPP | MPP | SDK + NEON or VOP2 UYVY |
+| Radxa Rock 4C+ / 4B+ (RK3399) | MPP | MPP | SDK + NEON or VOP2 UYVY |
+| Raspberry Pi 4 | V4L2 M2M (`/dev/video10`) | FFmpeg (Pi HEVC is stateless; not used) | SDK + NEON |
+| Raspberry Pi 5 | FFmpeg (no H.264 HW) | FFmpeg (same) | SDK + NEON |
+| Other aarch64 | FFmpeg | FFmpeg | SDK + NEON |
+| Intel NUC (iHD / i965) | VAAPI | VAAPI | SDK + scalar/SSE |
+| AMD (Mesa VAAPI) | VAAPI | VAAPI | SDK + scalar/SSE |
+| NVIDIA Linux | FFmpeg (no NVDEC yet) | FFmpeg | SDK + scalar/SSE |
 
-Runs on Debian Bookworm/Trixie, Ubuntu Noble (24.04), Armbian, and Raspberry Pi OS. The installer auto-detects ARM vs x86-64 and installs the right NDI library, decoders, and (on x86) VAAPI drivers.
+**NDI → Decoder → HX Decode:** `auto` (prefer HW, then FFmpeg), `hardware` (tries HW, falls back to FFmpeg if init fails), `software` (FFmpeg only). The NDI page shows a `HW`/`SW` badge and **SATURATED** if HX decode FPS stays below 85% of source FPS.
 
-### Decode mode (x86)
-
-On Linux the NDI SDK decodes only in software, so HX (H.264/H.265) hardware decode is done by NDIMon-R itself. **Settings → Decoder → HX Decode** selects:
-- **Auto** — hardware (VAAPI/MPP/V4L2) if available, else software. Hardware init failure also falls back to FFmpeg.
-- **Hardware** — force hardware (falls back to software if unavailable, shown in status)
-- **Software** — FFmpeg software decode (multi-threaded on x86)
-
-The active backend (e.g. `HW vaapi`, `SW software`) is shown per output on the NDI page, along with a **SATURATED** badge (and a top banner) if a decoder can't keep up with its source — useful when running several 4K HX streams on one box. ARM keeps its MPP/V4L2 + NEON path as the default; the selector primarily affects x86.
-
-On x86 the System page shows the detected GPU decode driver and supported VAAPI profiles (H.264/HEVC/…). Intel (iHD/i965) and AMD (Mesa) are supported across generations via VAAPI; NVIDIA (NVDEC) and Intel oneVPL/QSV are on the roadmap.
+x86 System page also shows VAAPI driver + decode profiles from install-time `vainfo`.
 
 ---
 
-## Quick Install
+## Services
+
+| Unit | Role | User |
+|------|------|------|
+| `ndimon-r` | Capture, decode, DRM, ALSA, IPC | root |
+| `ndimon-finder` | NDI Find → `/etc/ndimon-sources.json` | `ndimon` |
+| `ndimon-api` | Web UI + REST, port 80 | `ndimon` |
+| `ndimon-watchdog` | Process liveness + `/api/health` | root |
+
+Finder and decoder share **`/var/lib/ndimon/.ndi/ndi-config.v1.json`**. That is the official NDI config location (`$HOME/.ndi`); both processes pin `HOME` there so groups, DS, transport, and HX passthrough stay in one file.
 
 ```bash
-git clone https://github.com/markfen88/NDIMon-R.git
-cd NDIMon-R
-bash install.sh
+sudo systemctl restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
+sudo journalctl -u ndimon-r -u ndimon-api -f
 ```
-
-This single command installs dependencies, builds the binaries, and enables the systemd services. On first run it downloads the NDI SDK (~60 MB) from NDI's servers.
-
-> **Note:** By running this installer you accept the [NDI SDK License Agreement](https://www.ndi.tv/license).
-
----
-
-## Installation Details
-
-### Options
-
-```bash
-bash install.sh              # Full install: deps + build + install
-bash install.sh --no-deps    # Skip dependency install (already done)
-bash install.sh --no-build   # Skip build (binary already compiled)
-```
-
-### What the installer does
-
-1. **`scripts/setup-deps.sh`** — Installs system packages, Rockchip MPP (if applicable), NDI SDK v6, and Node.js v20
-2. **`scripts/build.sh`** — Runs CMake and compiles `ndimon-r` and `ndimon-finder`
-3. **`scripts/install.sh`** — Installs binaries to `/usr/local/bin`, copies default config files to `/etc/`, installs npm packages, and enables four systemd services:
-   - `ndimon-r` — the main decoder process (C++, root for DRM)
-   - `ndimon-finder` — NDI source discovery helper (user `ndimon`)
-   - `ndimon-api` — web UI and REST API (Node.js, port 80, user `ndimon`)
-   - `ndimon-watchdog` — health polling and optional auto-reconnect
-
-### Root vs user install
-
-Running `install.sh` as root installs system-wide services (`/etc/systemd/system`). Running as a regular user installs user-scoped services (`~/.config/systemd/user`) and enables systemd linger so they persist after logout.
 
 ---
 
 ## Configuration
 
-Config files live in `/etc/`. They are created from `config/` defaults on first install and are **never overwritten** by subsequent installs or updates.
+Templates in `config/` are copied to `/etc/` **only if the file is missing**.
 
 | File | Purpose |
 |------|---------|
-| `/etc/ndimon-dec1-settings.json` | Audio, screensaver, tally, color space |
-| `/etc/ndimon-find-settings.json` | NDI Discovery Server IP and enable/disable |
-| `/etc/ndimon-device-settings.json` | Device alias, watchdog mode, NTP server |
-| `/etc/ndimon-rx-settings.json` | Transport mode (TCP / UDP / Multicast / RUDP) — applied live to the receiver |
-| `/etc/ndimon-presets.json` | Saved source presets (written by the API) |
-| `/etc/ndimon-auth.json` | Web UI password hash (scrypt; created on first password change) |
-| `/etc/ndi-group.json` | NDI groups to subscribe to (default: `public`) |
-| `/etc/ndi-config.json` | Off-subnet source IPs (comma-separated) |
-| `/etc/ndimon-sources.json` | NDI source list cache (written by ndimon-finder) |
-| `/etc/ndimon-dec1-status.json` | Runtime decoder status (written by ndimon-r) |
+| `ndimon-dec{N}-settings.json` | Per-output source, audio, tally, colour, alias (`N` = 1…8) |
+| `ndimon-device-settings.json` | Device alias, `watchdog_mode`, `ntp_server`, `decode_mode`, scheduled reboot |
+| `ndimon-find-settings.json` | Discovery Server IP (non-empty ⇒ enabled) |
+| `ndimon-rx-settings.json` | Transport `Rxpm` |
+| `ndi-group.json` | Groups (comma-separated, case-sensitive) |
+| `ndi-config.json` | Extra finder IPs (comma-separated) |
+| `ndimon-presets.json` | Named presets (API) |
+| `ndimon-auth.json` | Password hash (created when you change the password) |
+| `ndimon-splash-settings.json` / `ndimon-osd-settings.json` | Splash / OSD (API) |
+| `ndimon-sources.json` | Finder cache |
 
-### Discovery Server
-
-To use an NDI Discovery Server, edit `/etc/ndimon-find-settings.json`:
-
-```json
-{
-  "NDIDisServ": "NDIDisServEn",
-  "NDIDisServIP": "192.168.1.x"
-}
-```
-
-Then reload:
+Prefer the web UI — it writes JSON and tells the decoder to reload. If you edit `/etc/` by hand:
 
 ```bash
-sudo systemctl restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
-# or for user services:
-systemctl --user restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
+sudo systemctl restart ndimon-r ndimon-finder ndimon-api
 ```
 
-### Time sync (NTP)
-
-NDI has no time-sync server. Frame timestamps follow the appliance **OS system
-clock**. Set an NTP host under **NDI Discovery → NTP Time Server** (stored in
-`/etc/ndimon-device-settings.json`). That writes
-`/etc/systemd/timesyncd.conf.d/ndimon.conf` (or a chrony source file), enables
-the NTP daemon so it starts at boot, and turns on `timedatectl set-ntp true`.
-Blank keeps the OS default servers; NTP itself stays enabled. The API reapplies
-the saved server on every start so the setting survives reboot.
+Discovery Server and NTP live on **NDI → NDI Discovery**. Leave the DS IP blank to disable it. NTP sets the **OS clock** (timesyncd or chrony), not an NDI clock.
 
 ---
 
-## Web UI & API
+## Web UI and API
 
-The web UI is served at `http://<device-ip>/` once the `ndimon-api` service is running.
+UI: `http://<device-ip>/`
 
-> **Security:** The UI and API require a password. The default is `ndimon` — you'll see a warning banner until you change it under **Settings → Security**. The API is same-origin only (no cross-origin/CORS access). The password hash is stored in `/etc/ndimon-auth.json`.
+All `/v1/*` and `/api/*` routes need a session except:
 
-From the web UI you can:
-- Select an NDI source to display on each output
-- Save and recall source presets to any output instantly
-- Switch between connected HDMI/DP outputs
-- Change output resolution and refresh rate
-- Choose the NDI transport mode (TCP / UDP / Multicast / RUDP)
-- Adjust scale mode (letterbox / stretch / crop)
-- Monitor connection status, FPS, codec, HX-passthrough health, CPU, memory, and temperatures
-- Set a device password and check/apply software updates
+- `POST /api/login`, `GET /api/auth-status`
+- `GET /api/health` **from loopback only** (watchdog)
 
-### Key API endpoints
+Login: `POST /api/login` with `{ "password": "…" }` — cookie plus `token` for `Authorization: Bearer`.
+
+### Useful routes
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/login` | POST | Authenticate (`{password}`) — returns a session cookie + bearer token |
-| `/api/status` | GET | Full decoder and system status (JSON) |
-| `/api/events` | GET | Server-Sent Events stream (1.5 s updates) |
-| `/v1/NDIFinder/List` | GET | Available NDI sources |
-| `/v1/NDIDecode/connectTo` | GET/POST | Connect to a source |
-| `/v1/Presets/list` | GET | Saved source presets |
-| `/v1/Presets/save` | POST | Save a preset (`{name, source, ip}`) |
-| `/v1/Presets/recall` | POST | Recall a preset to an output (`{name, output}`) |
-| `/v1/VideoOutput/modes` | GET | Available display modes |
-| `/v1/VideoOutput/setresolution` | POST | Set output resolution |
-| `/v1/NDIFinder/NDIDisServer` | GET/POST | Discovery server config |
-| `/v1/DeviceSettings/ndi-alias` | GET/POST | NDI receiver name |
-| `/v1/DeviceSettings/ntp` | GET/POST | NTP server (`{ntp_server}`) + sync status |
-| `/v1/Splash/config` | GET/POST | Splash screen appearance |
-| `/v1/System/version` | GET | Version info + update availability |
-| `/v1/System/update` | POST | Pull, rebuild, and restart services |
+| `/api/status` | GET | Decoder + system status |
+| `/api/events` | GET | SSE (~1.5 s) |
+| `/api/health` | GET | Watchdog payload (`stalled` / `degraded`) |
+| `/v1/NDIFinder/List` | GET | Cached sources |
+| `/v1/NDIFinder/refresh` | POST | Restart finder |
+| `/v1/NDIDecode/connectTo` | POST | `{ SourceName, SourceIP, Output }` — `Output` is **1–8** |
+| `/v1/NDIDecode/decodeTransport` | GET, POST | `{ Rxpm }` (`TCP`, `UDP`, `Multicast`, `M-TCP`, `RUDP`) |
+| `/v1/Presets/list` | GET | Presets |
+| `/v1/Presets/save` | POST | `{ name, source, ip }` |
+| `/v1/Presets/recall` | POST | `{ name, output }` — `output` is **1–8** |
+| `/v1/VideoOutput/modes` | GET | `?output=0` — `output` here is **0-based** |
+| `/v1/VideoOutput/resolution` | GET, POST | POST `{ width, height, refresh_hz, output }` or `{ auto: true, output }` (`output` **0-based**) |
+| `/v1/NDIFinder/NDIDisServer` | GET, POST | `{ NDIDisServIP }` |
+| `/v1/DeviceSettings/ndi-alias` | GET, POST | Receiver name |
+| `/v1/DeviceSettings/ntp` | GET, POST | `{ ntp_server }` |
+| `/v1/DeviceSettings/reboot-schedule` | GET, POST | `{ enabled, time: "HH:MM", days: ["sun", …] }` |
+| `/v1/DeviceSettings/decode-mode` | GET, POST | `auto` / `hardware` / `software` |
+| `/v1/Splash/config` | GET, POST | Splash |
+| `/v1/System/version` | GET | Firmware / git / updates |
+| `/v1/System/update` | POST | `git pull --ff-only` + `install.sh --no-deps` |
+| `/v1/System/reboot` | POST | Reboot (POST only) |
 
-All `/v1/` and `/api/` routes (except `/api/login`) require authentication.
+There is no encode API (`/v1/NDIEncoder/*` is 404).
 
----
-
-## Service Management
-
-```bash
-# System-wide install (root)
-sudo systemctl status ndimon-r ndimon-finder ndimon-api
-sudo systemctl restart ndimon-r
-sudo journalctl -u ndimon-r -f
-sudo journalctl -u ndimon-finder -f
-sudo journalctl -u ndimon-api -f
-
-# User install (non-root)
-systemctl --user status ndimon-r ndimon-finder ndimon-api
-systemctl --user restart ndimon-r
-journalctl --user -u ndimon-r -f
-```
-
-Or use the convenience script:
-
-```bash
-bash scripts/status.sh
-```
+NDI protocol notes used while building this tree: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md). Official docs: [docs.ndi.video](https://docs.ndi.video/all/).
 
 ---
 
-## Updating
+## Update
+
+On the device, from the checkout recorded in `/etc/ndimon-source-dir` (**System → Update** in the UI does this):
 
 ```bash
-cd NDIMon-R
-git pull
-bash install.sh --no-deps
+cd /path/to/NDIMon-R
+sudo bash install.sh --no-deps
 ```
 
-This rebuilds the binaries and reinstalls services without touching existing config files in `/etc/`.
+Or `sudo bash scripts/update.sh` (pull, rebuild, swap API tree, restart). `/etc/` JSON is left alone.
 
 ---
 
 ## Troubleshooting
 
-**No video on HDMI after connecting a source**
-- Check logs: `journalctl -u ndimon-r -f`
-- Verify the display was connected before the service started, or wait for hotplug detection
-- Confirm the NDI source is sending H.264, H.265, or an uncompressed format
+**No picture after connect**  
+`sudo journalctl -u ndimon-r -f`. Confirm DRM is not owned by a desktop. Standard NDI and HX H.264/H.265 are the supported payloads. HDR P216/PA16 is warned, not converted.
 
-**Source list is empty**
-- Check that `ndimon-finder` is running: `systemctl status ndimon-finder`
-- If using a Discovery Server, verify the IP in `/etc/ndimon-find-settings.json` and that the server is reachable
-- NDI sources on other subnets require a Discovery Server or manual IPs in `/etc/ndi-config.json`
+**Empty source list**  
+`systemctl is-active ndimon-finder`. DS IP must be reachable. Other-subnet senders need DS or extra IPs on **NDI → NDI Discovery**. Groups are case-sensitive (`Production` ≠ `production`).
 
-**Web UI unreachable**
-- Check `ndimon-api` is running: `systemctl status ndimon-api`
-- If port 80 is blocked, set `PORT=8080` in the `ndimon-api` service environment
+**HX is black / “passthrough” banner**  
+`/api/status` → `passthrough_ok`. If false, `ndi-config.v1.json` lost `codec.h264/h265.passthrough` after SDK init. Check `/var/lib/ndimon/.ndi/ndi-config.v1.json`. Hardware init failure should log a software fallback; `decode_backend` on the NDI page shows what actually ran.
 
-**Source reverts unexpectedly**
-- Source selection is persisted in `/etc/ndimon-dec1-settings.json`
-- An NDI Discovery Server can override routing — if you use DS-managed routing, let the DS control source selection
+**Web UI down**  
+`systemctl status ndimon-api`. To use 8080: set `Environment=PORT=8080` on the unit (and skip port 80). Loopback health: `curl -s http://127.0.0.1/api/health`.
 
-**MPP hardware decode not working (Rockchip)**
-- Verify MPP: `ldconfig -p | grep librockchip_mpp`
-- If missing, re-run `sudo bash scripts/setup-deps.sh`
-- Ensure the service user is in the `video` and `render` groups
+**Rockchip MPP missing**  
+`ldconfig -p | grep librockchip_mpp`. Re-run `sudo bash scripts/setup-deps.sh` on a Radxa/Armbian image that ships MPP.
 
-**NDI SDK not found**
-- Re-run `sudo bash scripts/setup-deps.sh` — it will download and install the SDK
-- Verify: `ldconfig -p | grep libndi`
+**NDI library missing**  
+`ldconfig -p | grep libndi` then `sudo bash scripts/setup-deps.sh`.
+
+**Source jumps**  
+Saved source is in `ndimon-dec{N}-settings.json`. A Discovery Server with controlling enabled can change the source; that is by design.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    NDIMon-R process                  │
-│  ┌──────────────┐   ┌──────────────┐                │
-│  │ NDIReceiver  │──▶│ VideoDecoder │                │
-│  │ (NDI SDK)    │   │ MPP/V4L2/SW  │                │
-│  └──────────────┘   └──────┬───────┘                │
-│                            │ DecodedFrame            │
-│                     ┌──────▼───────┐                │
-│                     │  DRMDisplay  │──▶ HDMI/DP      │
-│                     └──────────────┘                │
-│                                                      │
-│  ┌──────────────┐                                   │
-│  │  IPCServer   │◀──── /tmp/ndi-decoder.sock        │
-│  └──────────────┘                                   │
-└─────────────────────────────────────────────────────┘
-         ▲ JSON commands / events
-         │
-┌────────┴──────────────────────┐
-│  ndimon-api (Node.js, port 80) │
-│  Express + /v1/ REST API       │
-│  Web UI (public/)              │
-└────────────────────────────────┘
-
-┌─────────────────────────┐
-│  ndimon-finder           │
-│  Writes /etc/ndimon-    │
-│  sources.json           │
-└─────────────────────────┘
-
-┌─────────────────────────┐
-│  ndimon-watchdog         │
-│  Polls /api/health;      │
-│  optional reconnect      │
-└─────────────────────────┘
+NDI network
+    │
+    ├─ ndimon-finder  →  /etc/ndimon-sources.json
+    │
+    └─ ndimon-r (DRM master)
+           NDIReceiver ─┬─ Standard: Framesync → DRM (+ NEON UYVY→XRGB)
+                        ├─ HX: bitstream → MPP | V4L2 | VAAPI | FFmpeg → DRM
+                        └─ ALSA
+           IPC  /tmp/ndi-decoder.sock
+                        │
+           ndimon-api   Web UI + /v1 REST  (port 80)
+           ndimon-watchdog  →  GET /api/health
 ```
+
+CMake switches (on-device): `ENABLE_MPP`, `ENABLE_V4L2`, `ENABLE_FFMPEG`, `ENABLE_VAAPI`.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT — [LICENSE](LICENSE).
 
-The NDI SDK is licensed separately by NDI (Vizrt). By running `install.sh` you accept the [NDI SDK License Agreement](https://www.ndi.tv/license).
+The NDI SDK is Vizrt’s, not MIT. Running `install.sh` means you accept the [NDI SDK License Agreement](https://www.ndi.tv/license).

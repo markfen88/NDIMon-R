@@ -107,6 +107,8 @@
   .form-control:focus, .form-select:focus { background: var(--bg-card2); border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 2px rgba(61,142,245,.2); }
   .form-label { font-size: .82rem; color: var(--text-muted); font-weight: 500; }
   .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); }
+  .rb-day { min-width: 2.4rem; }
+  .rb-day.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   .section-divider { border-color: var(--border); margin: 16px 0; }
 
@@ -621,6 +623,36 @@
             <div class="form-text">Updates pull the latest code, rebuild, and restart services. The UI will be briefly unavailable.</div>
           </div>
         </div>
+
+        <div class="card mt-3">
+          <div class="card-header"><i class="bi bi-clock-history"></i>Scheduled Reboot</div>
+          <div class="card-body">
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="rb-enabled" onchange="toggleRebootSchedule()">
+              <label class="form-check-label" for="rb-enabled">Enable scheduled reboot</label>
+            </div>
+            <div id="rb-fields">
+              <div class="mb-3">
+                <label class="form-label" for="rb-time">Time <small class="text-muted">(device local clock, 24h)</small></label>
+                <input type="time" class="form-control" id="rb-time" value="04:00" step="60">
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Days</label>
+                <div class="d-flex flex-wrap gap-1" id="rb-days">
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="sun" onclick="toggleRebootDay(this)">Sun</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="mon" onclick="toggleRebootDay(this)">Mon</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="tue" onclick="toggleRebootDay(this)">Tue</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="wed" onclick="toggleRebootDay(this)">Wed</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="thu" onclick="toggleRebootDay(this)">Thu</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="fri" onclick="toggleRebootDay(this)">Fri</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm rb-day" data-day="sat" onclick="toggleRebootDay(this)">Sat</button>
+                </div>
+              </div>
+            </div>
+            <div class="form-text mb-2" id="rb-next">Uses the OS clock. If the box is off at that time, it will not reboot when it next starts.</div>
+            <button class="btn btn-primary btn-sm" onclick="saveRebootSchedule()"><i class="bi bi-check-lg me-1"></i>Save Schedule</button>
+          </div>
+        </div>
       </div>
 
       <div class="col-lg-4">
@@ -831,7 +863,7 @@ function showPage(name, el) {
   document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
   if (name === 'settings') loadSettings();
-  if (name === 'system')   { loadSysInfo(); loadWatchdog(); }
+  if (name === 'system')   { loadSysInfo(); loadWatchdog(); loadRebootSchedule(); }
   if (name === 'ndi')      { loadSourceIPs().then(renderSrcList); loadPresets(); }
 }
 
@@ -1810,6 +1842,74 @@ async function sysReboot() {
   if (!confirm('Reboot the device?')) return;
   await post('/v1/System/reboot',{});
   toast('Rebooting…','warning');
+}
+
+// ══ Scheduled reboot ════════════════════════════════════════════
+function selectedRebootDays() {
+  return [...document.querySelectorAll('.rb-day.active')].map(b => b.dataset.day);
+}
+
+function setRebootDays(days) {
+  const set = new Set(days || []);
+  document.querySelectorAll('.rb-day').forEach(b => {
+    b.classList.toggle('active', set.has(b.dataset.day));
+  });
+}
+
+function toggleRebootDay(btn) {
+  btn.classList.toggle('active');
+}
+
+function toggleRebootSchedule() {
+  const on = !!document.getElementById('rb-enabled')?.checked;
+  const fields = document.getElementById('rb-fields');
+  if (fields) fields.style.opacity = on ? '1' : '.55';
+}
+
+function formatRebootNext(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
+
+async function loadRebootSchedule() {
+  try {
+    const d = await api('/v1/DeviceSettings/reboot-schedule');
+    const en = document.getElementById('rb-enabled');
+    if (en) en.checked = !!d.enabled;
+    setVal('rb-time', d.time || '04:00');
+    setRebootDays(d.days && d.days.length ? d.days : ['sun','mon','tue','wed','thu','fri','sat']);
+    toggleRebootSchedule();
+    const nextEl = document.getElementById('rb-next');
+    if (nextEl) {
+      const when = formatRebootNext(d.next);
+      nextEl.textContent = d.enabled && when
+        ? `Next reboot: ${when}. Uses the OS clock — set NTP if that should be accurate.`
+        : 'Uses the OS clock. If the box is off at that time, it will not reboot when it next starts.';
+    }
+  } catch {}
+}
+
+async function saveRebootSchedule() {
+  const enabled = !!document.getElementById('rb-enabled')?.checked;
+  let time = (document.getElementById('rb-time')?.value || '').trim();
+  if (/^\d{2}:\d{2}:\d{2}$/.test(time)) time = time.slice(0, 5);
+  const days = selectedRebootDays();
+  if (enabled && !days.length) { toast('Select at least one day', 'warning'); return; }
+  const daysOut = days.length ? days : ['sun','mon','tue','wed','thu','fri','sat'];
+  try {
+    const r = await post('/v1/DeviceSettings/reboot-schedule', { enabled, time, days: daysOut });
+    if (!r.ok) { toast(r.error || 'Save failed', 'danger'); return; }
+    const when = formatRebootNext(r.next);
+    toast(enabled ? (when ? `Scheduled — next ${when}` : 'Scheduled reboot saved') : 'Scheduled reboot off');
+    const nextEl = document.getElementById('rb-next');
+    if (nextEl) {
+      nextEl.textContent = enabled && when
+        ? `Next reboot: ${when}. Uses the OS clock — set NTP if that should be accurate.`
+        : 'Uses the OS clock. If the box is off at that time, it will not reboot when it next starts.';
+    }
+  } catch { toast('Save failed', 'danger'); }
 }
 
 // ══ NDI Group Tags ══════════════════════════════════════════════

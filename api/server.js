@@ -92,4 +92,7 @@ app.listen(PORT, () => {
     try { require('./routes/DeviceSettings').applySavedNtp(); } catch (e) {
         console.warn('[ntp] startup apply failed:', e.message);
     }
+    try { require('./routes/DeviceSettings').applySavedRebootSchedule(); } catch (e) {
+        console.warn('[reboot-schedule] startup apply failed:', e.message);
+    }
 });

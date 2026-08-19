@@ -189,4 +189,111 @@ router.post('/ntp', (req, res) => {
 });
 
 router.applySavedNtp = applySavedNtp;
+
+// Scheduled reboot — persisted in device settings, applied as a systemd
+// timer via ndimon-priv. Persistent=false so a missed window does not
+// reboot the box the next time it boots.
+const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const WEEKDAY_SYSTEMD = {
+    sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed',
+    thu: 'Thu', fri: 'Fri', sat: 'Sat',
+};
+
+function isValidRebootTime(t) {
+    return /^([01]\d|2[0-3]):[0-5]\d$/.test(String(t || ''));
+}
+
+function normalizeRebootDays(days) {
+    if (!Array.isArray(days)) return null;
+    const out = [];
+    for (const d of days) {
+        const k = String(d || '').toLowerCase().slice(0, 3);
+        if (!WEEKDAY_SYSTEMD[k]) return null;
+        if (!out.includes(k)) out.push(k);
+    }
+    return out.sort((a, b) => WEEKDAYS.indexOf(a) - WEEKDAYS.indexOf(b));
+}
+
+function readRebootSchedule(cfg) {
+    const days = normalizeRebootDays(cfg.reboot_schedule_days);
+    return {
+        enabled: !!cfg.reboot_schedule_enabled,
+        time: isValidRebootTime(cfg.reboot_schedule_time) ? cfg.reboot_schedule_time : '04:00',
+        days: days && days.length ? days : WEEKDAYS.slice(),
+    };
+}
+
+function applyOsRebootSchedule(sched, cb) {
+    const done = cb || (() => {});
+    if (!sched.enabled) {
+        return runPriv(['set-reboot-schedule', 'off'], { timeout: 15000 }, done);
+    }
+    const daysArg = sched.days.length === 7
+        ? 'daily'
+        : sched.days.map(d => WEEKDAY_SYSTEMD[d]).join(',');
+    runPriv(['set-reboot-schedule', 'on', sched.time, daysArg], { timeout: 15000 }, done);
+}
+
+function applySavedRebootSchedule() {
+    const sched = readRebootSchedule(readJson(DEVICE_SETTINGS));
+    applyOsRebootSchedule(sched, err => {
+        if (err) console.warn('[reboot-schedule] priv:', err.message);
+        else if (sched.enabled)
+            console.log('[reboot-schedule] timer', sched.time, sched.days.join(','));
+    });
+}
+
+function timerNextIso(cb) {
+    execFile('systemctl',
+        ['show', 'ndimon-scheduled-reboot.timer', '-p', 'NextElapseUSecRealtime', '--value'],
+        { timeout: 3000 }, (err, stdout) => {
+            if (err) return cb(null);
+            const raw = String(stdout).trim();
+            const usec = parseInt(raw, 10);
+            if (!Number.isFinite(usec) || usec <= 0) return cb(null);
+            cb(new Date(usec / 1000).toISOString());
+        });
+}
+
+// GET /reboot-schedule
+router.get('/reboot-schedule', (req, res) => {
+    const sched = readRebootSchedule(readJson(DEVICE_SETTINGS));
+    timerNextIso(next => {
+        res.json({ ...sched, next: sched.enabled ? next : null });
+    });
+});
+
+// POST /reboot-schedule  { enabled, time: "HH:MM", days: ["sun", ...] }
+router.post('/reboot-schedule', (req, res) => {
+    const body = req.body || {};
+    const enabled = !!body.enabled;
+    const time = String(body.time || '').trim();
+    if (!isValidRebootTime(time))
+        return res.status(400).json({ ok: false, error: 'time must be HH:MM (24h)' });
+    const days = normalizeRebootDays(body.days);
+    if (!days)
+        return res.status(400).json({ ok: false, error: 'days must be weekday names' });
+    if (enabled && days.length === 0)
+        return res.status(400).json({ ok: false, error: 'select at least one day' });
+
+    const cfg = readJson(DEVICE_SETTINGS);
+    cfg.reboot_schedule_enabled = enabled;
+    cfg.reboot_schedule_time = time;
+    cfg.reboot_schedule_days = days;
+    writeJson(DEVICE_SETTINGS, cfg);
+
+    const sched = readRebootSchedule(cfg);
+    applyOsRebootSchedule(sched, err => {
+        if (err) {
+            return res.status(500).json({
+                ok: false, error: err.message, ...sched,
+            });
+        }
+        timerNextIso(next => {
+            res.json({ ok: true, ...sched, next: sched.enabled ? next : null });
+        });
+    });
+});
+
+router.applySavedRebootSchedule = applySavedRebootSchedule;
 module.exports = router;

@@ -27,6 +27,73 @@ valid_ntp() {
     [[ "$s" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]
 }
 
+# Write or remove a systemd timer that reboots at a local wall-clock time.
+# enabled: on|off
+# time:    HH:MM (24h)
+# days:    daily  OR  comma-separated systemd weekday names (Sun,Mon,...)
+apply_reboot_schedule() {
+    local enabled="${1:-off}"
+    local time="${2:-}"
+    local days="${3:-}"
+    local svc=/etc/systemd/system/ndimon-scheduled-reboot.service
+    local tmr=/etc/systemd/system/ndimon-scheduled-reboot.timer
+
+    if [[ "$enabled" != "on" ]]; then
+        systemctl disable --now ndimon-scheduled-reboot.timer 2>/dev/null || true
+        rm -f "$svc" "$tmr"
+        systemctl daemon-reload
+        return 0
+    fi
+
+    [[ "$time" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || { echo "invalid time" >&2; exit 2; }
+    local hh="${time%%:*}"
+    local mm="${time##*:}"
+    local calendar
+    if [[ "$days" == "daily" ]]; then
+        calendar="*-*-* ${hh}:${mm}:00"
+    else
+        [[ -n "$days" ]] || { echo "no days" >&2; exit 2; }
+        local IFS=,
+        local d seen=" " cal_days=""
+        for d in $days; do
+            case "$d" in
+                Sun|Mon|Tue|Wed|Thu|Fri|Sat) ;;
+                *) echo "invalid day" >&2; exit 2 ;;
+            esac
+            [[ "$seen" == *" $d "* ]] && { echo "duplicate day" >&2; exit 2; }
+            seen+=" $d "
+            if [[ -n "$cal_days" ]]; then cal_days+=","; fi
+            cal_days+="$d"
+        done
+        calendar="${cal_days} *-*-* ${hh}:${mm}:00"
+    fi
+
+    cat > "$svc" <<'EOF'
+[Unit]
+Description=NDIMon-R scheduled reboot
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/reboot
+EOF
+
+    cat > "$tmr" <<EOF
+[Unit]
+Description=NDIMon-R scheduled reboot timer
+
+[Timer]
+OnCalendar=${calendar}
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now ndimon-scheduled-reboot.timer
+}
+
 apply_ntp() {
     local server="$1"
     local dropin_dir=/etc/systemd/timesyncd.conf.d
@@ -81,8 +148,11 @@ case "$cmd" in
         valid_ntp "$server" || { echo "invalid ntp host" >&2; exit 2; }
         apply_ntp "$server"
         ;;
+    set-reboot-schedule)
+        apply_reboot_schedule "${1:-off}" "${2:-}" "${3:-}"
+        ;;
     *)
-        echo "usage: ndimon-priv reboot|hostname <name>|restart-finder|restart-stack|restart-service <svc>|set-ntp [host]" >&2
+        echo "usage: ndimon-priv reboot|hostname <name>|restart-finder|restart-stack|restart-service <svc>|set-ntp [host]|set-reboot-schedule on|off [HH:MM] [daily|Sun,Mon,...]" >&2
         exit 2
         ;;
 esac

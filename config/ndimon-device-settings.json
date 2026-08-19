@@ -1,1 +1,1 @@
-{"mode":"decode","videooutput":"hdmi","AnalogAudioInGain":"50","AnalogAudioOutGain":"50","watchdog_mode":"active","ntp_server":""}
+{"mode":"decode","videooutput":"hdmi","AnalogAudioInGain":"50","AnalogAudioOutGain":"50","watchdog_mode":"active","ntp_server":"","reboot_schedule_enabled":false,"reboot_schedule_time":"04:00","reboot_schedule_days":["sun","mon","tue","wed","thu","fri","sat"]}

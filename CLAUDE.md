@@ -1,20 +1,27 @@
 # NDIMon-R
 
-ARM-powered NDI receiver appliance.
+Linux NDI receiver / HDMI decoder appliance (ARM and x86-64).
 
 ## What This Is
 
-A dedicated NDI (Network Device Interface) decoder for ARM single-board computers that receives live NDI video streams over the network, decodes them using hardware video decoders, and outputs to HDMI/DisplayPort via DRM/KMS. Includes ALSA audio output, a REST API, and NDI Discovery Server integration.
+A dedicated NDI decoder for single-board computers and mini-PCs. It receives live NDI streams, decodes them (hardware where available, FFmpeg otherwise), and outputs HDMI/DisplayPort via DRM/KMS. ALSA audio, a REST API / web UI, and NDI Discovery Server integration.
+
+User-facing install and feature docs: [README.md](README.md). NDI protocol notes: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md).
 
 ## Target Platforms
 
-**Primary (ARM):**
+**ARM:**
 - Rockchip: Rock 4B+, Rock 4C+, Rock 5B, Rock 5B+ (MPP hardware decoder)
-- Raspberry Pi: Pi 4, Pi 5 (V4L2 M2M hardware decoder)
+- Raspberry Pi 4 (V4L2 M2M H.264; HEVC is FFmpeg — Pi HEVC is stateless)
+- Raspberry Pi 5 (FFmpeg for HX — no H.264 HW block)
 - Generic aarch64 with NEON (FFmpeg software fallback)
 
-**Secondary (planned):**
-- Linux x86/x64
+**x86-64:**
+- Intel NUC / mini-PC (VAAPI iHD/i965)
+- AMD with Mesa VAAPI
+- NVIDIA Linux: FFmpeg only (VAAPI skipped; no NVDEC yet)
+
+Build **on the target**. Do not cross-compile from Windows/macOS.
 
 ## Architecture
 
@@ -30,12 +37,12 @@ NDI Network -> [NDIReceiver] -> [VideoDecoder] -> [DRMDisplay] -> HDMI/DP
 - `ndimon-r` — C++ decoder core (root; DRM master)
 - `ndimon-finder` — NDI source discovery as user `ndimon` (writes /etc/ndimon-sources.json)
 - `ndimon-api` — Node.js Express REST API on port 80 as user `ndimon`
-- `ndimon-watchdog` — polls `/api/health`; optional reconnect when `watchdog_mode=active`
+- `ndimon-watchdog` — polls `/api/health`; reconnects stalled outputs when `watchdog_mode=active` (default on new installs)
 
 ## Build
 
 ```bash
-# On target machine (ARM):
+# On the target (ARM or x86-64), prefer: sudo bash install.sh
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
@@ -43,14 +50,15 @@ make -j$(nproc)
 # Artifacts: ndimon-r, ndimon-finder
 ```
 
-**Do not build locally.** Building and testing happens on remote ARM machines.
+**Do not build on a Windows/macOS laptop.** Building and testing happens on the appliance.
 
 **CMake options:**
 - `ENABLE_MPP=ON/OFF` — Rockchip MPP hardware decoder
-- `ENABLE_V4L2=ON/OFF` — V4L2 M2M decoder (RPi)
+- `ENABLE_V4L2=ON/OFF` — V4L2 M2M decoder (Pi 4)
 - `ENABLE_FFMPEG=ON/OFF` — FFmpeg software fallback
+- `ENABLE_VAAPI=ON/OFF` — Intel/AMD VAAPI (x86-64)
 
-**Dependencies:** NDI SDK 6 (`/usr/local/lib/libndi.so`), libdrm, ALSA, Avahi, nlohmann_json (auto-fetched). Optional: Rockchip MPP, FFmpeg.
+**Dependencies:** NDI SDK 6 (`/usr/local/lib/libndi.so`), libdrm, ALSA, Avahi, nlohmann_json (auto-fetched). Optional: Rockchip MPP, FFmpeg, libva.
 
 ## Code Layout
 
@@ -61,7 +69,8 @@ src/
   NDIReceiver.h/cpp  — NDI SDK wrapper (find, recv, tally, routing, advertiser)
   VideoDecoder.h/cpp — Abstract decoder + factory (create() selects best)
   MppDecoder.h/cpp   — Rockchip MPP (H.264/H.265, DMA-BUF zero-copy)
-  V4L2Decoder.h/cpp  — V4L2 M2M (RPi BCM2835, DMA-BUF export)
+  V4L2Decoder.h/cpp  — V4L2 M2M (Pi 4 BCM, DMA-BUF export)
+  VAAPIDecoder.h/cpp — Intel/AMD VAAPI (x86, DRM PRIME)
   SoftwareDecoder.h/cpp — FFmpeg libavcodec fallback
   DRMDisplay.h/cpp   — DRM/KMS display (scaling, splash, OSD, NEON color conversion)
   AlsaAudio.h/cpp    — ALSA PCM output (planar float -> S16LE)
@@ -73,7 +82,7 @@ api/
   server.js          — Express.js REST API
   routes/            — Route modules (NDIDecode, NDIFinder, VideoOutput, etc.)
 config/              — Default JSON config templates
-scripts/             — build.sh, install.sh, setup-deps.sh, deploy.sh
+scripts/             — build.sh, install.sh, setup-deps.sh, update.sh, status.sh
 systemd/             — Service files
 ```
 
@@ -169,7 +178,7 @@ The receiver auto-detects stream type from the first video frame and uses the op
 **HX NDI (H.264/H.265 compressed):**
 - HX passthrough delivers compressed bitstream (no SDK decode)
 - `capture_v3` push model — every compressed frame matters (no dropping)
-- Video: compressed frame → VideoDecoder (MPP/V4L2/Software) → DMA-BUF → DRM
+- Video: compressed frame → VideoDecoder (MPP/V4L2/VAAPI/Software) → DMA-BUF → DRM
 - Audio: planar float from `capture_v3` → ALSA
 
 Stream type is reported in worker status as `stream_type: "Standard" | "HX" | "unknown"`.
@@ -179,7 +188,7 @@ Stream type is reported in worker status as `stream_type: "Standard" | "HX" | "u
 - `ndimon-dec1-settings.json` — audio, screensaver, tally, color space, source
 - `ndimon-rx-settings.json` — transport mode (TCP/UDP/Multicast/M-TCP/RUDP)
 - `ndimon-find-settings.json` — discovery server IP (enabled when IP is non-empty)
-- `ndimon-device-settings.json` — device name, NDI receiver alias
+- `ndimon-device-settings.json` — device alias, `watchdog_mode`, `ntp_server`, `decode_mode`, scheduled reboot (`reboot_schedule_enabled` / `_time` / `_days`)
 - `ndi-config.json` — off-subnet source IPs
 - `ndi-group.json` — NDI groups (case-sensitive)
 - `ndimon-splash-settings.json` — splash screen appearance
@@ -221,19 +230,23 @@ derives the enabled state from the IP to eliminate toggle desync bugs.
 both must emit identical keys). The SDK only reads transport settings at recv
 creation, so a change rewrites the config and calls
 `NDIReceiver::reload_transport()` → `recreate_recv_preserving_source()` to
-destroy/recreate the recv instance and reconnect. RUDP is the SDK default;
-Multicast also requires the sender to be multicasting.
+destroy/recreate the recv instance and reconnect. New installs ship `Rxpm=TCP`
+(UI default). RUDP is the NDI SDK’s own default if selected. Multicast also
+requires the sender to be multicasting.
 
 ### Authentication
 
 `api/auth.js` guards all `/v1/*` and `/api/*` routes (session cookie or
 `Authorization: Bearer`). Password hash (scrypt) lives in `/etc/ndimon-auth.json`;
-default password is `ndimon` until changed (UI shows a warning banner). Only
-loopback `GET /api/health` skips auth (watchdog). CORS allow-all was removed —
-the API is same-origin only, plus an Origin/Host check on mutating requests.
-`POST /v1/System/reboot` (GET removed). All hand-built JSON config writes escape
-interpolated strings; privileged OS actions go through `/usr/local/sbin/ndimon-priv`
-(sudoers, no shell). NTP host is `ntp_server` in device settings.
+default password is `ndimon` until changed (UI shows a warning banner). Exempt:
+`POST /api/login`, `GET /api/auth-status`. Loopback-only unauthenticated:
+`GET /api/health` (watchdog). CORS allow-all was removed — the API is same-origin
+only, plus an Origin/Host check on mutating requests. `POST /v1/System/reboot`
+(GET removed). All hand-built JSON config writes escape interpolated strings;
+privileged OS actions go through `/usr/local/sbin/ndimon-priv` (sudoers, no shell).
+NTP host is `ntp_server` in device settings. Scheduled reboot is
+`reboot_schedule_*` in the same file; `ndimon-priv set-reboot-schedule` writes
+`ndimon-scheduled-reboot.timer` (`Persistent=false`).
 
 ### Source Presets & Software Update
 

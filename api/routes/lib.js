@@ -135,7 +135,8 @@ function runPriv(args, opts, cb) {
                                  'ndimon-api.service', 'ndimon-watchdog.service']);
     if (cmd === 'restart-service')
         return run('systemctl', ['restart', `${rest[0]}.service`]);
-    if (cmd === 'set-ntp') return done(new Error('ndimon-priv not installed'));
+    if (cmd === 'set-ntp' || cmd === 'set-reboot-schedule')
+        return done(new Error('ndimon-priv not installed'));
     return done(new Error('unknown priv command'));
 }
 

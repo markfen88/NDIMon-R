@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # NDIMon-R — One-command installer
-# Usage: bash install.sh [--no-deps] [--no-build]
+# Usage: sudo bash install.sh [--no-deps] [--no-build]
 #
 # Options:
 #   --no-deps   Skip dependency installation (already installed)
