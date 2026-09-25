@@ -122,6 +122,7 @@ public:
 
 private:
     struct Rect { uint32_t x = 0, y = 0, w = 0, h = 0; };
+    enum class CommitResult { Failed, Dropped, Ok };
 
     bool setup_crtc(const std::string& connector_name,
                     const std::string& preferred_mode);
@@ -132,12 +133,13 @@ private:
     // Commit a framebuffer: SetCrtc on first call, PageFlip thereafter
     bool commit_fb(uint32_t fb_id);
     // Atomic commit with plane SRC/CRTC rects for zero-copy DMA-BUF scaling
-    bool atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst);
+    CommitResult atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst);
     void wait_for_flip();
     static void flip_handler(int fd, unsigned seq,
                              unsigned tv_sec, unsigned tv_usec, void* user);
 
     Rect compute_dst_rect(uint32_t src_w, uint32_t src_h) const;
+    Rect compute_src_rect(uint32_t src_w, uint32_t src_h) const;
 
     void fill_bg(DRMBuffer& buf);   // fill with black respecting scale mode
 
@@ -145,7 +147,9 @@ private:
     void sw_nv12_to_xrgb(const uint8_t* src,
                          uint32_t src_w, uint32_t src_h, uint32_t src_stride,
                          uint8_t* dst, uint32_t dst_stride,
-                         const Rect& dr, uint32_t out_w, uint32_t out_h);
+                         const Rect& dr, uint32_t out_w, uint32_t out_h,
+                         uint32_t crop_x = 0, uint32_t crop_y = 0,
+                         uint32_t full_h = 0);
     void sw_uyvy_to_xrgb(const uint8_t* src,
                          uint32_t src_w, uint32_t src_h, uint32_t src_stride,
                          uint8_t* dst, uint32_t dst_stride,

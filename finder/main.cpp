@@ -372,11 +372,15 @@ static void run_continuous() {
         // the next finder call, so we must not retain them across iterations.
         std::vector<SrcEntry> current = copy_sources(sources, count);
 
-        // Check if list changed (by name)
+        // Name or address. A sender can keep its NDI name and change IP.
         bool changed = (current.size() != last_list.size());
         if (!changed) {
             for (size_t i = 0; i < current.size(); i++) {
-                if (current[i].name != last_list[i].name) { changed = true; break; }
+                if (current[i].name != last_list[i].name ||
+                    current[i].ip != last_list[i].ip) {
+                    changed = true;
+                    break;
+                }
             }
         }
 

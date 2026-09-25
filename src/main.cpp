@@ -486,15 +486,7 @@ public:
         display_running_ = false;
         frame_cv_.notify_all();
         if (display_thr_.joinable()) display_thr_.join();
-        {
-            std::lock_guard<std::mutex> lk(frame_mtx_);
-            while (!frame_queue_.empty()) {
-                auto& rf = frame_queue_.front();
-                if (rf.owns_ndi_frame && recv_)
-                    recv_->free_video(&rf.ndi_frame);
-                frame_queue_.pop();
-            }
-        }
+        drain_queued_frames();
 
         if (recv_) {
             recv_->disconnect();
@@ -610,6 +602,10 @@ public:
         oc.source_name = real_source ? name : "";
         oc.source_ip   = real_source ? ip   : "";
         cfg.set_output(ch_num_, oc);
+
+        // connect() has stopped the recv thread, so no new callback is in
+        // on_video. Drop frames from the previous source.
+        drain_queued_frames();
     }
 
     void disconnect_source() {
@@ -627,16 +623,9 @@ public:
             ev["drm_ready"] = drm_ready();
             ipc_->push_event(ev);
         }
-        // Drain any queued frames so display_loop doesn't re-set streaming_
-        {
-            std::lock_guard<std::mutex> lk(frame_mtx_);
-            while (!frame_queue_.empty()) {
-                auto& rf = frame_queue_.front();
-                if (rf.owns_ndi_frame && recv_)
-                    recv_->free_video(&rf.ndi_frame);
-                frame_queue_.pop();
-            }
-        }
+        // Drop both queues so a stale HX frame cannot put the old picture
+        // back up after splash. Saved source and the connection event stay.
+        drain_queued_frames();
         if (drm_) drm_->set_streaming(false);
         // Schedule splash render on main-loop tick() instead of blocking the
         // IPC thread — at 4K the software fill can take hundreds of ms.
@@ -727,7 +716,17 @@ public:
             std::cout << "[Worker" << ch_num_ << "] decode_mode '" << decode_mode_
                       << "' -> '" << cfg.device.decode_mode << "' — rebuilding decoder\n";
             decode_mode_ = cfg.device.decode_mode;
-            std::lock_guard<std::mutex> lk(decoder_mutex_);
+            std::queue<DecodedFrame> pending;
+            std::lock_guard<std::mutex> dk(decoder_mutex_);
+            {
+                std::lock_guard<std::mutex> fk(frame_mtx_);
+                pending.swap(hx_queue_);
+            }
+            while (!pending.empty()) {
+                DecodedFrame old = std::move(pending.front());
+                pending.pop();
+                if (decoder_) decoder_->release_frame(old);
+            }
             if (decoder_) { decoder_->flush(); decoder_->destroy(); decoder_.reset(); }
             decoder_ = VideoDecoder::create();
             if (decoder_) {
@@ -928,6 +927,11 @@ public:
         if (stall_count_ >= 60) return "stalled";
         if (stall_count_ > 0) return "degraded";
         return "ok";
+    }
+
+    // Redraw the splash after the address or the pending-network line changes.
+    void note_network_hint() {
+        if (!connected_.load()) splash_requested_ = true;
     }
 
     void tick() {
@@ -1333,12 +1337,15 @@ private:
         decoded_count_++;
         // Steal the frame so MPP/V4L2/FFmpeg drain does not release it when
         // this callback returns. Display thread renders then release_frame().
+        // decoder_mutex_ before frame_mtx_: reload_config's decode-mode
+        // branch uses the same order.
         DecodedFrame held = f;
         f.opaque = nullptr;
         f.fd = -1;
         f.data = nullptr;
         {
-            std::lock_guard<std::mutex> lk(frame_mtx_);
+            std::lock_guard<std::mutex> dk(decoder_mutex_);
+            std::lock_guard<std::mutex> fk(frame_mtx_);
             std::vector<DecodedFrame> dropped;
             while (hx_queue_.size() >= 2) {
                 dropped.push_back(std::move(hx_queue_.front()));
@@ -1440,17 +1447,30 @@ private:
                     recv_->free_video(&rf.ndi_frame);
             }
         }
-        std::lock_guard<std::mutex> lk(frame_mtx_);
-        while (!frame_queue_.empty()) {
-            auto& rf = frame_queue_.front();
+        drain_queued_frames();
+    }
+
+    void drain_queued_frames() {
+        std::queue<RawFrame> raw;
+        std::queue<DecodedFrame> hx;
+        {
+            std::lock_guard<std::mutex> dk(decoder_mutex_);
+            {
+                std::lock_guard<std::mutex> fk(frame_mtx_);
+                raw.swap(frame_queue_);
+                hx.swap(hx_queue_);
+            }
+            while (!hx.empty()) {
+                DecodedFrame f = std::move(hx.front());
+                hx.pop();
+                if (decoder_) decoder_->release_frame(f);
+            }
+        }
+        while (!raw.empty()) {
+            RawFrame& rf = raw.front();
             if (rf.owns_ndi_frame && recv_)
                 recv_->free_video(&rf.ndi_frame);
-            frame_queue_.pop();
-        }
-        while (!hx_queue_.empty()) {
-            auto f = std::move(hx_queue_.front());
-            hx_queue_.pop();
-            if (decoder_) decoder_->release_frame(f);
+            raw.pop();
         }
     }
 
@@ -1544,7 +1564,7 @@ int main(int argc, char* argv[]) {
 
     auto& cfg = Config::instance();
     cfg.load();
-    cfg.device.device_ip = get_primary_ip();
+    cfg.set_runtime_ip(get_primary_ip());
 
     // Set default NDI alias if not configured: "NDIMON-XXXX"
     if (cfg.device.ndi_recv_name.empty()) {
@@ -1868,8 +1888,28 @@ int main(int argc, char* argv[]) {
     // Config reload is now driven by explicit reload_config IPC commands from Node.js
     std::cout << "[NDIMon-R] Running. Ctrl+C to exit.\n";
 
+    std::string shown_ip = Config::instance().runtime_ip();
+    std::string shown_banner;
+    int hint_tick = 0;
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // The splash reads the address once per draw. Refresh it so a DHCP
+        // or restored address shows up without restarting the decoder.
+        if (++hint_tick >= 4) {
+            hint_tick = 0;
+            std::string ip = get_primary_ip();
+            std::string banner;
+            {
+                std::ifstream banner_file("/run/ndimon/net-pending");
+                if (banner_file) std::getline(banner_file, banner);
+            }
+            if (ip != shown_ip || banner != shown_banner) {
+                shown_ip = ip;
+                shown_banner = banner;
+                Config::instance().set_runtime_ip(ip);
+                for (auto& w : workers) w->note_network_hint();
+            }
+        }
         for (auto& w : workers) w->tick();
 #ifdef HAVE_SYSTEMD
         sd_notify(0, "WATCHDOG=1");

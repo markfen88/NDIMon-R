@@ -176,6 +176,16 @@ OutputConfig Config::get_output(int ch_num) const {
     return out;
 }
 
+void Config::set_runtime_ip(const std::string& ip) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    device.device_ip = ip;
+}
+
+std::string Config::runtime_ip() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return device.device_ip;
+}
+
 void Config::set_output(int ch_num, const OutputConfig& out) {
     std::lock_guard<std::mutex> lk(mutex_);
 

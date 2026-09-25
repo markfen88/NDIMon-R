@@ -55,16 +55,39 @@ function verifyPassword(password) {
            crypto.timingSafeEqual(candidate, expected);
 }
 
+function writeAuthFile(data) {
+    const tmp = AUTH_FILE + '.tmp';
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+        fs.writeSync(fd, JSON.stringify(data));
+        fs.fsyncSync(fd);
+    } finally {
+        fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, AUTH_FILE);
+}
+
 function setPassword(password) {
     const salt = crypto.randomBytes(16).toString('hex');
-    const data = {
+    writeAuthFile({
         salt,
         hash: hashPassword(password, salt),
         updated: new Date().toISOString(),
-    };
-    const tmp = AUTH_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-    fs.renameSync(tmp, AUTH_FILE);
+    });
+}
+
+function clearSessions() {
+    sessions.clear();
+}
+
+// Restore a previously exported scrypt record. Does not re-hash.
+function importPasswordHash(salt, hash) {
+    if (typeof salt !== 'string' || !/^[0-9a-f]{32}$/.test(salt))
+        throw new Error('invalid password salt');
+    if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash))
+        throw new Error('invalid password hash');
+    writeAuthFile({ salt, hash, updated: new Date().toISOString(), imported: true });
+    clearSessions();
 }
 
 function createSession() {
@@ -192,6 +215,10 @@ function installRoutes(app) {
         }
         try {
             setPassword(String(password));
+            sessions.clear();
+            const token = createSession();
+            res.setHeader('Set-Cookie',
+                `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
             res.json({ ok: true });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
@@ -199,4 +226,5 @@ function installRoutes(app) {
     });
 }
 
-module.exports = { middleware, installRoutes, isValidToken, tokenFromRequest };
+module.exports = { middleware, installRoutes, isValidToken, tokenFromRequest,
+                   clearSessions, importPasswordHash };

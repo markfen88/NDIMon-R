@@ -6,7 +6,7 @@ Linux NDI receiver / HDMI decoder appliance (ARM and x86-64).
 
 A dedicated NDI decoder for single-board computers and mini-PCs. It receives live NDI streams, decodes them (hardware where available, FFmpeg otherwise), and outputs HDMI/DisplayPort via DRM/KMS. ALSA audio, a REST API / web UI, and NDI Discovery Server integration.
 
-User-facing install and feature docs: [README.md](README.md). NDI protocol notes: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md).
+User-facing install, UI, and API docs for **1.1.1-beta** are [README.md](README.md). NDI protocol notes: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md).
 
 ## Target Platforms
 
@@ -209,6 +209,9 @@ Each config file has a single designated writer to prevent race conditions:
 | `ndimon-device-settings.json` | ndimon-api + ndimon-r (alias init) | both |
 | `ndimon-dec{N}-settings.json` | ndimon-api + ndimon-r (source/mode) | both |
 | `ndimon-sources.json` | ndimon-finder | ndimon-api |
+| Backup file (download) | ndimon-api | operator |
+| `/var/lib/ndimon/backups/` | ndimon-api | ndimon-api (undo) |
+| Wired network config | `ndimon-net` via `ndimon-priv` | ndimon-api |
 
 **Rules:**
 - C++ code must NOT write files owned by the API (no `Config::save()` — it was removed)
@@ -255,6 +258,24 @@ NTP host is `ntp_server` in device settings. Scheduled reboot is
 source+IP for instant switching (no rescan). `/v1/System/version` reports the
 installed version + git update availability (recorded `/etc/ndimon-source-dir`,
 `/etc/ndimon-build-commit`); `/v1/System/update` git-pulls + rebuilds detached.
+
+### Backup, restore, and wired network
+
+`/v1/Backup/*` exports and restores the `/etc` JSON the API already owns. It does
+**not** import `ndi-config.v1.json`. The decoder rewrites that file on startup
+(`write_ndi_sdk_config`), which keeps HX passthrough and transport keys intact.
+Groups stay case-sensitive. Discovery is enabled by a non-empty server address,
+not a separate flag. The device name is applied with `hostnamectl` only — never
+`machinename` in the SDK config.
+
+`/v1/Network/*` and `scripts/ndimon-net.py` (installed as
+`/usr/local/lib/ndimon/ndimon-net`, called only through `ndimon-priv`) read and
+write the primary wired interface. A change is staged, applied after the HTTP
+response, and rolled back by a systemd timer unless `POST /api/net-confirm`
+succeeds from the new address. `ndimon-net-boot.service` rolls back a pending
+change after reboot. Wi-Fi is out of scope. The splash address is a runtime value
+(`Config::runtime_ip`), refreshed from the main loop, plus a one-line banner from
+`/run/ndimon/net-pending` when a change is waiting.
 
 ## x86-64 Support (VAAPI decoder included)
 

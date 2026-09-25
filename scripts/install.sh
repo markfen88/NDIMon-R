@@ -33,9 +33,20 @@ if [ "$(id -u)" = "0" ]; then
         useradd --system --home /var/lib/ndimon --shell /usr/sbin/nologin --comment "NDIMon-R" ndimon
         echo "[install] Created system user ndimon"
     fi
-    mkdir -p /var/lib/ndimon/.ndi
+    mkdir -p /var/lib/ndimon/.ndi \
+             /var/lib/ndimon/net/pending \
+             /var/lib/ndimon/import \
+             /var/lib/ndimon/backups
     chown -R ndimon:ndimon /var/lib/ndimon
     chmod 2770 /var/lib/ndimon /var/lib/ndimon/.ndi
+    # The API stages network files here. pending/ holds the rollback snapshot
+    # and is root-only so the confirm token is not readable by the API user.
+    chown root:ndimon /var/lib/ndimon/net
+    chmod 0770 /var/lib/ndimon/net
+    chown root:root /var/lib/ndimon/net/pending
+    chmod 0700 /var/lib/ndimon/net/pending
+    chown ndimon:ndimon /var/lib/ndimon/import /var/lib/ndimon/backups
+    chmod 0700 /var/lib/ndimon/import /var/lib/ndimon/backups
     # Share one NDI config with the decoder (which is root but HOME is pinned here).
     if [ -f /root/.ndi/ndi-config.v1.json ] && [ ! -f /var/lib/ndimon/.ndi/ndi-config.v1.json ]; then
         cp /root/.ndi/ndi-config.v1.json /var/lib/ndimon/.ndi/
@@ -168,8 +179,13 @@ echo "[install] Installing watchdog script..."
 $SUDO mkdir -p "$API_INSTALL_DIR/scripts"
 $SUDO cp "$PROJECT_DIR/scripts/ndimon-watchdog.sh" "$API_INSTALL_DIR/scripts/"
 $SUDO chmod +x "$API_INSTALL_DIR/scripts/ndimon-watchdog.sh"
+$SUDO cp "$PROJECT_DIR/scripts/ndimon-update-run.sh" "$API_INSTALL_DIR/scripts/"
+$SUDO chmod +x "$API_INSTALL_DIR/scripts/ndimon-update-run.sh"
+$SUDO mkdir -p /usr/local/lib/ndimon
+$SUDO cp "$PROJECT_DIR/scripts/ndimon-net.py" /usr/local/lib/ndimon/ndimon-net
+$SUDO chmod 0755 /usr/local/lib/ndimon/ndimon-net
 
-$SYSTEMCTL enable ndimon-r ndimon-finder ndimon-api ndimon-watchdog
+$SYSTEMCTL enable ndimon-r ndimon-finder ndimon-api ndimon-watchdog ndimon-net-boot
 $SYSTEMCTL restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
 
 IP=$(hostname -I | awk '{print $1}')

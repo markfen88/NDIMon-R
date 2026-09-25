@@ -112,6 +112,19 @@
 
   .section-divider { border-color: var(--border); margin: 16px 0; }
 
+  .modal-content { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); }
+  .modal-header, .modal-footer { border-color: var(--border); }
+  .modal-title { font-size: 1rem; font-weight: 650; }
+  .restore-row { padding: 10px 12px; background: var(--bg-card2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+  .restore-row .form-text { margin-top: 4px; }
+  .net-panel { background: var(--bg-card2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .net-panel-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin-bottom: 4px; }
+  .net-confirm-url { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; word-break: break-all; user-select: all; }
+  .pending-banner { background: rgba(247,183,49,.1); border: 1px solid rgba(247,183,49,.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .result-ok { color: var(--live); }
+  .result-fail { color: var(--danger); }
+  .result-skip { color: var(--text-muted); }
+
   /* ─── Toast ─── */
   .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; }
 
@@ -258,7 +271,6 @@
                 <select class="form-select form-select-sm" id="tally-sel" onchange="saveTally()">
                   <option value="TallyOff">Off</option>
                   <option value="TallyOn">Program</option>
-                  <option value="VideoMode">Preview</option>
                 </select>
               </div>
             </div>
@@ -346,21 +358,6 @@
           <div class="card-header"><i class="bi bi-film"></i>Decoder</div>
           <div class="card-body">
             <div class="mb-3">
-              <label class="form-label">Screensaver Mode</label>
-              <select class="form-select" id="ss-sel">
-                <option value="BlackSS">Black Screen</option>
-                <option value="SplashSS">Splash Screen</option>
-                <option value="CaptureSS">Last Frame</option>
-              </select>
-            </div>
-            <div class="mb-3">
-              <label class="form-label">Color Space</label>
-              <select class="form-select" id="cs-sel">
-                <option value="YUV">YUV (Recommended)</option>
-                <option value="RGB">RGB</option>
-              </select>
-            </div>
-            <div class="mb-3">
               <label class="form-label">Transport Mode</label>
               <select class="form-select" id="tp-sel">
                 <option value="TCP">TCP (Default)</option>
@@ -432,6 +429,66 @@
             </div>
             <div class="mt-2"><button class="btn btn-primary btn-sm" onclick="changePassword()"><i class="bi bi-check-lg me-1"></i>Change Password</button>
               <span id="pw-msg" style="font-size:.8rem;margin-left:.5rem;color:var(--text-muted)"></span></div>
+          </div>
+        </div>
+
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-ethernet"></i>Network</div>
+          <div class="card-body">
+            <div id="net-pending-box" class="pending-banner" style="display:none">
+              <div class="d-flex justify-content-between align-items-start gap-2">
+                <div>
+                  <div class="fw-semibold">A network change is waiting to be confirmed</div>
+                  <div class="form-text mb-0" id="net-pending-text">It reverts on its own if you do not open the new address.</div>
+                </div>
+                <button class="btn btn-outline-warning btn-sm flex-shrink-0" onclick="resumeNetWait()">Show link</button>
+              </div>
+              <button class="btn btn-outline-danger btn-sm mt-2" onclick="cancelNetworkChange()">Cancel and revert</button>
+            </div>
+            <div class="row g-2 mb-3">
+              <div class="col-md-6">
+                <div class="net-panel mb-0">
+                  <div class="net-panel-title">Configured</div>
+                  <div class="stat-row"><span class="stat-label">Mode</span><span class="stat-val" id="net-cfg-mode">—</span></div>
+                  <div class="stat-row"><span class="stat-label">Address</span><span class="stat-val" id="net-cfg-addr">—</span></div>
+                  <div class="stat-row"><span class="stat-label">Gateway</span><span class="stat-val" id="net-cfg-gw">—</span></div>
+                  <div class="stat-row"><span class="stat-label">DNS</span><span class="stat-val" id="net-cfg-dns">—</span></div>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="net-panel mb-0">
+                  <div class="net-panel-title">Live</div>
+                  <div class="stat-row"><span class="stat-label">Address</span><span class="stat-val" id="net-live">—</span></div>
+                  <div class="stat-row"><span class="stat-label">Gateway</span><span class="stat-val" id="net-live-gw">—</span></div>
+                  <div class="stat-row"><span class="stat-label">DNS</span><span class="stat-val" id="net-live-dns">—</span></div>
+                  <div class="stat-row"><span class="stat-label">Interface</span><span class="stat-val" id="net-iface">—</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="form-text mb-2" id="net-note"></div>
+            <div class="mb-2">
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="net-mode" id="net-dhcp" value="dhcp" checked onchange="toggleNetStatic()">
+                <label class="form-check-label" for="net-dhcp">DHCP</label>
+              </div>
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="net-mode" id="net-static" value="static" onchange="toggleNetStatic()">
+                <label class="form-check-label" for="net-static">Static</label>
+              </div>
+            </div>
+            <div id="net-static-fields" style="display:none">
+              <div class="row g-2 mb-2">
+                <div class="col-8"><label class="form-label">Address</label><input class="form-control form-control-sm" id="net-addr" placeholder="192.168.1.50" autocomplete="off"></div>
+                <div class="col-4"><label class="form-label">Prefix</label><input type="number" class="form-control form-control-sm" id="net-prefix" placeholder="24" min="8" max="30" step="1"></div>
+              </div>
+              <div class="mb-2"><label class="form-label">Gateway</label><input class="form-control form-control-sm" id="net-gw" placeholder="192.168.1.1" autocomplete="off"></div>
+              <div class="mb-2"><label class="form-label">DNS</label><input class="form-control form-control-sm" id="net-dns" placeholder="1.1.1.1, 8.8.8.8" autocomplete="off"></div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <button class="btn btn-primary btn-sm" id="net-apply" onclick="applyNetworkCard()"><i class="bi bi-check-lg me-1"></i>Apply</button>
+              <span class="form-text mb-0" id="net-mgr"></span>
+            </div>
+            <div class="form-text mt-2">Wi-Fi is not changed. A new address reverts after about two minutes unless you confirm it from that address.</div>
           </div>
         </div>
 
@@ -610,9 +667,33 @@
             <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-val" id="sys-up">—</span></div>
           </div>
         </div>
+      </div>
 
-        <!-- Software Update -->
-        <div class="card mt-3">
+      <div class="col-lg-7">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-archive"></i>Backup &amp; Restore</div>
+          <div class="card-body">
+            <div class="form-check mb-2">
+              <input class="form-check-input" type="checkbox" id="bk-network" checked>
+              <label class="form-check-label" for="bk-network">Include network settings</label>
+            </div>
+            <div class="form-check mb-1">
+              <input class="form-check-input" type="checkbox" id="bk-password">
+              <label class="form-check-label" for="bk-password">Include admin password</label>
+            </div>
+            <div class="form-text mb-3">Only turn this on when you are restoring this same device. The password is never included unless you tick the box.</div>
+            <div class="d-flex flex-wrap gap-2">
+              <button class="btn btn-outline-secondary btn-sm" id="bk-dl-btn" onclick="downloadBackup()"><i class="bi bi-download me-1"></i>Download backup</button>
+              <button class="btn btn-outline-primary btn-sm" id="bk-up-btn" onclick="document.getElementById('bk-file').click()"><i class="bi bi-upload me-1"></i>Restore from file</button>
+              <input type="file" id="bk-file" accept=".json,application/json" hidden onchange="inspectBackup(this)">
+            </div>
+            <div class="mt-3" id="bk-snaps"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-5">
+        <div class="card mb-3">
           <div class="card-header"><i class="bi bi-arrow-up-circle"></i>Software Update</div>
           <div class="card-body">
             <div class="stat-row"><span class="stat-label">Update status</span><span class="stat-val" id="upd-status">—</span></div>
@@ -624,7 +705,7 @@
           </div>
         </div>
 
-        <div class="card mt-3">
+        <div class="card">
           <div class="card-header"><i class="bi bi-clock-history"></i>Scheduled Reboot</div>
           <div class="card-body">
             <div class="form-check form-switch mb-3">
@@ -683,7 +764,7 @@
         <div class="card mb-3">
           <div class="card-body">
             <div class="d-grid gap-2">
-              <button class="btn btn-outline-warning btn-sm" onclick="restartAllServices()"><i class="bi bi-arrow-counterclockwise me-1"></i>Restart All Services</button>
+              <button class="btn btn-outline-warning btn-sm" onclick="restartAllServices()"><i class="bi bi-arrow-counterclockwise me-1"></i>Restart Decoder and Finder</button>
               <button class="btn btn-outline-danger btn-sm" onclick="sysReboot()"><i class="bi bi-power me-1"></i>Reboot Device</button>
             </div>
           </div>
@@ -718,7 +799,7 @@
                   <option value="passive" selected>Passive (logging only)</option>
                   <option value="active">Active (auto-recover)</option>
                 </select>
-                <div class="form-text">Passive detects and logs issues. Active also takes corrective action (decoder restart, display reset, pipeline reconnect).</div>
+                <div class="form-text">Passive detects and logs issues. Active disconnects a stalled output. The API then reconnects the saved source. It does not restart the decoder process.</div>
               </div>
               <div class="col-md-8">
                 <div class="row g-2" id="wd-stats">
@@ -758,6 +839,80 @@
 
 </div>
 
+<div class="modal fade" id="bk-modal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title" id="bk-modal-title">Restore backup</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body" id="bk-summary"></div>
+      <div class="modal-footer" id="bk-modal-footer">
+        <button class="btn btn-secondary btn-sm" id="bk-cancel-btn" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="bk-restore-btn" onclick="confirmRestore()">Restore</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal fade" id="net-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Network settings differ</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body" id="net-modal-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-primary btn-sm" id="net-keep" onclick="finishRestore(false)">Keep current network settings</button>
+        <button class="btn btn-outline-warning btn-sm" id="net-use" onclick="finishRestore(true)">Use backup network settings</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal fade" id="net-apply-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Apply network settings</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body" id="net-apply-body"></div>
+      <div class="modal-footer">
+        <button class="btn btn-primary btn-sm" data-bs-dismiss="modal" id="net-apply-keep">Keep current</button>
+        <button class="btn btn-outline-warning btn-sm" id="net-apply-go" onclick="commitNetworkCard()">Apply new settings</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal fade" id="bk-undo-modal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Undo last restore</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p>Put settings back to how they were before the last restore?</p>
+        <p class="form-text mb-0">A network change will ask you to confirm again from the previous address.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-outline-warning btn-sm" id="bk-undo-go" onclick="commitUndo()">Undo restore</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal fade" id="net-wait" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Confirm the new address</h5></div>
+      <div class="modal-body">
+        <p id="net-wait-text"></p>
+        <div class="d-flex align-items-start gap-2 mb-2">
+          <a id="net-wait-link" class="net-confirm-url flex-grow-1" href="#"></a>
+          <button class="btn btn-outline-secondary btn-sm flex-shrink-0" type="button" onclick="copyNetWaitLink()"><i class="bi bi-clipboard me-1"></i>Copy</button>
+        </div>
+        <p class="form-text mb-0" id="net-wait-count"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-danger btn-sm" onclick="cancelNetworkChange()">Cancel and revert</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast-container">
   <div id="toast" class="toast align-items-center text-bg-success border-0" role="alert">
@@ -782,22 +937,32 @@ let toastInst;
 let sourceIPs = {}; // name → IP from NDI finder list
 
 document.addEventListener('DOMContentLoaded', async () => {
-  toastInst = new bootstrap.Toast(document.getElementById('toast'), { delay:2500 });
+  toastInst = new bootstrap.Toast(document.getElementById('toast'), { delay:4000 });
   await startApp();
 });
 
 // ══ Auth ════════════════════════════════════════════════════════
 let _booted = false;
 async function startApp() {
+  const netNote = await consumeNetConfirm();
   let st = {};
   try { st = await fetch('/api/auth-status').then(r => r.json()); } catch {}
-  if (st.auth_required && !st.logged_in) { showLogin(); return; }
+  if (st.auth_required && !st.logged_in) {
+    showLogin();
+    if (netNote) setText('login-err', netNote);
+    return;
+  }
+  if (netNote) setTimeout(() => toast(netNote, netNote.startsWith('Network settings confirmed') ? 'success' : 'warning', 8000), 400);
   hideLogin();
   if (st.default_password) document.getElementById('pw-warning').style.display = 'block';
-  if (_booted) return;
+  if (_booted) {
+    resumeNetWait(true);
+    return;
+  }
   _booted = true;
   initSSE();
   loadInitialData();
+  resumeNetWait(true);
 }
 
 function showLogin() {
@@ -849,10 +1014,13 @@ async function changePassword() {
 }
 
 // ══ Toast ═══════════════════════════════════════════════════════
-function toast(msg, type) {
+function toast(msg, type, ms) {
   const el = document.getElementById('toast');
   el.className = `toast align-items-center text-bg-${type||'success'} border-0`;
   document.getElementById('toast-msg').textContent = msg;
+  const delay = ms || ((type === 'danger' || type === 'warning') ? 7000 : 4000);
+  toastInst = bootstrap.Toast.getOrCreateInstance(el, { delay });
+  toastInst._config.delay = delay;
   toastInst.show();
 }
 
@@ -863,7 +1031,7 @@ function showPage(name, el) {
   document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
   if (name === 'settings') loadSettings();
-  if (name === 'system')   { loadSysInfo(); loadWatchdog(); loadRebootSchedule(); }
+  if (name === 'system')   { loadSysInfo(); loadWatchdog(); loadRebootSchedule(); loadSnapshots(); }
   if (name === 'ndi')      { loadSourceIPs().then(renderSrcList); loadPresets(); }
 }
 
@@ -1335,7 +1503,8 @@ function updateNDIState() {
     }).join('');
   }
   if (S.decoder) {
-    setVal('tally-sel', S.decoder.tally);
+    const tally = S.decoder.tally === 'TallyOn' ? 'TallyOn' : 'TallyOff';
+    setVal('tally-sel', tally);
     setVal('ndi-audio-sel', S.decoder.audio);
   }
   // Active HX decode backend hint (Decoder settings card)
@@ -1388,7 +1557,7 @@ function renderTemps(id) {
 
 // ══ Settings ════════════════════════════════════════════════════
 async function loadSettings() {
-  try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('ss-sel',d.ScreenSaverMode); setVal('cs-sel',d.ColorSpace); setVal('aud-sel',d.NDIAudio); } catch {}
+  try { const d=await api('/v1/NDIDecode/decodesetup'); setVal('aud-sel',d.NDIAudio); } catch {}
   try { const d=await api('/v1/NDIDecode/decodeTransport'); setVal('tp-sel',d.Rxpm); } catch {}
   try { const d=await api('/v1/DeviceSettings/decode-mode'); setVal('decode-mode-sel',d.decode_mode||'auto'); } catch {}
   try { const d=await api('/v1/NDIFinder/NDIDisServer'); setVal('disc-ip',d.NDIDisServIP||''); } catch {}
@@ -1407,6 +1576,7 @@ async function loadSettings() {
   try { const d=await api('/v1/DeviceSettings/ndi-alias'); setVal('ndi-alias',d.ndi_recv_name||''); } catch {}
   loadSplashSettings();
   loadOsd();
+  loadNetwork();
 }
 
 async function loadSplashSettings() {
@@ -1694,10 +1864,6 @@ async function saveAudioMode() {
 }
 
 async function saveDecoder() {
-  await post('/v1/NDIDecode/decodesetup',{
-    ScreenSaverMode: document.getElementById('ss-sel').value,
-    ColorSpace:      document.getElementById('cs-sel').value,
-  });
   await post('/v1/NDIDecode/decodeTransport',{Rxpm:document.getElementById('tp-sel').value});
   await post('/v1/DeviceSettings/decode-mode',{decode_mode:document.getElementById('decode-mode-sel').value});
   toast('Decoder settings saved');
@@ -1829,12 +1995,12 @@ async function restartService(name) {
 }
 
 async function restartAllServices() {
-  if (!confirm('Restart all NDI services?')) return;
-  toast('Restarting all services…', 'warning');
+  if (!confirm('Restart the decoder and finder? The web UI stays up.')) return;
+  toast('Restarting decoder and finder…', 'warning');
   for (const name of ['ndimon-finder', 'ndimon-r']) {
     try { await post(`/api/services/${name}/restart`, {}); } catch {}
   }
-  toast('Services restarted');
+  toast('Decoder and finder restarted');
   setTimeout(loadServices, 3000);
 }
 
@@ -1955,6 +2121,551 @@ document.addEventListener('DOMContentLoaded', () => {
   const inp = document.getElementById('ndi-grp-input');
   if (inp) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNdiGroup(); } });
 });
+
+// ══ Backup, restore, network ════════════════════════════════════
+const NET_PENDING_KEY = 'ndimon-net-pending';
+const SECTION_LABELS = {
+  outputs: 'Outputs and sources', presets: 'Source presets',
+  discovery: 'Discovery, groups, extra IPs', transport: 'Transport',
+  display: 'Splash and OSD', device: 'Decoder, watchdog, NTP, reboot schedule',
+  identity: 'Device name', auth: 'Admin password', network: 'Network',
+  services: 'Decoder restart',
+};
+let restorePlan = null;
+let netApplyBody = null;
+let undoName = '';
+let netTimer = null;
+let netPoll = null;
+
+function modalOf(id) { return bootstrap.Modal.getOrCreateInstance(document.getElementById(id)); }
+function hideModal(id) { bootstrap.Modal.getInstance(document.getElementById(id))?.hide(); }
+
+function setBusy(btn, on, label) {
+  if (!btn) return;
+  if (on) {
+    if (!btn.dataset.label) btn.dataset.label = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>${label || 'Working…'}`;
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.label) btn.innerHTML = btn.dataset.label;
+  }
+}
+
+function persistNetPending(info) {
+  if (!info || !info.token) { sessionStorage.removeItem(NET_PENDING_KEY); return; }
+  sessionStorage.setItem(NET_PENDING_KEY, JSON.stringify({
+    token: info.token,
+    address: info.address || '',
+    deadline: info.deadline || 0,
+    mode: info.mode || '',
+  }));
+}
+
+function readNetPending() {
+  try { return JSON.parse(sessionStorage.getItem(NET_PENDING_KEY) || 'null'); }
+  catch { return null; }
+}
+
+function clearNetPending() {
+  sessionStorage.removeItem(NET_PENDING_KEY);
+  clearInterval(netTimer);
+  clearInterval(netPoll);
+  netTimer = netPoll = null;
+}
+
+function restoreModalFooter(mode) {
+  const foot = document.getElementById('bk-modal-footer');
+  if (mode === 'result') {
+    foot.innerHTML = '<button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Close</button>'
+      + '<button class="btn btn-primary btn-sm" id="bk-result-net" style="display:none" onclick="resumeNetWait()">Confirm new address</button>';
+    return;
+  }
+  foot.innerHTML = '<button class="btn btn-secondary btn-sm" id="bk-cancel-btn" data-bs-dismiss="modal">Cancel</button>'
+    + '<button class="btn btn-primary btn-sm" id="bk-restore-btn" onclick="confirmRestore()">Restore</button>';
+}
+
+function syncRestoreButton() {
+  const btn = document.getElementById('bk-restore-btn');
+  if (!btn) return;
+  btn.disabled = !document.querySelector('#bk-summary input[type=checkbox]:checked');
+}
+
+async function consumeNetConfirm() {
+  if (!location.hash.startsWith('#netconfirm=')) return '';
+  const token = decodeURIComponent(location.hash.slice('#netconfirm='.length));
+  history.replaceState(null, '', location.pathname + location.search);
+  try {
+    const r = await fetch('/api/net-confirm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (j.ok || r.status === 410) clearNetPending();
+    return j.ok
+      ? 'Network settings confirmed.'
+      : (j.error || 'This confirmation has expired. The device has returned to its previous settings.');
+  } catch {
+    return 'Could not confirm the network change.';
+  }
+}
+
+async function downloadBackup() {
+  const btn = document.getElementById('bk-dl-btn');
+  setBusy(btn, true, 'Preparing…');
+  try {
+    const net = document.getElementById('bk-network').checked ? '1' : '0';
+    const pw = document.getElementById('bk-password').checked ? '1' : '0';
+    const r = await fetch(`/v1/Backup/export?network=${net}&password=${pw}`);
+    if (r.status === 401) { showLogin(); return; }
+    if (!r.ok) { toast('Could not build the backup', 'danger'); return; }
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const match = cd.match(/filename="([^"]+)"/);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = match ? match[1] : 'ndimon-backup.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch {
+    toast('Could not download the backup', 'danger');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+async function inspectBackup(input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  const btn = document.getElementById('bk-up-btn');
+  setBusy(btn, true, 'Reading backup…');
+  try {
+    let doc;
+    try { doc = JSON.parse(await file.text()); }
+    catch { toast('Not a valid backup file', 'danger'); return; }
+    const r = await fetch('/v1/Backup/inspect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(doc),
+    });
+    if (r.status === 401) { showLogin(); return; }
+    const plan = await r.json().catch(() => ({}));
+    if (!r.ok || !plan.ok) { toast(plan.error || 'Backup was rejected', 'danger'); return; }
+    restorePlan = plan;
+    const src = plan.source_device || {};
+    const app = plan.app || {};
+    const rows = (plan.sections || []).map(s => `
+      <div class="restore-row">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" value="${esc(s.key)}" id="bk-${esc(s.key)}" ${s.selected ? 'checked' : ''} onchange="syncRestoreButton()">
+          <label class="form-check-label" for="bk-${esc(s.key)}"><strong>${esc(s.label)}</strong>
+            <span class="badge ${s.changed ? 'bg-warning text-dark' : 'bg-secondary'} ms-1">${s.changed ? 'Changed' : 'Unchanged'}</span></label>
+        </div>
+        <div class="form-text" style="white-space:pre-wrap">${esc(s.summary || '')}</div>
+      </div>`).join('');
+    const net = plan.network || {};
+    const netLine = !net.present ? ''
+      : net.needs_prompt ? '<div class="alert alert-warning py-2 mb-3">Network settings differ. You will be asked before they are overwritten.</div>'
+      : net.applicable === false ? `<div class="alert alert-secondary py-2 mb-3">${esc(net.message || '')}</div>`
+      : '<div class="form-text mb-3">Network settings match. They will be left as they are.</div>';
+    const extra = (plan.extra_outputs || []).length
+      ? `<div class="form-text">Output ${esc(plan.extra_outputs.join(', '))} is in the file and will be stored. This device may not have that output.</div>` : '';
+    const when = plan.created_at ? new Date(plan.created_at).toLocaleString() : '';
+    restoreModalFooter('choose');
+    document.getElementById('bk-modal-title').textContent = 'Restore backup';
+    document.getElementById('bk-summary').innerHTML =
+      `<div class="mb-3">From <strong>${esc(src.ndi_alias || src.hostname || 'unknown device')}</strong>`
+      + (when ? ` · ${esc(when)}` : '')
+      + (app.firmware ? ` · firmware ${esc(app.firmware)}` : '')
+      + `</div>${netLine}${rows}${extra}`
+      + `<div class="form-text mt-3">NDI groups keep the case they were saved with. Leave Device name off when setting up a second receiver from this file. Restoring selected settings restarts the decoder for a few seconds.</div>`;
+    modalOf('bk-modal').show();
+    syncRestoreButton();
+  } catch {
+    toast('Could not read the backup', 'danger');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+function confirmRestore() {
+  if (!restorePlan) return;
+  restorePlan.chosen = [...document.querySelectorAll('#bk-summary input[type=checkbox]:checked')].map(el => el.value);
+  if (!restorePlan.chosen.length && !(restorePlan.network && restorePlan.network.needs_prompt)) {
+    toast('Choose at least one section to restore', 'warning');
+    return;
+  }
+  const net = restorePlan.network || {};
+  if (net.needs_prompt) {
+    const warns = (net.warnings || []).map(w => `<div class="alert alert-warning py-2">${esc(w)}</div>`).join('');
+    const ack = net.duplicate
+      ? `<div class="form-check mt-2"><input class="form-check-input" type="checkbox" id="net-ack" onchange="document.getElementById('net-use').disabled=!this.checked"><label class="form-check-label" for="net-ack">I understand another device is using this address</label></div>`
+      : '';
+    document.getElementById('net-modal-body').innerHTML = `<p>${esc(net.message || '')}</p>${warns}${ack}`;
+    const use = document.getElementById('net-use');
+    use.disabled = !!net.duplicate;
+    hideModal('bk-modal');
+    modalOf('net-modal').show();
+    setTimeout(() => document.getElementById('net-keep')?.focus(), 200);
+    return;
+  }
+  finishRestore(false);
+}
+
+function resultRows(results) {
+  return Object.entries(results || {}).map(([key, v]) => {
+    const label = SECTION_LABELS[key] || key;
+    if (v && v.ok === false)
+      return `<div class="restore-row"><span class="result-fail">Failed</span> · ${esc(label)} — ${esc(v.error || 'error')}</div>`;
+    if (v && v.skipped)
+      return `<div class="restore-row"><span class="result-skip">Skipped</span> · ${esc(label)} — ${esc(v.skipped)}</div>`;
+    const extra = v && v.warning ? ` — ${esc(v.warning)}` : (v && v.pending ? ' — waiting for address confirmation' : '');
+    return `<div class="restore-row"><span class="result-ok">Restored</span> · ${esc(label)}${extra}</div>`;
+  }).join('');
+}
+
+function showRestoreResult(out, title) {
+  restoreModalFooter('result');
+  document.getElementById('bk-modal-title').textContent = title || 'Restore complete';
+  const failed = Object.entries(out.results || {}).some(([, v]) => v && v.ok === false);
+  document.getElementById('bk-summary').innerHTML =
+    (failed
+      ? '<div class="alert alert-warning py-2">Restored, with a problem in one or more sections.</div>'
+      : '<div class="alert alert-success py-2">Settings restored.</div>')
+    + resultRows(out.results)
+    + (out.noop ? '<div class="form-text">Nothing was selected, so the decoder was left running.</div>' : '');
+  const netBtn = document.getElementById('bk-result-net');
+  if (netBtn && out.network && out.network.token) netBtn.style.display = '';
+  modalOf('bk-modal').show();
+}
+
+function refreshAfterRestore() {
+  loadSnapshots();
+  loadSysInfo();
+  try { loadSettings(); } catch {}
+}
+
+async function finishRestore(applyNetwork) {
+  if (!restorePlan) return;
+  if (!(restorePlan.chosen || []).length && !applyNetwork) {
+    hideModal('net-modal');
+    toast('Nothing to restore', 'warning');
+    return;
+  }
+  hideModal('net-modal');
+  const btn = document.getElementById('bk-restore-btn');
+  setBusy(btn, true, 'Restoring…');
+  document.getElementById('bk-modal-title').textContent = 'Restoring…';
+  document.getElementById('bk-summary').innerHTML =
+    '<p>Writing settings. The picture goes to the splash screen for a few seconds if the decoder needs to restart.</p>';
+  modalOf('bk-modal').show();
+  try {
+    const r = await fetch('/v1/Backup/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        import_id: restorePlan.import_id,
+        sections: restorePlan.chosen || [],
+        apply_network: !!applyNetwork,
+      }),
+    });
+    if (r.status === 401) { showLogin(); return; }
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.ok) { toast(out.error || 'Restore failed', 'danger'); hideModal('bk-modal'); return; }
+    showRestoreResult(out);
+    if (out.network && out.network.token) persistNetPending(out.network);
+    refreshAfterRestore();
+    if (out.relogin) showLogin();
+  } catch {
+    toast('Restore failed', 'danger');
+    hideModal('bk-modal');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+function netConfirmHref(info) {
+  if (!info || !info.token) return '';
+  const port = location.port ? ':' + location.port : '';
+  if (info.address)
+    return `${location.protocol}//${info.address}${port}/#netconfirm=${info.token}`;
+  return `${location.origin}/#netconfirm=${info.token}`;
+}
+
+function renderNetWait(info) {
+  const text = document.getElementById('net-wait-text');
+  const link = document.getElementById('net-wait-link');
+  const href = netConfirmHref(info);
+  if (info.address) {
+    text.textContent = 'Open this address from a computer that can reach it. The change reverts on its own if you do not.';
+    link.href = href;
+    link.textContent = href;
+  } else {
+    text.textContent = 'The new address will appear on the connected display. When it does, this link updates. You can also copy it and replace the host with the address on the screen.';
+    link.removeAttribute('href');
+    link.textContent = href || (`/#netconfirm=${info.token || ''}`);
+  }
+}
+
+function showNetWait(info) {
+  persistNetPending(info);
+  renderNetWait(info);
+  const deadline = (info.deadline || 0) * 1000;
+  clearInterval(netTimer);
+  clearInterval(netPoll);
+  const tick = () => {
+    const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+    const el = document.getElementById('net-wait-count');
+    if (el) el.textContent = left ? `Reverts in ${left}s if not confirmed.` : 'The change is reverting.';
+    if (!left) {
+      clearInterval(netTimer);
+      clearInterval(netPoll);
+    }
+  };
+  tick();
+  netTimer = setInterval(tick, 1000);
+  netPoll = setInterval(async () => {
+    try {
+      const n = await api('/v1/Network/status');
+      if (!n.pending) {
+        clearNetPending();
+        hideModal('net-wait');
+        toast('The pending network change has ended. Check the address on this page.', 'warning', 8000);
+        loadNetwork();
+        return;
+      }
+      const live = n.live_address || '';
+      if (live && live !== info.address) {
+        info.address = live;
+        persistNetPending(info);
+        renderNetWait(info);
+      }
+    } catch {}
+  }, 2000);
+  hideModal('bk-modal');
+  modalOf('net-wait').show();
+}
+
+async function resumeNetWait(quiet) {
+  let info = readNetPending();
+  try {
+    const n = await api('/v1/Network/status');
+    if (!n.pending) {
+      clearNetPending();
+      if (!quiet) toast('No network change is waiting', 'warning');
+      loadNetwork();
+      return;
+    }
+    const p = n.pending_info || {};
+    info = {
+      token: (info && info.token) || p.token,
+      address: p.address || (info && info.address) || n.live_address || '',
+      deadline: p.deadline || (info && info.deadline) || 0,
+      mode: p.mode || (info && info.mode) || '',
+    };
+  } catch {
+    if (!info || !info.token) {
+      if (!quiet) toast('Could not load the pending network change', 'danger');
+      return;
+    }
+  }
+  if (!info.token) {
+    if (!quiet) toast('The confirmation link is no longer available. Cancel from the Network card if you need to revert.', 'warning', 8000);
+    return;
+  }
+  showNetWait(info);
+}
+
+function copyNetWaitLink() {
+  const link = document.getElementById('net-wait-link');
+  const text = (link && (link.href && link.href !== location.href + '#' ? link.href : link.textContent)) || '';
+  if (!text) return;
+  const done = () => toast('Link copied');
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(text).then(done).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch { toast('Could not copy the link', 'danger'); }
+      ta.remove();
+    });
+}
+
+async function cancelNetworkChange() {
+  clearInterval(netTimer);
+  clearInterval(netPoll);
+  try {
+    const r = await fetch('/v1/Network/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (r.status === 401) { showLogin(); return; }
+  } catch {}
+  clearNetPending();
+  hideModal('net-wait');
+  toast('Network change reverted', 'warning');
+  loadNetwork();
+}
+
+async function loadSnapshots() {
+  const box = document.getElementById('bk-snaps');
+  if (!box) return;
+  try {
+    const d = await api('/v1/Backup/snapshots');
+    const snaps = d.snapshots || [];
+    if (!snaps.length) { box.innerHTML = ''; return; }
+    const newest = snaps[0];
+    const when = newest.mtime ? new Date(newest.mtime).toLocaleString() : '';
+    box.innerHTML = `<button class="btn btn-outline-warning btn-sm" onclick="askUndo('${esc(newest.name, true)}')">Undo last restore</button>`
+      + `<div class="form-text mt-1">${esc(when)}</div>`;
+  } catch {}
+}
+
+function askUndo(name) {
+  undoName = name;
+  modalOf('bk-undo-modal').show();
+}
+
+async function commitUndo() {
+  const btn = document.getElementById('bk-undo-go');
+  setBusy(btn, true, 'Restoring…');
+  try {
+    const r = await fetch('/v1/Backup/undo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: undoName }),
+    });
+    if (r.status === 401) { showLogin(); return; }
+    const out = await r.json().catch(() => ({}));
+    hideModal('bk-undo-modal');
+    if (!r.ok || !out.ok) { toast(out.error || 'Undo failed', 'danger'); return; }
+    showRestoreResult(out, 'Previous settings restored');
+    if (out.network && out.network.token) persistNetPending(out.network);
+    refreshAfterRestore();
+    if (out.relogin) showLogin();
+  } catch {
+    toast('Undo failed', 'danger');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+function toggleNetStatic() {
+  const on = document.getElementById('net-static').checked;
+  document.getElementById('net-static-fields').style.display = on ? '' : 'none';
+}
+
+function fmtAddr(addr, prefix) {
+  if (!addr) return '—';
+  return prefix ? `${addr}/${prefix}` : addr;
+}
+
+function fmtList(list) {
+  return (list && list.length) ? list.join(', ') : '—';
+}
+
+async function loadNetwork() {
+  const note = document.getElementById('net-note');
+  if (!note) return;
+  try {
+    const n = await api('/v1/Network/status');
+    const dhcp = (n.mode || 'dhcp') !== 'static';
+    setText('net-cfg-mode', dhcp ? 'DHCP' : 'Static');
+    setText('net-cfg-addr', dhcp ? 'From DHCP' : fmtAddr(n.address, n.prefix));
+    setText('net-cfg-gw', dhcp ? 'From DHCP' : (n.gateway || '—'));
+    setText('net-cfg-dns', dhcp ? 'From DHCP' : fmtList(n.dns));
+    setText('net-live', fmtAddr(n.live_address, n.live_prefix));
+    setText('net-live-gw', n.live_gateway || '—');
+    setText('net-live-dns', fmtList(n.live_dns));
+    setText('net-iface', n.interface || '—');
+    setText('net-mgr', n.backend ? `Managed by ${n.backend}` : '');
+    document.getElementById('net-dhcp').checked = dhcp;
+    document.getElementById('net-static').checked = !dhcp;
+    setVal('net-addr', n.address || '');
+    setVal('net-prefix', n.prefix || 24);
+    setVal('net-gw', n.gateway || '');
+    setVal('net-dns', (n.dns || []).join(', '));
+    toggleNetStatic();
+    const apply = document.getElementById('net-apply');
+    const pendingBox = document.getElementById('net-pending-box');
+    const blocked = n.applicable === false || !!n.pending;
+    apply.disabled = blocked;
+    pendingBox.style.display = n.pending ? '' : 'none';
+    if (n.pending) {
+      const p = n.pending_info || readNetPending() || {};
+      persistNetPending({
+        token: p.token || (readNetPending() || {}).token,
+        address: p.address || n.live_address || '',
+        deadline: p.deadline || 0,
+        mode: p.mode || '',
+      });
+      const left = p.deadline ? Math.max(0, Math.round((p.deadline * 1000 - Date.now()) / 1000)) : 0;
+      document.getElementById('net-pending-text').textContent = left
+        ? `Reverts in ${left}s if not confirmed.`
+        : 'It reverts on its own if you do not open the new address.';
+    }
+    note.textContent = n.applicable === false
+      ? (n.reason || 'Network settings cannot be changed on this system.')
+      : '';
+  } catch {
+    note.textContent = 'Network status is unavailable.';
+  }
+}
+
+function collectNetworkBody() {
+  const mode = document.getElementById('net-static').checked ? 'static' : 'dhcp';
+  const body = { mode };
+  if (mode === 'static') {
+    body.address = document.getElementById('net-addr').value.trim();
+    body.prefix = Number(document.getElementById('net-prefix').value);
+    body.gateway = document.getElementById('net-gw').value.trim();
+    body.dns = document.getElementById('net-dns').value.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return body;
+}
+
+async function applyNetworkCard() {
+  const btn = document.getElementById('net-apply');
+  setBusy(btn, true, 'Checking…');
+  try {
+    const body = Object.assign({ dry_run: true }, collectNetworkBody());
+    const preview = await fetch('/v1/Network/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).then(handle401).then(r => r.json());
+    if (preview.error && preview.ok === false) { toast(preview.error, 'danger'); return; }
+    if (!preview.needs_prompt && !preview.message) { toast('Network settings already match'); return; }
+    netApplyBody = collectNetworkBody();
+    const warns = (preview.warnings || []).map(w => `<div class="alert alert-warning py-2">${esc(w)}</div>`).join('');
+    const ack = preview.duplicate
+      ? `<div class="form-check mt-2"><input class="form-check-input" type="checkbox" id="net-apply-ack" onchange="document.getElementById('net-apply-go').disabled=!this.checked"><label class="form-check-label" for="net-apply-ack">I understand another device is using this address</label></div>`
+      : '';
+    document.getElementById('net-apply-body').innerHTML =
+      `<p>${esc(preview.message || 'Apply this network change? It reverts unless you confirm it from the new address.')}</p>${warns}${ack}`;
+    document.getElementById('net-apply-go').disabled = !!preview.duplicate;
+    modalOf('net-apply-modal').show();
+    setTimeout(() => document.getElementById('net-apply-keep')?.focus(), 200);
+  } catch (e) {
+    if (e && e.message === 'unauthorized') return;
+    toast('Could not check the network change', 'danger');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+async function commitNetworkCard() {
+  if (!netApplyBody) return;
+  const btn = document.getElementById('net-apply-go');
+  setBusy(btn, true, 'Applying…');
+  try {
+    const result = await fetch('/v1/Network/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(netApplyBody),
+    }).then(handle401).then(r => r.json());
+    hideModal('net-apply-modal');
+    if (result.token) showNetWait(result);
+    else if (result.unchanged) toast('Network settings already match');
+    else toast(result.error || 'Could not apply the network change', 'danger');
+    loadNetwork();
+  } catch (e) {
+    if (e && e.message === 'unauthorized') return;
+    toast('Could not apply the network change', 'danger');
+  } finally {
+    setBusy(btn, false);
+  }
+}
 
 // ══ Helpers ══════════════════════════════════════════════════════
 function handle401(r) { if (r.status === 401) { showLogin(); throw new Error('unauthorized'); } return r; }

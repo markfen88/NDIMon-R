@@ -1119,7 +1119,12 @@ bool DRMDisplay::commit_fb(uint32_t fb_id) {
     if (plane_id_ && (rotation_drm_ != 1 || atomic_plane_state_ == 1)) {
         Rect full_src = {0, 0, width_, height_};
         Rect full_dst = {0, 0, width_, height_};
-        return atomic_plane_commit(fb_id, full_src, full_dst);
+        switch (atomic_plane_commit(fb_id, full_src, full_dst)) {
+            case CommitResult::Ok:      return true;
+            case CommitResult::Dropped: return false;
+            case CommitResult::Failed:  return false;
+        }
+        return false;
     }
 
     if (!crtc_active_) {
@@ -1184,18 +1189,18 @@ static uint32_t get_prop_id(int fd, uint32_t obj_id, uint32_t obj_type, const ch
     return id;
 }
 
-bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst) {
-    if (!plane_id_) return false;
+DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst) {
+    if (!plane_id_) return CommitResult::Failed;
 
     if (!prop_plane_fb_id_ || !prop_plane_crtc_id_ || !prop_plane_src_x_ ||
         !prop_plane_src_y_ || !prop_plane_src_w_   || !prop_plane_src_h_ ||
         !prop_plane_crtc_x_ || !prop_plane_crtc_y_ || !prop_plane_crtc_w_ ||
         !prop_plane_crtc_h_)
-        return false;
+        return CommitResult::Failed;
 
     // First atomic commit must also set the CRTC mode
     drmModeAtomicReq* req = drmModeAtomicAlloc();
-    if (!req) return false;
+    if (!req) return CommitResult::Failed;
 
     uint32_t flags = DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT;
 
@@ -1223,7 +1228,7 @@ bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect
     wait_for_flip();
     if (flip_pending_.load() && crtc_active_) {
         drmModeAtomicFree(req);
-        return true; // drop frame rather than block
+        return CommitResult::Dropped;
     }
 
     // SRC rect is in 16.16 fixed point
@@ -1250,14 +1255,14 @@ bool DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect
         flip_pending_ = false;
         if (!crtc_active_) {
             // Can't use atomic — caller should fall back to legacy path
-            return false;
+            return CommitResult::Failed;
         }
         // Non-first frame failed: log once and return
-        return false;
+        return CommitResult::Failed;
     }
 
     crtc_active_ = true;
-    return true;
+    return CommitResult::Ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -1334,6 +1339,34 @@ DRMDisplay::Rect DRMDisplay::compute_dst_rect(uint32_t src_w, uint32_t src_h) co
 }
 
 // ---------------------------------------------------------------------------
+// compute_src_rect — Crop only. Letterbox and Stretch keep the full frame.
+// ---------------------------------------------------------------------------
+DRMDisplay::Rect DRMDisplay::compute_src_rect(uint32_t src_w, uint32_t src_h) const {
+    Rect full{0, 0, src_w, src_h};
+    if (scale_mode_ != ScaleMode::Crop || src_w < 2 || src_h < 2 ||
+        width_ < 2 || height_ < 2)
+        return full;
+
+    double src_ar = (double)src_w / (double)src_h;
+    double dst_ar = (double)width_ / (double)height_;
+    Rect r = full;
+    if (src_ar > dst_ar) {
+        r.h = src_h & ~1u;
+        r.w = ((uint32_t)((double)r.h * dst_ar)) & ~1u;
+        r.x = ((src_w - r.w) / 2u) & ~1u;
+        r.y = 0;
+    } else {
+        r.w = src_w & ~1u;
+        r.h = ((uint32_t)((double)r.w / dst_ar)) & ~1u;
+        r.y = ((src_h - r.h) / 2u) & ~1u;
+        r.x = 0;
+    }
+    if (r.w < 2 || r.h < 2 || r.x + r.w > src_w || r.y + r.h > src_h)
+        return full;
+    return r;
+}
+
+// ---------------------------------------------------------------------------
 // fill_bg
 // ---------------------------------------------------------------------------
 // Fills the black letterbox/crop bars in the CURRENT buffer (fb_[cur_buf_]).
@@ -1369,9 +1402,12 @@ void DRMDisplay::invalidate_fill_cache() {
 void DRMDisplay::sw_nv12_to_xrgb(const uint8_t* src,
                                    uint32_t src_w, uint32_t src_h, uint32_t src_stride,
                                    uint8_t* dst, uint32_t dst_stride,
-                                   const Rect& dr, uint32_t /*out_w*/, uint32_t /*out_h*/) {
-    const uint8_t* y_plane  = src;
-    const uint8_t* uv_plane = src + (size_t)src_stride * src_h;
+                                   const Rect& dr, uint32_t /*out_w*/, uint32_t /*out_h*/,
+                                   uint32_t crop_x, uint32_t crop_y, uint32_t full_h) {
+    uint32_t plane_h = full_h ? full_h : src_h;
+    const uint8_t* y_plane  = src + (size_t)crop_y * src_stride + crop_x;
+    const uint8_t* uv_plane = src + (size_t)src_stride * plane_h
+                            + (size_t)(crop_y / 2) * src_stride + crop_x;
 
     if (dr.w == 0 || dr.h == 0) return;
 
@@ -1619,13 +1655,15 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
 
         fill_bg(buf);
         Rect dr = compute_dst_rect(frame_w, frame_h);
+        Rect sr = compute_src_rect(frame_w, frame_h);
         uint32_t src_stride_bytes = stride ? stride : frame_w * 4u;
-        uint32_t copy_w = std::min(frame_w, dr.w) * 4u;
-        uint32_t copy_h = std::min(frame_h, dr.h);
+        const uint8_t* win = data + (size_t)sr.y * src_stride_bytes + (size_t)sr.x * 4u;
+        uint32_t copy_w = std::min(sr.w, dr.w) * 4u;
+        uint32_t copy_h = std::min(sr.h, dr.h);
 
         for (uint32_t y = 0; y < copy_h; y++) {
             memcpy((uint8_t*)buf.map + (size_t)(dr.y + y) * buf.stride + dr.x * 4u,
-                   data + (size_t)y * src_stride_bytes,
+                   win + (size_t)y * src_stride_bytes,
                    copy_w);
         }
 
@@ -1650,13 +1688,17 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
         if (ybuf.map) {
             fill_bg_yuv(ybuf);
             Rect dr = compute_dst_rect(frame_w, frame_h);
+            Rect sr = compute_src_rect(frame_w, frame_h);
             uint32_t src_stride_bytes = stride ? stride : frame_w * 2u;
-            sw_uyvy_scale(data, frame_w, frame_h, src_stride_bytes,
+            const uint8_t* win = data + (size_t)sr.y * src_stride_bytes + (size_t)sr.x * 2u;
+            sw_uyvy_scale(win, sr.w, sr.h, src_stride_bytes,
                           static_cast<uint8_t*>(ybuf.map), ybuf.stride, dr);
             streaming_ = true;
             bool ok = commit_fb(ybuf.fb_id);
-            if (ok) {
-                cur_yuv_buf_ = (cur_yuv_buf_ + 1) % kNumBuffers;
+            if (ok || flip_pending_.load()) {
+                // A busy flip is not "this plane cannot do UYVY". Keep the
+                // path and overwrite this buffer next frame.
+                if (ok) cur_yuv_buf_ = (cur_yuv_buf_ + 1) % kNumBuffers;
                 return true;
             }
             // commit_fb failed — this plane doesn't support UYVY natively.
@@ -1679,6 +1721,7 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
     if (!buf.map) return false;
 
     Rect dr = compute_dst_rect(frame_w, frame_h);
+    Rect sr = compute_src_rect(frame_w, frame_h);
 
     uint32_t src_stride = stride ? stride : frame_w;
 
@@ -1691,18 +1734,21 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
         if (drm_format == DRM_FORMAT_NV12 ||
             drm_format == DRM_FORMAT_NV15 ||
             drm_format == DRM_FORMAT_NV16) {
-            sw_nv12_to_xrgb(data, frame_w, frame_h,
+            sw_nv12_to_xrgb(data, sr.w, sr.h,
                              src_stride,
                              (uint8_t*)buf.map, buf.stride,
-                             dr, width_, height_);
+                             dr, width_, height_,
+                             sr.x, sr.y, frame_h);
         } else if (drm_format == DRM_FORMAT_UYVY) {
-            sw_uyvy_to_xrgb(data, frame_w, frame_h,
-                             stride ? stride : frame_w * 2,
+            uint32_t uyvy_stride = stride ? stride : frame_w * 2;
+            const uint8_t* win = data + (size_t)sr.y * uyvy_stride + (size_t)sr.x * 2u;
+            sw_uyvy_to_xrgb(win, sr.w, sr.h, uyvy_stride,
                              (uint8_t*)buf.map, buf.stride,
                              dr, width_, height_);
         } else {
             uint32_t src_row_bytes = stride ? stride : frame_w * 2u;
-            sw_uyvy_to_xrgb(data, frame_w, frame_h, src_row_bytes,
+            const uint8_t* win = data + (size_t)sr.y * src_row_bytes + (size_t)sr.x * 2u;
+            sw_uyvy_to_xrgb(win, sr.w, sr.h, src_row_bytes,
                              (uint8_t*)buf.map, buf.stride,
                              dr, width_, height_);
         }
@@ -1754,9 +1800,15 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
 
                 if (drmModeAddFB2(drm_fd_, frame_w, frame_h, format,
                                   handles, strides, offsets, &a_fb, 0) == 0) {
-                    Rect src_rect = { 0, 0, frame_w, frame_h };
-                    if (atomic_plane_commit(a_fb, src_rect, dr)) {
-                        // Clean up previous import state
+                    Rect src_rect = compute_src_rect(frame_w, frame_h);
+                    CommitResult cr = atomic_plane_commit(a_fb, src_rect, dr);
+                    if (cr == CommitResult::Dropped) {
+                        drmModeRmFB(drm_fd_, a_fb);
+                        struct drm_gem_close c = {}; c.handle = a_bo;
+                        drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
+                        return true;
+                    }
+                    if (cr == CommitResult::Ok) {
                         if (import_fb_id_) drmModeRmFB(drm_fd_, import_fb_id_);
                         if (import_bo_) {
                             struct drm_gem_close c = {}; c.handle = import_bo_;
@@ -1814,10 +1866,12 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
                         dma_mmap_cache_[dma_fd] = { mapped, map_size };
                 }
                 if (mapped && mapped != MAP_FAILED) {
+                    Rect sr = compute_src_rect(frame_w, frame_h);
                     sw_nv12_to_xrgb((const uint8_t*)mapped,
-                                    frame_w, frame_h, stride_y,
+                                    sr.w, sr.h, stride_y,
                                     (uint8_t*)buf.map, buf.stride,
-                                    dr, width_, height_);
+                                    dr, width_, height_,
+                                    sr.x, sr.y, frame_h);
                 } else {
                     if (buf.map) memset(buf.map, 0, buf.size);
                 }
@@ -1841,20 +1895,16 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
     }
 
     streaming_ = true;
-    // Stretch mode: try direct import and flip
-    if (import_fb_id_) {
-        drmModeRmFB(drm_fd_, import_fb_id_);
-        import_fb_id_ = 0;
-    }
-    if (import_bo_) {
-        struct drm_gem_close c = {};
-        c.handle = import_bo_;
-        drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
-        import_bo_ = 0;
-    }
+    // Stretch mode: keep the FB on screen until the new commit succeeds.
+    uint32_t prev_fb = import_fb_id_;
+    uint32_t prev_bo = import_bo_;
+    import_fb_id_ = 0;
+    import_bo_ = 0;
 
     if (drmPrimeFDToHandle(drm_fd_, dma_fd, &import_bo_) != 0) {
         std::cerr << "[DRM] drmPrimeFDToHandle failed: " << strerror(errno) << "\n";
+        import_fb_id_ = prev_fb;
+        import_bo_ = prev_bo;
         return false;
     }
 
@@ -1875,11 +1925,28 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
         struct drm_gem_close c = {};
         c.handle = import_bo_;
         drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
-        import_bo_ = 0;
+        import_fb_id_ = prev_fb;
+        import_bo_ = prev_bo;
         return false;
     }
 
-    return commit_fb(import_fb_id_);
+    if (!commit_fb(import_fb_id_)) {
+        drmModeRmFB(drm_fd_, import_fb_id_);
+        struct drm_gem_close c = {};
+        c.handle = import_bo_;
+        drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
+        import_fb_id_ = prev_fb;
+        import_bo_ = prev_bo;
+        return false;
+    }
+
+    if (prev_fb) drmModeRmFB(drm_fd_, prev_fb);
+    if (prev_bo) {
+        struct drm_gem_close c = {};
+        c.handle = prev_bo;
+        drmIoctl(drm_fd_, DRM_IOCTL_GEM_CLOSE, &c);
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1933,32 +2000,37 @@ bool DRMDisplay::show_frame_dma_explicit(int dma_fd, uint32_t format,
     }
 
     Rect dr  = compute_dst_rect(frame_w, frame_h);
-    Rect src = { 0, 0, frame_w, frame_h };
+    Rect src = compute_src_rect(frame_w, frame_h);
 
-    bool ok = false;
     if (atomic_plane_state_ >= 0 && plane_id_) {
-        ok = atomic_plane_commit(fb, src, dr);
-        if (ok) {
+        CommitResult cr = atomic_plane_commit(fb, src, dr);
+        if (cr == CommitResult::Dropped) {
+            drmModeRmFB(drm_fd_, fb);
+            gem_close(bo);
+            return true;
+        }
+        if (cr == CommitResult::Ok) {
             if (atomic_plane_state_ == 0) {
                 atomic_plane_state_ = 1;
                 std::cout << "[DRM] VAAPI atomic plane commit OK — zero-copy decode path active\n";
             }
-        } else if (atomic_plane_state_ == 0) {
+            if (import_fb_id_) drmModeRmFB(drm_fd_, import_fb_id_);
+            if (import_bo_)    gem_close(import_bo_);
+            import_fb_id_ = fb;
+            import_bo_    = bo;
+            streaming_    = true;
+            return true;
+        }
+        if (atomic_plane_state_ == 0) {
             atomic_plane_state_ = -1;
             std::cerr << "[DRM] VAAPI atomic plane commit failed — full-screen scanout fallback\n";
         }
     }
-    if (!ok) {
-        // No hardware scaler: scan the FB out full-screen (no letterbox).
-        ok = commit_fb(fb);
-    }
-    if (!ok) {
+    if (!commit_fb(fb)) {
         drmModeRmFB(drm_fd_, fb);
         gem_close(bo);
         return false;
     }
-
-    // Swap import state (free the previous frame's FB + handle).
     if (import_fb_id_) drmModeRmFB(drm_fd_, import_fb_id_);
     if (import_bo_)    gem_close(import_bo_);
     import_fb_id_ = fb;
@@ -2101,10 +2173,23 @@ bool DRMDisplay::show_splash(bool source_available) {
                             rx, ty, accent_color, font_scale, width_, height_);
             ty += (uint32_t)line_h;
         }
-        if (sc.show_device_url && !dev.device_ip.empty()) {
-            std::string url = "http://" + dev.device_ip;
+        std::string ip = Config::instance().runtime_ip();
+        if (sc.show_device_url && !ip.empty()) {
+            std::string url = "http://" + ip;
             draw_text_right(pixels, stride_u32, url,
                             rx, ty, accent_color, font_scale, width_, height_);
+        }
+    }
+
+    // Written by the network helper while a change is waiting to be confirmed.
+    {
+        std::ifstream pending("/run/ndimon/net-pending");
+        std::string line;
+        if (pending && std::getline(pending, line) && !line.empty()) {
+            if (line.size() > 80) line.resize(80);
+            draw_text_centred(pixels, stride_u32, line,
+                              width_ / 2, height_ - margin_y - (uint32_t)font_h,
+                              accent_color, font_scale, width_, height_);
         }
     }
 

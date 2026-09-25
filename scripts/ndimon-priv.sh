@@ -151,8 +151,45 @@ case "$cmd" in
     set-reboot-schedule)
         apply_reboot_schedule "${1:-off}" "${2:-}" "${3:-}"
         ;;
+    start-update)
+        if systemctl is-active --quiet ndimon-update.service; then
+            echo "update already running" >&2
+            exit 3
+        fi
+        systemctl reset-failed ndimon-update.service >/dev/null 2>&1 || true
+        exec systemctl start --no-block ndimon-update.service
+        ;;
+    stop-core)
+        systemctl stop ndimon-r.service ndimon-finder.service
+        ;;
+    start-core)
+        systemctl start ndimon-finder.service ndimon-r.service
+        ;;
+    net-status)
+        exec /usr/local/lib/ndimon/ndimon-net status
+        ;;
+    net-check-address)
+        exec /usr/local/lib/ndimon/ndimon-net check-address "${1:-}"
+        ;;
+    net-apply)
+        case "${1:-}" in
+            *..*) echo "bad network stage path" >&2; exit 2 ;;
+        esac
+        if [[ ! "${1:-}" =~ ^/var/lib/ndimon/net/stage-[a-z0-9]+\.json$ ]]; then
+            echo "bad network stage path" >&2
+            exit 2
+        fi
+        [ -f "$1" ] || { echo "staged network file missing" >&2; exit 2; }
+        exec /usr/local/lib/ndimon/ndimon-net apply "$1"
+        ;;
+    net-confirm)
+        exec /usr/local/lib/ndimon/ndimon-net confirm "${1:-}"
+        ;;
+    net-rollback)
+        exec /usr/local/lib/ndimon/ndimon-net rollback
+        ;;
     *)
-        echo "usage: ndimon-priv reboot|hostname <name>|restart-finder|restart-stack|restart-service <svc>|set-ntp [host]|set-reboot-schedule on|off [HH:MM] [daily|Sun,Mon,...]" >&2
+        echo "usage: ndimon-priv reboot|hostname <name>|restart-finder|restart-stack|restart-service <svc>|set-ntp [host]|set-reboot-schedule on|off [HH:MM] [daily|Sun,Mon,...]|start-update|stop-core|start-core|net-status|net-check-address <ip>|net-apply <file>|net-confirm <token>|net-rollback" >&2
         exit 2
         ;;
 esac

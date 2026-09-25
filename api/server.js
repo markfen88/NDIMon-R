@@ -32,7 +32,11 @@ app.use((req, res, next) => {
 
 // --- Middleware ---
 // 4mb covers splash logo uploads without a 20mb JSON DoS surface.
-app.use(bodyParser.json({ limit: '4mb' }));
+// Backup inspect carries that logo again, so it gets its own 8mb parser.
+app.use((req, res, next) => {
+    if (req.method === 'POST' && req.path === '/v1/Backup/inspect') return next();
+    bodyParser.json({ limit: '4mb' })(req, res, next);
+});
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.text());
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -52,6 +56,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // /v1/* and /api/* (and the legacy prefixes) requires a session cookie or
 // "Authorization: Bearer <token>" from POST /api/login.
 auth.installRoutes(app);
+// Confirming a network change lands on the new address, which does not have
+// the session cookie from the old one. The token is the credential.
+app.post('/api/net-confirm', require('./routes/Network').confirm);
 app.use(['/v1', '/api', '/NDIDecode', '/NDIEncoder', '/NDIFinder',
          '/VideoOutput', '/DeviceSettings', '/System', '/AboutMe'],
         auth.middleware);
@@ -68,6 +75,8 @@ app.use('/v1/System',       require('./routes/System'));
 
 app.use('/v1/Splash',       require('./routes/Splash'));
 app.use('/v1/Presets',      require('./routes/Presets'));
+app.use('/v1/Backup',       require('./routes/Backup'));
+app.use('/v1/Network',      require('./routes/Network').router);
 
 // --- New unified API routes ---
 app.use('/api',             require('./routes/Status').router);

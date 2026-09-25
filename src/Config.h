@@ -96,6 +96,10 @@ public:
     OutputConfig get_output(int ch_num) const;
     void set_output(int ch_num, const OutputConfig& out);
 
+    // Live address shown on the splash. Not written to disk.
+    void set_runtime_ip(const std::string& ip);
+    std::string runtime_ip() const;
+
     DecoderConfig   decoder;
     TransportConfig transport;
     FinderConfig    finder;

@@ -43,6 +43,7 @@ export DEBIAN_FRONTEND=noninteractive
 info "Installing build tools..."
 apt-get install -yq --no-install-recommends \
     build-essential cmake pkg-config git wget curl ca-certificates \
+    gnupg python3 python3-yaml iputils-arping libcap2-bin \
     libdrm-dev libasound2-dev \
     libavahi-client-dev libavahi-common-dev \
     nlohmann-json3-dev \
@@ -52,6 +53,7 @@ apt-get install -yq --no-install-recommends \
     # Fallback: some packages may differ by distro
     apt-get install -yq --no-install-recommends \
         build-essential cmake pkg-config git wget curl ca-certificates \
+        gnupg python3 python3-yaml iputils-arping libcap2-bin \
         libdrm-dev libasound2-dev \
         libavahi-client-dev libavahi-common-dev \
         libsystemd-dev \

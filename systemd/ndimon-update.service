@@ -1,0 +1,9 @@
+[Unit]
+Description=NDIMon-R software update
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+TimeoutStartSec=infinity
+ExecStart=/opt/ndimon-r/scripts/ndimon-update-run.sh

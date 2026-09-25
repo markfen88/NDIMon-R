@@ -3,7 +3,7 @@ const express    = require('express');
 const router     = express.Router();
 const fs         = require('fs');
 const path       = require('path');
-const { execFile, spawn } = require('child_process');
+const { execFile } = require('child_process');
 const { sendIPC, corsHeaders, runPriv } = require('./lib');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
@@ -13,53 +13,49 @@ function readTrim(p) {
 }
 function sourceDir() { return readTrim('/etc/ndimon-source-dir'); }
 
-// Tracks an in-progress update so the UI can poll status.
-let updateState = { running: false, started: 0, log: '' };
-
 // GET /version — installed version info + whether a git update is available.
 router.get('/version', (req, res) => {
     const dir = sourceDir();
-    const info = {
-        firmware:  readTrim('/etc/ndimon-firmware-version') || '1.0.0',
-        commit:    readTrim('/etc/ndimon-build-commit'),
-        build_date: readTrim('/etc/ndimon-build-date'),
-        ndi_version: readTrim('/etc/ndimon-ndi-version') || '6.x',
-        update_supported: !!dir,
-        update_running: updateState.running,
-    };
-    if (!dir) return res.json(info);
-    // Compare local HEAD with origin without modifying the tree.
-    execFile('git', ['-C', dir, 'fetch', '--quiet'], { timeout: 15000 }, () => {
-        execFile('git', ['-C', dir, 'rev-list', '--count', 'HEAD..@{u}'],
-            { timeout: 5000 }, (err, stdout) => {
-                info.updates_available = err ? null : parseInt(stdout.trim(), 10) || 0;
-                res.json(info);
-            });
+    execFile('systemctl', ['is-active', '--quiet', 'ndimon-update.service'],
+        { timeout: 2000 }, (activeErr) => {
+        const info = {
+            firmware:  readTrim('/etc/ndimon-firmware-version') || '1.0.0',
+            commit:    readTrim('/etc/ndimon-build-commit'),
+            build_date: readTrim('/etc/ndimon-build-date'),
+            ndi_version: readTrim('/etc/ndimon-ndi-version') || '6.x',
+            update_supported: !!dir,
+            update_running: !activeErr,
+        };
+        if (!dir) return res.json(info);
+        // Compare local HEAD with origin without modifying the tree.
+        execFile('git', ['-C', dir, 'fetch', '--quiet'], { timeout: 15000 }, () => {
+            execFile('git', ['-C', dir, 'rev-list', '--count', 'HEAD..@{u}'],
+                { timeout: 5000 }, (err, stdout) => {
+                    info.updates_available = err ? null : parseInt(stdout.trim(), 10) || 0;
+                    res.json(info);
+                });
+        });
     });
 });
 
-// POST /update — git pull + rebuild + reinstall (detached so restarting
-// ndimon-api mid-update doesn't kill it). Returns immediately; poll /version.
+// POST /update — pid1 runs the oneshot so the API sandbox cannot block the
+// checkout write. Returns immediately; poll /version.
 router.post('/update', (req, res) => {
     const dir = sourceDir();
     if (!dir) return res.status(501).json({ ok: false, error: 'no source checkout recorded' });
-    if (!dir || !path.isAbsolute(dir) || dir.includes('\0') || dir.includes('..'))
+    if (!path.isAbsolute(dir) || dir.includes('\0') || dir.includes('..'))
         return res.status(501).json({ ok: false, error: 'invalid source checkout' });
     if (!fs.existsSync(path.join(dir, 'install.sh')))
         return res.status(501).json({ ok: false, error: 'install.sh missing' });
-    if (updateState.running) return res.status(409).json({ ok: false, error: 'update already running' });
-
-    updateState = { running: true, started: Date.now(), log: '' };
-    const logFd = fs.openSync('/tmp/ndimon-update.log', 'w');
-    // $1 is the source dir — never interpolate it into the shell script.
-    const child = spawn('bash', ['-c',
-        'git -C "$1" pull --ff-only && bash "$1/install.sh" --no-deps',
-        'ndimon-update', dir],
-        { detached: true, stdio: ['ignore', logFd, logFd] });
-    child.unref();
-    // Best-effort clear of the running flag (the API may be restarted before this).
-    setTimeout(() => { updateState.running = false; }, 120000);
-    res.json({ ok: true, message: 'update started — the device will rebuild and restart services' });
+    runPriv(['start-update'], { timeout: 15000 }, (err, stdout, stderr) => {
+        if (err) {
+            const msg = `${stderr || ''} ${err.message || ''}`;
+            if (err.code === 3 || /already running/.test(msg))
+                return res.status(409).json({ ok: false, error: 'update already running' });
+            return res.status(500).json({ ok: false, error: (stderr || err.message || 'update failed to start').toString().trim() });
+        }
+        res.json({ ok: true, message: 'update started — the device will rebuild and restart services' });
+    });
 });
 
 // Reboot — POST only. A GET reboot is trivially triggerable cross-site

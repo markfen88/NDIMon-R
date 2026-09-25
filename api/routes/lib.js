@@ -27,12 +27,13 @@ const ipcEvents = new EventEmitter();
 function sendIPC(cmd) {
     return new Promise((resolve) => {
         const client = net.createConnection(IPC_SOCKET, () => {
-            client.write(JSON.stringify(cmd));
+            client.write(JSON.stringify(cmd) + '\n');
         });
         let data = '';
         client.on('data', d => { data += d; });
         client.on('end', () => {
-            try { resolve(JSON.parse(data)); } catch { resolve({ ok: true }); }
+            try { resolve(JSON.parse(data)); }
+            catch { resolve({ ok: false, error: 'bad_ipc' }); }
         });
         client.on('error', err => {
             const offline = err.code === 'ENOENT' || err.code === 'ECONNREFUSED';
@@ -58,7 +59,7 @@ function connectSubscriber() {
     sock.on('connect', () => {
         _subSocket = sock;
         _subBuf = '';
-        sock.write(JSON.stringify({ action: 'subscribe' }));
+        sock.write(JSON.stringify({ action: 'subscribe' }) + '\n');
         console.log('[IPC] event subscriber connected');
     });
     sock.on('data', chunk => {
@@ -91,13 +92,41 @@ function readJson(file) {
 
 function writeJson(file, obj) {
     const tmp = file + '.tmp';
+    let fd = null;
     try {
-        fs.writeFileSync(tmp, JSON.stringify(obj), { mode: 0o640 });
+        fd = fs.openSync(tmp, 'w', 0o640);
+        fs.writeSync(fd, JSON.stringify(obj));
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = null;
         fs.renameSync(tmp, file);
+        // A rename is not durable until the directory entry itself is flushed.
+        try {
+            const dirfd = fs.openSync(path.dirname(file), 'r');
+            try { fs.fsyncSync(dirfd); } finally { fs.closeSync(dirfd); }
+        } catch (e) {
+            console.warn('[lib] writeJson dir fsync', file, e.message);
+        }
+        return true;
     } catch (e) {
+        if (fd != null) { try { fs.closeSync(fd); } catch {} }
         console.error('[lib] writeJson', file, e.message);
         try { fs.unlinkSync(tmp); } catch {}
+        return false;
     }
+}
+
+function runPrivAsync(args, timeout) {
+    return new Promise((resolve, reject) => {
+        runPriv(args, { timeout: timeout || 15000 }, (err, stdout, stderr) => {
+            if (err) {
+                err.stdout = stdout;
+                err.stderr = stderr;
+                return reject(err);
+            }
+            resolve({ stdout: stdout || '', stderr: stderr || '' });
+        });
+    });
 }
 
 // Historically set CORS-allow-all headers; the API is now same-origin only
@@ -135,10 +164,13 @@ function runPriv(args, opts, cb) {
                                  'ndimon-api.service', 'ndimon-watchdog.service']);
     if (cmd === 'restart-service')
         return run('systemctl', ['restart', `${rest[0]}.service`]);
-    if (cmd === 'set-ntp' || cmd === 'set-reboot-schedule')
+    if (cmd === 'set-ntp' || cmd === 'set-reboot-schedule' || cmd === 'start-update' ||
+        cmd === 'stop-core' || cmd === 'start-core' ||
+        cmd === 'net-status' || cmd === 'net-check-address' || cmd === 'net-apply' ||
+        cmd === 'net-confirm' || cmd === 'net-rollback')
         return done(new Error('ndimon-priv not installed'));
     return done(new Error('unknown priv command'));
 }
 
 module.exports = { sendIPC, readJson, writeJson, corsHeaders, ipcEvents,
-                   parseChannel, parseOutputIndex, MAX_OUTPUTS, runPriv };
+                   parseChannel, parseOutputIndex, MAX_OUTPUTS, runPriv, runPrivAsync };
