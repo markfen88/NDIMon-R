@@ -24,7 +24,7 @@ router.get('/', (req, res) => {
         if (a) { ip = a.address; break; }
     }
 
-    const firmware   = readTrim('/etc/ndimon-firmware-version') || '1.0.0';
+    const firmware   = readTrim('/etc/ndimon-firmware-version') || '1.2.0-beta';
     const buildDate  = readTrim('/etc/ndimon-build-date');
     // NDI SDK version is recorded by setup-deps.sh at install time.
     const ndiVersion = readTrim('/etc/ndimon-ndi-version') || '6.x';

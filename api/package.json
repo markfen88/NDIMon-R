@@ -1,6 +1,6 @@
 {
   "name": "ndi-decoder-api",
-  "version": "1.1.1",
+  "version": "1.2.0-beta",
   "description": "NDIMon-R NDI Decoder REST API",
   "main": "server.js",
   "scripts": {

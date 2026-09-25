@@ -1,11 +1,11 @@
-# NDIMon-R 1.1.1-beta
+# NDIMon-R 1.2 beta
 
 Dedicated **NDI receiver / HDMI decoder** for Linux appliances.
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/arch-aarch64%20%7C%20x86--64-blue)](https://github.com/markfen88/NDIMon-R)
 
-**1.1.1-beta** is a minor release on the 1.x line, not a 2.0. It keeps the 1.0 decoder and adds backup and restore, wired network settings with confirm-or-revert, and a scheduled reboot. The installer writes `1.1.1` to `/etc/ndimon-firmware-version`. Treat the network and backup flows as beta until they have been exercised on the board you ship.
+**1.2 beta** is the next minor release on the 1.x line. It keeps the 1.0 decoder and adds backup and restore, wired network settings with confirm-or-revert, and a scheduled reboot. The installer writes `1.2.0-beta` to `/etc/ndimon-firmware-version`. Treat the network and backup flows as beta until they have been exercised on the board you ship.
 
 It takes a live NDI stream off the network, decodes it, and scans it out to HDMI or DisplayPort with DRM/KMS. Audio goes to ALSA. A web UI on port 80 is the day-to-day control surface. The decoder core is C++ because the path is memory-bandwidth limited on ARM boards.
 

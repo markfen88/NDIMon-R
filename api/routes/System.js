@@ -19,7 +19,7 @@ router.get('/version', (req, res) => {
     execFile('systemctl', ['is-active', '--quiet', 'ndimon-update.service'],
         { timeout: 2000 }, (activeErr) => {
         const info = {
-            firmware:  readTrim('/etc/ndimon-firmware-version') || '1.0.0',
+            firmware:  readTrim('/etc/ndimon-firmware-version') || '1.2.0-beta',
             commit:    readTrim('/etc/ndimon-build-commit'),
             build_date: readTrim('/etc/ndimon-build-date'),
             ndi_version: readTrim('/etc/ndimon-ndi-version') || '6.x',

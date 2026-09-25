@@ -62,7 +62,7 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 # Record firmware / build metadata for the About page.
-$SUDO sh -c "echo '1.1.1' > /etc/ndimon-firmware-version" 2>/dev/null || true
+$SUDO sh -c "echo '1.2.0-beta' > /etc/ndimon-firmware-version" 2>/dev/null || true
 $SUDO sh -c "date -u '+%Y-%m-%d' > /etc/ndimon-build-date" 2>/dev/null || true
 
 # Record the source checkout dir + git commit so the web UI's "Check for

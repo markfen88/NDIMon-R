@@ -6,7 +6,7 @@ Linux NDI receiver / HDMI decoder appliance (ARM and x86-64).
 
 A dedicated NDI decoder for single-board computers and mini-PCs. It receives live NDI streams, decodes them (hardware where available, FFmpeg otherwise), and outputs HDMI/DisplayPort via DRM/KMS. ALSA audio, a REST API / web UI, and NDI Discovery Server integration.
 
-User-facing install, UI, and API docs for **1.1.1-beta** are [README.md](README.md). NDI protocol notes: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md).
+User-facing install, UI, and API docs for **1.2 beta** are [README.md](README.md). NDI protocol notes: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md).
 
 ## Target Platforms
 

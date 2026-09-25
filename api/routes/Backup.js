@@ -321,7 +321,7 @@ function buildDocument(sections) {
         schema_version: 1,
         created_at: new Date().toISOString(),
         app: {
-            firmware: readTrim('/etc/ndimon-firmware-version') || '1.0.0',
+            firmware: readTrim('/etc/ndimon-firmware-version') || '1.2.0-beta',
             commit: readTrim('/etc/ndimon-build-commit'),
             ndi_version: readTrim('/etc/ndimon-ndi-version') || '6.x',
         },
