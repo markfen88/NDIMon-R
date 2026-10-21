@@ -1,5 +1,6 @@
 'use strict';
 const express = require('express');
+const { isNdiEndpoint } = require('../ndi-endpoint');
 const router  = express.Router();
 const os      = require('os');
 const fs      = require('fs');
@@ -36,17 +37,36 @@ function startReconnectLoop(output, src, ip) {
 }
 
 function _scheduleAttempt(output, src, ip, delayMs) {
-    if (!reconnectState[output]) return;
+    const state = reconnectState[output];
+    if (!state) return;
     console.log(`[Events] Reconnect in ${delayMs}ms for output ${output} → "${src}"`);
-    reconnectState[output].timer = setTimeout(async () => {
-        if (!reconnectState[output]) return;
-        reconnectState[output].attempts++;
-        const n = reconnectState[output].attempts;
-        // Odd attempts: use saved IP (direct / discovery-server URL)
-        // Even attempts: name-only mDNS (works without discovery server)
-        const useIp = (n % 2 === 1) ? ip : '';
-        console.log(`[Events] Reconnect attempt ${n} for output ${output} → "${src}" ip="${useIp}"`);
+    state.timer = setTimeout(async () => {
+        if (reconnectState[output] !== state) return;
+        state.attempts++;
+        const n = state.attempts;
+        // Alternate direct and name-only recovery. A different advertised
+        // endpoint takes precedence on either turn when a sender restarts.
+        let useIp = (n % 2 === 1) ? ip : '';
+        let changedDiscovery = false;
+        try {
+            const sources = readJson('/var/lib/ndimon/ndimon-sources.json');
+            const discovered = sources.list?.[src];
+            if (isNdiEndpoint(discovered) &&
+                (n % 2 === 1 || discovered !== state.lastEndpoint)) {
+                useIp = discovered;
+                changedDiscovery = n % 2 === 0;
+            }
+        } catch (err) {
+            // Discovery is advisory; direct/manual sources must still recover.
+            console.warn('[Events] Cannot refresh reconnect endpoint:', err.message);
+        }
+        // Unchanged cached entries still allow name-only fallback. Repeatedly
+        // changing advertisements can prefer direct recovery on every attempt.
+        const detail = changedDiscovery ? ` (discovery changed from "${state.lastEndpoint || ''}")` : '';
+        console.log(`[Events] Reconnect attempt ${n} for output ${output} → "${src}" ip="${useIp}"${detail}`);
+        if (useIp) state.lastEndpoint = useIp;
         await sendIPC({ action: 'connect', source_name: src, source_ip: useIp, output });
+        if (reconnectState[output] !== state) return;
         // Backoff: 5 → 10 → 20 → 30 → 30 → 30 … seconds
         const next = Math.min(5000 * Math.pow(2, n - 1), 30000);
         _scheduleAttempt(output, src, ip, next);
@@ -125,7 +145,7 @@ function getUptime() {
 
 async function buildStatus() {
     const ipc     = await sendIPC({ action: 'status' });
-    const sources = readJson('/etc/ndimon-sources.json');
+    const sources = readJson('/var/lib/ndimon/ndimon-sources.json');
     const decCfg  = readJson('/etc/ndimon-dec1-settings.json');
     const findCfg = readJson('/etc/ndimon-find-settings.json');
     const devCfg  = readJson('/etc/ndimon-device-settings.json');
@@ -151,6 +171,13 @@ async function buildStatus() {
         input_width:  o.input_width  || 0,
         input_height: o.input_height || 0,
         fps:          o.fps          || 0,
+        total_frames: o.total_frames ?? 0,
+        dropped_frames: o.dropped_frames ?? 0,
+        stream_type:  o.stream_type || 'unknown',
+        compressed_frame_observed: o.compressed_frame_observed === true,
+        rotation:     o.rotation ?? 0,
+        audio_enabled: o.audio_enabled === true,
+        audio_available: o.audio_available === true,
         codec:        o.codec        || 'none',
         decode_backend: o.decode_backend || 'none',
         hw_decode:    o.hw_decode    || false,
@@ -175,7 +202,7 @@ async function buildStatus() {
             input_height:    ipc.input_height    || 0,
             codec:           ipc.codec           || 'none',
             fps:             ipc.fps             || 0,
-            audio_enabled:   ipc.audio_enabled   !== false,
+            audio_enabled:   ipc.audio_enabled   === true,
             connector:       ipc.connector       || '',
             output_alias:    ipc.output_alias    || '',
             recv_name:       ipc.recv_name       || '',
@@ -199,9 +226,10 @@ async function buildStatus() {
             enabled:   !!(findCfg.NDIDisServIP),
             server_ip: findCfg.NDIDisServIP || '',
         },
-        // Only a real "false" from the decoder is a warning; offline/missing → true.
-        passthrough_ok: ipc.passthrough_ok !== false,
         outputs,
+        plugins: require('../plugins').getRegistry()?.summary() || [],
+        plugins_state_error: require('../plugins').getStateError() || null,
+        audio: ipc.audio || null,
     };
 }
 
@@ -238,13 +266,18 @@ ipcEvents.on('routing', async ev => {
         return;
     }
 
-    const cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`);
-    if (source && source !== 'None') {
-        // Persist DS assignment — reconnect loop will use this source if it drops
-        writeJson(`/etc/ndimon-dec${ch}-settings.json`, { ...cfg, SourceName: source, SourceIP: ip });
-    } else {
-        // DS cleared this receiver — clear saved source so reconnect loop stays idle
-        writeJson(`/etc/ndimon-dec${ch}-settings.json`, { ...cfg, SourceName: '', SourceIP: '' });
+    try {
+        const cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`);
+        if (source && source !== 'None') {
+            // Persist DS assignment — reconnect loop will use this source if it drops
+            writeJson(`/etc/ndimon-dec${ch}-settings.json`, { ...cfg, SourceName: source, SourceIP: isNdiEndpoint(ip) ? ip : '' });
+        } else {
+            // DS cleared this receiver — clear saved source so reconnect loop stays idle
+            writeJson(`/etc/ndimon-dec${ch}-settings.json`, { ...cfg, SourceName: '', SourceIP: '' });
+        }
+    } catch (err) {
+        console.error('[Events] failed to persist routing:', err.message);
+        return;
     }
     // Do NOT sendIPC connect/disconnect — SDK already switched via allow_controlling=true
     broadcastStatus();
@@ -269,7 +302,13 @@ ipcEvents.on('connection', async ev => {
             return;
         }
         const ch = output + 1;
-        const cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`);
+        let cfg;
+        try { cfg = readJson(`/etc/ndimon-dec${ch}-settings.json`); }
+        catch (err) {
+            console.error('[Events] cannot read saved source:', err.message);
+            broadcastStatus();
+            return;
+        }
         const src = cfg.SourceName || '';
         const ip  = cfg.SourceIP  || '';
         if (src && src !== 'None') {
@@ -289,8 +328,8 @@ ipcEvents.on('connection', async ev => {
 });
 
 // GET /api/status
-router.get('/status', async (req, res) => {
-    res.json(await buildStatus());
+router.get('/status', async (req, res, next) => {
+    try { res.json(await buildStatus()); } catch (err) { next(err); }
 });
 
 // GET /api/health  — lightweight health check for monitoring tools

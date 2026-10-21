@@ -1,4 +1,6 @@
 #include "NDIReceiver.h"
+#include <algorithm>
+#include "NDIVideoLayout.h"
 #include <cstddef>
 #include <Processing.NDI.Lib.h>
 #include <iostream>
@@ -6,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <atomic>
+#include <algorithm>
 #include <regex>
 
 static std::string xml_escape(const std::string& s) {
@@ -62,21 +65,29 @@ NDIReceiver::~NDIReceiver() {
     destroy_recv();
 }
 
-std::string NDIReceiver::find_source_url(const std::string& name) {
+std::string NDIReceiver::find_source_url(const std::string& name, SourceLookupTiming& timing) {
     if (name.empty()) return {};
-
+    const auto started = std::chrono::steady_clock::now();
+    const auto elapsed_ms = [&] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count();
+    };
     NDIlib_find_create_t find_create = {};
     find_create.show_local_sources = true;
     if (!discovery_server_.empty())
         find_create.p_extra_ips = discovery_server_.c_str();
 
+    const auto create_started = std::chrono::steady_clock::now();
     NDIlib_find_instance_t finder = NDIlib_find_create_v2(&find_create);
+    const auto wait_started = std::chrono::steady_clock::now();
+    timing.create_ms = std::chrono::duration_cast<std::chrono::milliseconds>(wait_started - create_started).count();
     if (!finder) return {};
 
     std::string url;
-    // Wait up to 3 seconds for sources
-    for (int i = 0; i < 6; i++) {
-        NDIlib_find_wait_for_sources(finder, 500);
+    // Leave headroom for the opaque SDK connect step within the API's
+    // two-second IPC timeout. This bounds waiting, not SDK calls or joins.
+    const auto deadline = started + std::chrono::milliseconds(500);
+    for (;;) {
         uint32_t count = 0;
         const NDIlib_source_t* sources = NDIlib_find_get_current_sources(finder, &count);
         for (uint32_t j = 0; j < count; j++) {
@@ -87,9 +98,19 @@ std::string NDIReceiver::find_source_url(const std::string& name) {
             }
         }
         if (!url.empty()) break;
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0) break;
+        NDIlib_find_wait_for_sources(finder, static_cast<uint32_t>(std::min<int64_t>(100, remaining)));
     }
 
+    const auto destroy_started = std::chrono::steady_clock::now();
+    timing.wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(destroy_started - wait_started).count();
     NDIlib_find_destroy(finder);
+    timing.destroy_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - destroy_started).count();
+    std::cout << "[NDIRecv] Source lookup scan " << (url.empty() ? "miss" : "hit")
+              << " (" << elapsed_ms() << " ms)\n";
     return url;
 }
 
@@ -97,6 +118,7 @@ std::string NDIReceiver::find_source_url(const std::string& name) {
 // This registers the device with the NDI discovery server as a receiver,
 // making it permanently visible even when not connected to a source.
 bool NDIReceiver::create_recv() {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
     if (recv_) return true;  // already created
     NDIlib_recv_create_v3_t create = {};
     create.color_format       = NDIlib_recv_color_format_fastest;
@@ -113,6 +135,7 @@ bool NDIReceiver::create_recv() {
 }
 
 void NDIReceiver::recreate_recv_preserving_source() {
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
     // Remember current source so we can reconnect after the swap
     std::string src, ip;
     {
@@ -124,9 +147,13 @@ void NDIReceiver::recreate_recv_preserving_source() {
     stop_thread();
 
     // FrameSync is bound to the old recv — destroy it before the recv.
-    if (framesync_) {
-        NDIlib_framesync_destroy(framesync_);
-        framesync_ = nullptr;
+    {
+        std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+        if (framesync_) {
+            audio_connected_=false;
+            NDIlib_framesync_destroy(framesync_);
+            framesync_ = nullptr;
+        }
     }
 
     // Remove old recv from advertiser (keep advertiser alive)
@@ -134,9 +161,12 @@ void NDIReceiver::recreate_recv_preserving_source() {
         NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
 
     // Destroy old recv instance
-    if (recv_) {
-        NDIlib_recv_destroy(recv_);
-        recv_ = nullptr;
+    {
+        std::lock_guard<std::mutex> handle_lock(handle_mutex_);
+        if (recv_) {
+            NDIlib_recv_destroy(recv_);
+            recv_ = nullptr;
+        }
     }
 
     // Create fresh recv (picks up the new name and/or new ndi-config transport)
@@ -160,21 +190,15 @@ void NDIReceiver::recreate_recv_preserving_source() {
 }
 
 void NDIReceiver::rename(const std::string& new_name) {
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
     if (new_name == recv_name_) return;
     recv_name_ = new_name;
     std::cout << "[NDIRecv] Renaming receiver to: " << new_name << "\n";
     recreate_recv_preserving_source();
 }
 
-void NDIReceiver::reload_transport(const std::string& rxpm) {
-    if (rxpm == transport_mode_) return;
-    transport_mode_ = rxpm;
-    std::cout << "[NDIRecv] Applying transport mode: " << rxpm
-              << " (recreating recv)\n";
-    recreate_recv_preserving_source();
-}
-
 bool NDIReceiver::init_recv() {
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
     if (!create_recv()) return false;
 
     // Register with the NDI discovery server as a receiver so this device
@@ -210,28 +234,41 @@ bool NDIReceiver::init_recv() {
 void NDIReceiver::stop_thread() {
     // Always set running_ = false regardless of current state so that a
     // thread that self-exited (e.g., on disconnect) is properly joined.
-    running_ = false;
+    {
+        std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+        audio_connected_=false;
+        running_=false;
+    }
     if (recv_thread_.joinable()) recv_thread_.join();
 }
 
 void NDIReceiver::destroy_recv() {
     // FrameSync must be destroyed before recv
-    if (framesync_) {
-        NDIlib_framesync_destroy(framesync_);
-        framesync_ = nullptr;
+    {
+        std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+        if (framesync_) {
+            audio_connected_=false;
+            NDIlib_framesync_destroy(framesync_);
+            framesync_ = nullptr;
+        }
     }
     if (advertiser_) {
         if (recv_) NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
         NDIlib_recv_advertiser_destroy(advertiser_);
         advertiser_ = nullptr;
     }
-    if (recv_) {
-        NDIlib_recv_destroy(recv_);
-        recv_ = nullptr;
+    {
+        std::lock_guard<std::mutex> handle_lock(handle_mutex_);
+        if (recv_) {
+            NDIlib_recv_destroy(recv_);
+            recv_ = nullptr;
+        }
     }
 }
 
 bool NDIReceiver::connect(const std::string& source_name, const std::string& source_ip) {
+    const auto command_started = std::chrono::steady_clock::now();
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
     // If currently connected and switching to None, inform the source/DS before disconnect
     if ((source_name.empty() || source_name == "None") && recv_ &&
         NDIlib_recv_get_no_connections(recv_) > 0) {
@@ -242,7 +279,9 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
         NDIlib_recv_send_metadata(recv_, &none_meta);
         std::cout << "[NDIRecv] Sent routing-to-None to DS\n";
     }
+    const auto stop_started = std::chrono::steady_clock::now();
     stop_thread();  // stop polling thread; keep recv_ alive for discovery
+    const auto stop_finished = std::chrono::steady_clock::now();
 
     if (source_name.empty() || source_name == "None") {
         {
@@ -268,17 +307,26 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
     stream_type_    = NDIStreamType::Unknown;
 
     // Destroy old framesync — will be recreated if new source is standard
-    if (framesync_) {
-        NDIlib_framesync_destroy(framesync_);
-        framesync_ = nullptr;
+    const auto framesync_started = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+        if (framesync_) {
+            audio_connected_=false;
+            NDIlib_framesync_destroy(framesync_);
+            framesync_ = nullptr;
+        }
     }
+    const auto framesync_finished = std::chrono::steady_clock::now();
 
     // Ensure recv instance exists (for discovery registration)
+    const auto create_started = std::chrono::steady_clock::now();
     if (!create_recv()) return false;
+    const auto create_finished = std::chrono::steady_clock::now();
 
     // Resolve source URL — the strings backing the NDIlib_source_t pointers
     // must stay alive until NDIlib_recv_connect returns, so we use locals.
     std::string found_url;
+    SourceLookupTiming lookup_timing;
     NDIlib_source_t src = {};
     src.p_ndi_name = source_name.c_str();
     if (!source_ip.empty()) {
@@ -286,7 +334,7 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
         std::cout << "[NDIRecv] Using IP: " << source_ip << "\n";
     } else {
         std::cout << "[NDIRecv] No IP provided, scanning via NDI Find...\n";
-        found_url = find_source_url(source_name);
+        found_url = find_source_url(source_name, lookup_timing);
         if (!found_url.empty()) {
             src.p_url_address = found_url.c_str();
             std::cout << "[NDIRecv] Found URL: " << found_url << "\n";
@@ -300,9 +348,10 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
     // Send routing as a standalone frame (single XML root element) so the
     // source/DS can parse it unambiguously — the full connect_metadata_ may
     // contain multiple concatenated XML roots which many parsers reject.
+    const auto metadata_started = std::chrono::steady_clock::now();
     NDIlib_recv_clear_connection_metadata(recv_);
-    std::string routing_xml = "<ndi_routing><source name=\"" + source_name
-                            + "\" url=\"" + source_ip + "\"/></ndi_routing>";
+    std::string routing_xml = "<ndi_routing><source name=\"" + xml_escape(source_name)
+                            + "\" url=\"" + xml_escape(source_ip) + "\"/></ndi_routing>";
     {
         NDIlib_metadata_frame_t meta = {};
         meta.p_data = const_cast<char*>(routing_xml.c_str());
@@ -314,7 +363,22 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
         NDIlib_recv_add_connection_metadata(recv_, &meta);
     }
 
+    const auto connect_started = std::chrono::steady_clock::now();
     NDIlib_recv_connect(recv_, &src);
+    const auto connect_finished = std::chrono::steady_clock::now();
+    const auto milliseconds = [](auto begin, auto end) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count();
+    };
+    std::cout << "[NDIRecv] Connect timing path=" << (source_ip.empty() ? "scan" : "ip")
+              << " stop=" << milliseconds(stop_started, stop_finished)
+              << " framesync_destroy=" << milliseconds(framesync_started, framesync_finished)
+              << " recv_create=" << milliseconds(create_started, create_finished)
+              << " find_create=" << lookup_timing.create_ms
+              << " find_wait=" << lookup_timing.wait_ms
+              << " find_destroy=" << lookup_timing.destroy_ms
+              << " metadata=" << milliseconds(metadata_started, connect_started)
+              << " recv_connect=" << milliseconds(connect_started, connect_finished)
+              << " total=" << milliseconds(command_started, connect_finished) << " ms\n";
 
     running_ = true;
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
@@ -322,6 +386,7 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
 }
 
 void NDIReceiver::disconnect() {
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
     // Inform source/DS that this receiver is no longer routing to any source
     if (recv_ && NDIlib_recv_get_no_connections(recv_) > 0) {
         static const char none_routing[] =
@@ -334,9 +399,13 @@ void NDIReceiver::disconnect() {
     stop_thread();
     // Destroy FrameSync so the restarted recv_thread doesn't keep pulling
     // frames from the old session (which blocks frame_mutex_ and prevents splash).
-    if (framesync_) {
-        NDIlib_framesync_destroy(framesync_);
-        framesync_ = nullptr;
+    {
+        std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+        if (framesync_) {
+            audio_connected_=false;
+            NDIlib_framesync_destroy(framesync_);
+            framesync_ = nullptr;
+        }
     }
     // Keep recv_ alive — device stays visible as a receiver in discovery
     if (recv_) NDIlib_recv_connect(recv_, nullptr);
@@ -351,6 +420,7 @@ void NDIReceiver::disconnect() {
 }
 
 void NDIReceiver::reload_discovery(const std::string& new_ds) {
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
     if (new_ds == discovery_server_) return;
     discovery_server_ = new_ds;
     std::cout << "[NDIRecv] Reloading discovery server: '" << new_ds << "'\n";
@@ -380,6 +450,7 @@ void NDIReceiver::reload_discovery(const std::string& new_ds) {
 }
 
 bool NDIReceiver::is_connected() const {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
     if (!recv_) return false;
     return NDIlib_recv_get_no_connections(recv_) > 0;
 }
@@ -389,16 +460,15 @@ void NDIReceiver::set_transport(const std::string& rxpm) {
     transport_mode_ = rxpm;
     std::cout << "[NDIRecv] Transport mode set to: " << rxpm << "\n";
 
-    // NDI transport is negotiated by the SDK based on ndi-config.v1.json settings.
-    // RUDP is the default in NDI 5+; disabling it forces TCP/UDP fallback.
-    // Multicast is sender-controlled but we can express a preference via metadata.
-    // The config file is re-read when a new recv instance is created, so a
-    // reconnect (rename → destroy/create recv) applies the change.
-    // The actual config write is done by write_ndi_sdk_config() in main.cpp
-    // when reload_config is called — we just store the preference here.
+    // NDI transport is negotiated by the SDK from ndi-config.v1.json, which it
+    // reads only when the process starts (recreating the recv does not re-read
+    // it). write_ndi_sdk_config() in main.cpp writes the file and the worker
+    // restarts the process when this value differs from the configured one;
+    // here we only remember what this process started with.
 }
 
 void NDIReceiver::set_tally(bool on_program, bool on_preview) {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
     if (!recv_) return;
     NDIlib_tally_t tally = {};
     tally.on_program = on_program;
@@ -407,6 +477,7 @@ void NDIReceiver::set_tally(bool on_program, bool on_preview) {
 }
 
 void NDIReceiver::free_video(NDIVideoFrame& f) {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
     if (recv_ && f.ndi_frame) {
         NDIlib_recv_free_video_v2(recv_, f.ndi_frame);
         f.ndi_frame = nullptr;
@@ -414,27 +485,38 @@ void NDIReceiver::free_video(NDIVideoFrame& f) {
 }
 
 void NDIReceiver::free_video(NDIlib_video_frame_v2_t* frame) {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
     if (recv_ && frame)
         NDIlib_recv_free_video_v2(recv_, frame);
 }
 
 void NDIReceiver::free_audio(NDIAudioFrame& f) {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
     if (recv_ && f.ndi_frame) {
         NDIlib_recv_free_audio_v3(recv_, f.ndi_frame);
         f.ndi_frame = nullptr;
     }
 }
 
-void NDIReceiver::get_performance(int& total_frames, int& dropped_frames) {
-    if (!recv_) { total_frames = dropped_frames = 0; return; }
-    NDIlib_recv_performance_t total = {}, dropped = {};
-    NDIlib_recv_get_performance(recv_, &total, &dropped);
-    total_frames   = (int)total.video_frames;
-    dropped_frames = (int)dropped.video_frames;
-
-    // Monitor queue depth; log if video frames are backing up
+int NDIReceiver::video_queue_depth() {
+    std::lock_guard<std::mutex> handle_lock(handle_mutex_);
+    if (!recv_) return -1;
     NDIlib_recv_queue_t queue = {};
     NDIlib_recv_get_queue(recv_, &queue);
+    return queue.video_frames;
+}
+
+void NDIReceiver::get_performance(int& total_frames, int& dropped_frames) {
+    NDIlib_recv_queue_t queue = {};
+    {
+        std::lock_guard<std::mutex> handle_lock(handle_mutex_);
+        if (!recv_) { total_frames = dropped_frames = 0; return; }
+        NDIlib_recv_performance_t total = {}, dropped = {};
+        NDIlib_recv_get_performance(recv_, &total, &dropped);
+        total_frames = (int)total.video_frames;
+        dropped_frames = (int)dropped.video_frames;
+        NDIlib_recv_get_queue(recv_, &queue);
+    }
     if (queue.video_frames > 5)
         std::cerr << "[NDIRecv] WARNING: video queue depth " << queue.video_frames
                   << " — receiver is falling behind\n";
@@ -468,8 +550,10 @@ static NDIVideoFrame make_video_frame(NDIlib_video_frame_v2_t& raw) {
         vf.size   = raw.data_size_in_bytes;
         vf.stride = 0;
     } else {
-        vf.stride = raw.line_stride_in_bytes;
-        vf.size   = raw.line_stride_in_bytes * raw.yres;
+        const auto layout = ndi_video_layout(raw.FourCC, raw.xres, raw.yres,
+                                             raw.line_stride_in_bytes);
+        vf.stride = layout.stride;
+        vf.size = layout.bytes;
     }
     return vf;
 }
@@ -500,15 +584,20 @@ void NDIReceiver::recv_thread() {
 
         // ---- Connection status management ----
         int connections = NDIlib_recv_get_no_connections(recv_);
+        audio_connected_ = running_ && connections > 0;
         if (connections > 0 && !was_connected) {
             was_connected = true;
             probe_active  = false;
             first_frame_logged_ = false;
             stream_type_ = NDIStreamType::Unknown;
             // Destroy old framesync — new source may be different type
-            if (framesync_) {
-                NDIlib_framesync_destroy(framesync_);
-                framesync_ = nullptr;
+            {
+                std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+                if (framesync_) {
+                    audio_connected_=false;
+                    NDIlib_framesync_destroy(framesync_);
+                    framesync_ = nullptr;
+                }
             }
             {
                 std::lock_guard<std::mutex> lk(state_mutex_);
@@ -534,9 +623,13 @@ void NDIReceiver::recv_thread() {
             }
             probe_active  = !src_snap.empty() && src_snap != "None";
             probe_start   = std::chrono::steady_clock::now();
-            if (framesync_) {
-                NDIlib_framesync_destroy(framesync_);
-                framesync_ = nullptr;
+            {
+                std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+                if (framesync_) {
+                    audio_connected_=false;
+                    NDIlib_framesync_destroy(framesync_);
+                    framesync_ = nullptr;
+                }
             }
             stream_type_ = NDIStreamType::Unknown;
             if (running_) {
@@ -604,6 +697,7 @@ void NDIReceiver::recv_thread() {
             NDIlib_video_frame_v2_t video_frame{};
             NDIlib_framesync_capture_video(framesync_, &video_frame,
                                            NDIlib_frame_format_type_progressive);
+            if (video_frame.p_data && pull_cb_) pull_cb_(video_frame.timestamp);
             if (video_frame.p_data && video_cb_) {
                 if (!first_frame_logged_) {
                     first_frame_logged_ = true;
@@ -616,14 +710,15 @@ void NDIReceiver::recv_thread() {
                 }
                 NDIVideoFrame vf = make_video_frame(video_frame);
                 vf.ndi_frame = nullptr;  // framesync frames use separate free
-                video_cb_(vf);
+                vf.framesync = true;
+                if (vf.size > 0) video_cb_(vf);
             }
             NDIlib_framesync_free_video(framesync_, &video_frame);
 
             // Pull audio sized to elapsed time so we don't over-request vs the
             // ~8 ms loop. NDI FrameSync should be driven from a local timebase;
             // ALSA write blocking plus this sample count keep A/V near realtime.
-            if (audio_enabled_ && audio_cb_) {
+            if (!audio_pull_mode_ && audio_enabled_ && audio_cb_) {
                 auto now = std::chrono::steady_clock::now();
                 int samples = 1024;
                 if (fs_audio_have_) {
@@ -726,7 +821,10 @@ void NDIReceiver::recv_thread() {
                             // Create FrameSync for standard streams — provides
                             // display-sync frame timing and A/V sync with automatic
                             // frame duplication/dropping and silence insertion.
-                            framesync_ = NDIlib_framesync_create(recv_);
+                            {
+                                std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
+                                framesync_ = NDIlib_framesync_create(recv_);
+                            }
                             if (framesync_) {
                                 first_frame_logged_ = false;  // reset so FrameSync logs its FourCC
                                 fs_audio_have_ = false;
@@ -750,7 +848,7 @@ void NDIReceiver::recv_thread() {
 
                     if (video_cb_) {
                         NDIVideoFrame vf = make_video_frame(video_frame);
-                        video_cb_(vf);
+                        if (vf.size > 0) video_cb_(vf);
                         if (vf.ndi_frame)
                             NDIlib_recv_free_video_v2(recv_, &video_frame);
                     } else {
@@ -833,4 +931,24 @@ void NDIReceiver::recv_thread() {
     }
 
     std::cout << "[NDIRecv] STOPPED recv thread\n";
+}
+
+int NDIReceiver::pull_audio(int frames, int channels, float* const* planes, int* captured_channels) {
+    if(captured_channels)*captured_channels=0;
+    if (!audio_enabled_ || !audio_pull_mode_ || !audio_connected_ || frames<=0 || channels<1 || channels>16) return 0;
+    std::unique_lock<std::mutex> lock(framesync_mutex_,std::try_to_lock);
+    if (!lock.owns_lock() || !framesync_ || !running_ || !audio_connected_) return 0;
+    NDIlib_audio_frame_v2_t f{};
+    NDIlib_framesync_capture_audio(framesync_,&f,48000,0,frames);
+    int count=f.p_data && f.no_channels>0 && f.no_channels<=16 ? std::clamp(f.no_samples,0,frames) : 0;
+    if(captured_channels && count>0)*captured_channels=std::min(channels,f.no_channels);
+    for(int c=0;c<channels;++c) {
+        if(c<f.no_channels && count>0) {
+            const auto* p=reinterpret_cast<const float*>(reinterpret_cast<const uint8_t*>(f.p_data)+size_t(c)*f.channel_stride_in_bytes);
+            std::copy_n(p,count,planes[c]);
+        } else std::fill_n(planes[c],count,0.f);
+        std::fill(planes[c]+count,planes[c]+frames,0.f);
+    }
+    NDIlib_framesync_free_audio(framesync_,&f);
+    return count;
 }

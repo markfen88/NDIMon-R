@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NDIMon-R VERSION 1.1.1 LANGUAGES CXX C)
+project(NDIMon-R VERSION 1.3.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,6 +35,7 @@ find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(LIBDRM REQUIRED libdrm)
 pkg_check_modules(ALSA   REQUIRED alsa)
+pkg_check_modules(SWRESAMPLE REQUIRED libswresample libavutil)
 
 # systemd notify (optional, for watchdog integration)
 pkg_check_modules(SYSTEMD libsystemd)
@@ -115,6 +116,18 @@ set(DECODER_SOURCES
     src/VideoDecoder.cpp
     src/PlatformDetect.cpp
     src/DRMDisplay.cpp
+    src/TextRender.cpp
+    src/SplashPaint.cpp
+    src/audio/AudioEngine.cpp
+    src/audio/AudioSettings.cpp
+    src/audio/DelayLine.cpp
+    src/audio/MixMatrix.cpp
+    src/audio/DriftCompensator.cpp
+    src/audio/AlsaPcm.cpp
+    src/audio/AlsaSink.cpp
+    src/audio/AlsaSource.cpp
+    src/audio/NdiAudioSource.cpp
+    src/audio/TimerMaster.cpp
     src/AlsaAudio.cpp
     src/IPCServer.cpp
 )
@@ -124,6 +137,7 @@ set(DECODER_INCLUDES
     ${NDI_INCLUDE_DIR}
     ${LIBDRM_INCLUDE_DIRS}
     ${ALSA_INCLUDE_DIRS}
+    ${SWRESAMPLE_INCLUDE_DIRS}
     /usr/include/libdrm
     src/
 )
@@ -131,6 +145,7 @@ set(DECODER_LIBS
     ${NDI_LIBRARY}
     ${LIBDRM_LIBRARIES}
     ${ALSA_LIBRARIES}
+    ${SWRESAMPLE_LIBRARIES}
     pthread dl atomic
     avahi-client avahi-common
 )
@@ -201,6 +216,11 @@ endif()
 # --- Install ---
 install(TARGETS ndimon-r ndimon-finder
     RUNTIME DESTINATION /usr/local/bin
+)
+# Splash / OSD typeface (Inter, SIL OFL). The decoder falls back to its embedded
+# bitmap font when these are missing, so an old install still draws a splash.
+install(FILES fonts/Inter-Regular.ttf fonts/Inter-SemiBold.ttf fonts/LICENSE-Inter.txt
+    DESTINATION /usr/local/share/ndimon/fonts
 )
 # Config files are intentionally NOT installed by cmake.
 # install.sh handles first-time config installation with "skip if exists"

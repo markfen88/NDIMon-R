@@ -1,5 +1,6 @@
 'use strict';
 const express = require('express');
+const { isNdiEndpoint, resolveNdiEndpoint } = require('../ndi-endpoint');
 const router  = express.Router();
 const { readJson, writeJson, sendIPC, corsHeaders, parseChannel } = require('./lib');
 const { stopReconnectLoop: cancelReconnect, notifyManualConnect } = require('./Status');
@@ -7,7 +8,8 @@ const { stopReconnectLoop: cancelReconnect, notifyManualConnect } = require('./S
 const DEC1_SETTINGS = '/etc/ndimon-dec1-settings.json';
 const DEC1_STATUS   = '/etc/ndimon-dec1-status.json';
 const RX_SETTINGS   = '/etc/ndimon-rx-settings.json';
-const NDI_SRC       = '/etc/ndimon-sources.json';
+const NDI_SRC       = '/var/lib/ndimon/ndimon-sources.json';
+const { KNOWN_RXPM } = require('../transport');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
 
@@ -55,10 +57,15 @@ router.get('/decodeTransport', (req, res) => {
 router.post('/decodeTransport', (req, res) => {
     const cfg = readJson(RX_SETTINGS);
     const { Rxpm } = req.body || {};
-    if (Rxpm && ['Multicast','TCP','M-TCP','RUDP','UDP'].includes(Rxpm) && Rxpm !== cfg.Rxpm) {
-        cfg.Rxpm = Rxpm;
-        writeJson(RX_SETTINGS, cfg);
-        sendIPC({ action: 'reload_config' });
+    if (Rxpm && KNOWN_RXPM.includes(Rxpm)) {
+        const changed = Rxpm !== cfg.Rxpm;
+        // An explicit choice (even TCP) must survive the default migration.
+        if (changed || cfg.Rxpm_user_set !== true) {
+            cfg.Rxpm = Rxpm;
+            cfg.Rxpm_user_set = true;
+            writeJson(RX_SETTINGS, cfg);
+        }
+        if (changed) sendIPC({ action: 'reload_config' });
     }
     res.json(cfg);
 });
@@ -71,6 +78,7 @@ router.get('/connectTo', (req, res) => {
 
 router.post('/connectTo', (req, res) => {
     const { SourceName, SourceIP, Output = 1 } = req.body || {};
+    if (SourceIP != null && SourceIP !== '' && !isNdiEndpoint(SourceIP)) return res.status(400).json({ ok: false, error: 'invalid source IPv4 endpoint' });
     const ch = parseChannel(Output, 0);
     if (!ch) return res.status(400).json({ ok: false, error: 'output must be 1–8' });
     const outputIdx = ch - 1;
@@ -79,11 +87,12 @@ router.post('/connectTo', (req, res) => {
     if (SourceName && SourceName !== 'None') notifyManualConnect(outputIdx);
     const cfg = readJson(settingsFile);
     if (SourceName && SourceName !== 'None') {
+        const sourceIp = resolveNdiEndpoint(SourceName, SourceIP, SourceIP ? null : readJson(NDI_SRC));
         cfg.SourceName = SourceName;
-        cfg.SourceIP   = SourceIP || '';
+        cfg.SourceIP   = sourceIp;
         cfg.SourceSelection = 'NDI';
         writeJson(settingsFile, cfg);
-        sendIPC({ action: 'connect', source_name: SourceName, source_ip: SourceIP || '',
+        sendIPC({ action: 'connect', source_name: SourceName, source_ip: sourceIp,
                   output: outputIdx });
     } else {
         cfg.SourceName = '';

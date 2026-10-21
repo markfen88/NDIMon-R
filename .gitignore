@@ -11,6 +11,4 @@ Makefile
 .env
 .deploy-env
 *.log
-/tmp/
-# Vizrt NDI docs dump — local reference only, do not publish
-docs/ndi/vendor/
+__pycache__/

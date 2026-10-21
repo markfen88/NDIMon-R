@@ -1,5 +1,8 @@
 #include "DRMDisplay.h"
 #include "Config.h"
+#include "RotationPolicy.h"
+#include "SplashPaint.h"
+#include "SplashStyle.h"
 #include <iostream>
 #include <cstring>
 #include <fcntl.h>
@@ -15,6 +18,7 @@
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include <cerrno>
+#include <cstdlib>
 #include <stdexcept>
 #include <cmath>
 #include <thread>
@@ -70,109 +74,6 @@ static std::vector<DRMMode> collect_modes(drmModeConnector* conn) {
 #define STBI_FAILURE_USERMSG
 #include "stb_image.h"
 
-// ---------------------------------------------------------------------------
-// Embedded 8×8 bitmap font (public domain, covers ASCII 32–127)
-// Each glyph is 8 bytes; bit 7 of each byte is the leftmost pixel.
-// ---------------------------------------------------------------------------
-static const uint8_t kFont8x8[96][8] = {
-    { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 }, // ' '
-    { 0x18,0x3C,0x3C,0x18,0x18,0x00,0x18,0x00 }, // '!'
-    { 0x36,0x36,0x00,0x00,0x00,0x00,0x00,0x00 }, // '"'
-    { 0x36,0x36,0x7F,0x36,0x7F,0x36,0x36,0x00 }, // '#'
-    { 0x0C,0x3E,0x03,0x1E,0x30,0x1F,0x0C,0x00 }, // '$'
-    { 0x00,0x63,0x33,0x18,0x0C,0x66,0x63,0x00 }, // '%'
-    { 0x1C,0x36,0x1C,0x6E,0x3B,0x33,0x6E,0x00 }, // '&'
-    { 0x06,0x06,0x03,0x00,0x00,0x00,0x00,0x00 }, // '\''
-    { 0x18,0x0C,0x06,0x06,0x06,0x0C,0x18,0x00 }, // '('
-    { 0x06,0x0C,0x18,0x18,0x18,0x0C,0x06,0x00 }, // ')'
-    { 0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00 }, // '*'
-    { 0x00,0x0C,0x0C,0x3F,0x0C,0x0C,0x00,0x00 }, // '+'
-    { 0x00,0x00,0x00,0x00,0x00,0x0C,0x0C,0x06 }, // ','
-    { 0x00,0x00,0x00,0x3F,0x00,0x00,0x00,0x00 }, // '-'
-    { 0x00,0x00,0x00,0x00,0x00,0x0C,0x0C,0x00 }, // '.'
-    { 0x60,0x30,0x18,0x0C,0x06,0x03,0x01,0x00 }, // '/'
-    { 0x3E,0x63,0x73,0x7B,0x6F,0x67,0x3E,0x00 }, // '0'
-    { 0x0C,0x0E,0x0C,0x0C,0x0C,0x0C,0x3F,0x00 }, // '1'
-    { 0x1E,0x33,0x30,0x1C,0x06,0x33,0x3F,0x00 }, // '2'
-    { 0x1E,0x33,0x30,0x1C,0x30,0x33,0x1E,0x00 }, // '3'
-    { 0x38,0x3C,0x36,0x33,0x7F,0x30,0x78,0x00 }, // '4'
-    { 0x3F,0x03,0x1F,0x30,0x30,0x33,0x1E,0x00 }, // '5'
-    { 0x1C,0x06,0x03,0x1F,0x33,0x33,0x1E,0x00 }, // '6'
-    { 0x3F,0x33,0x30,0x18,0x0C,0x0C,0x0C,0x00 }, // '7'
-    { 0x1E,0x33,0x33,0x1E,0x33,0x33,0x1E,0x00 }, // '8'
-    { 0x1E,0x33,0x33,0x3E,0x30,0x18,0x0E,0x00 }, // '9'
-    { 0x00,0x0C,0x0C,0x00,0x00,0x0C,0x0C,0x00 }, // ':'
-    { 0x00,0x0C,0x0C,0x00,0x00,0x0C,0x0C,0x06 }, // ';'
-    { 0x18,0x0C,0x06,0x03,0x06,0x0C,0x18,0x00 }, // '<'
-    { 0x00,0x00,0x3F,0x00,0x00,0x3F,0x00,0x00 }, // '='
-    { 0x06,0x0C,0x18,0x30,0x18,0x0C,0x06,0x00 }, // '>'
-    { 0x1E,0x33,0x30,0x18,0x0C,0x00,0x0C,0x00 }, // '?'
-    { 0x3E,0x63,0x7B,0x7B,0x7B,0x03,0x1E,0x00 }, // '@'
-    { 0x0C,0x1E,0x33,0x33,0x3F,0x33,0x33,0x00 }, // 'A'
-    { 0x3F,0x66,0x66,0x3E,0x66,0x66,0x3F,0x00 }, // 'B'
-    { 0x3C,0x66,0x03,0x03,0x03,0x66,0x3C,0x00 }, // 'C'
-    { 0x1F,0x36,0x66,0x66,0x66,0x36,0x1F,0x00 }, // 'D'
-    { 0x7F,0x46,0x16,0x1E,0x16,0x46,0x7F,0x00 }, // 'E'
-    { 0x7F,0x46,0x16,0x1E,0x16,0x06,0x0F,0x00 }, // 'F'
-    { 0x3C,0x66,0x03,0x03,0x73,0x66,0x7C,0x00 }, // 'G'
-    { 0x33,0x33,0x33,0x3F,0x33,0x33,0x33,0x00 }, // 'H'
-    { 0x1E,0x0C,0x0C,0x0C,0x0C,0x0C,0x1E,0x00 }, // 'I'
-    { 0x78,0x30,0x30,0x30,0x33,0x33,0x1E,0x00 }, // 'J'
-    { 0x67,0x66,0x36,0x1E,0x36,0x66,0x67,0x00 }, // 'K'
-    { 0x0F,0x06,0x06,0x06,0x46,0x66,0x7F,0x00 }, // 'L'
-    { 0x63,0x77,0x7F,0x7F,0x6B,0x63,0x63,0x00 }, // 'M'
-    { 0x63,0x67,0x6F,0x7B,0x73,0x63,0x63,0x00 }, // 'N'
-    { 0x1C,0x36,0x63,0x63,0x63,0x36,0x1C,0x00 }, // 'O'
-    { 0x3F,0x66,0x66,0x3E,0x06,0x06,0x0F,0x00 }, // 'P'
-    { 0x1E,0x33,0x33,0x33,0x3B,0x1E,0x38,0x00 }, // 'Q'
-    { 0x3F,0x66,0x66,0x3E,0x36,0x66,0x67,0x00 }, // 'R'
-    { 0x1E,0x33,0x07,0x0E,0x38,0x33,0x1E,0x00 }, // 'S'
-    { 0x3F,0x2D,0x0C,0x0C,0x0C,0x0C,0x1E,0x00 }, // 'T'
-    { 0x33,0x33,0x33,0x33,0x33,0x33,0x3F,0x00 }, // 'U'
-    { 0x33,0x33,0x33,0x33,0x33,0x1E,0x0C,0x00 }, // 'V'
-    { 0x63,0x63,0x63,0x6B,0x7F,0x77,0x63,0x00 }, // 'W'
-    { 0x63,0x63,0x36,0x1C,0x1C,0x36,0x63,0x00 }, // 'X'
-    { 0x33,0x33,0x33,0x1E,0x0C,0x0C,0x1E,0x00 }, // 'Y'
-    { 0x7F,0x63,0x31,0x18,0x4C,0x66,0x7F,0x00 }, // 'Z'
-    { 0x1E,0x06,0x06,0x06,0x06,0x06,0x1E,0x00 }, // '['
-    { 0x03,0x06,0x0C,0x18,0x30,0x60,0x40,0x00 }, // '\\'
-    { 0x1E,0x18,0x18,0x18,0x18,0x18,0x1E,0x00 }, // ']'
-    { 0x08,0x1C,0x36,0x63,0x00,0x00,0x00,0x00 }, // '^'
-    { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF }, // '_'
-    { 0x0C,0x0C,0x18,0x00,0x00,0x00,0x00,0x00 }, // '`'
-    { 0x00,0x00,0x1E,0x30,0x3E,0x33,0x6E,0x00 }, // 'a'
-    { 0x07,0x06,0x06,0x3E,0x66,0x66,0x3B,0x00 }, // 'b'
-    { 0x00,0x00,0x1E,0x33,0x03,0x33,0x1E,0x00 }, // 'c'
-    { 0x38,0x30,0x30,0x3E,0x33,0x33,0x6E,0x00 }, // 'd'
-    { 0x00,0x00,0x1E,0x33,0x3F,0x03,0x1E,0x00 }, // 'e'
-    { 0x1C,0x36,0x06,0x0F,0x06,0x06,0x0F,0x00 }, // 'f'
-    { 0x00,0x00,0x6E,0x33,0x33,0x3E,0x30,0x1F }, // 'g'
-    { 0x07,0x06,0x36,0x6E,0x66,0x66,0x67,0x00 }, // 'h'
-    { 0x0C,0x00,0x0E,0x0C,0x0C,0x0C,0x1E,0x00 }, // 'i'
-    { 0x30,0x00,0x30,0x30,0x30,0x33,0x33,0x1E }, // 'j'
-    { 0x07,0x06,0x66,0x36,0x1E,0x36,0x67,0x00 }, // 'k'
-    { 0x0E,0x0C,0x0C,0x0C,0x0C,0x0C,0x1E,0x00 }, // 'l'
-    { 0x00,0x00,0x33,0x7F,0x7F,0x6B,0x63,0x00 }, // 'm'
-    { 0x00,0x00,0x1F,0x33,0x33,0x33,0x33,0x00 }, // 'n'
-    { 0x00,0x00,0x1E,0x33,0x33,0x33,0x1E,0x00 }, // 'o'
-    { 0x00,0x00,0x3B,0x66,0x66,0x3E,0x06,0x0F }, // 'p'
-    { 0x00,0x00,0x6E,0x33,0x33,0x3E,0x30,0x78 }, // 'q'
-    { 0x00,0x00,0x3B,0x6E,0x66,0x06,0x0F,0x00 }, // 'r'
-    { 0x00,0x00,0x3E,0x03,0x1E,0x30,0x1F,0x00 }, // 's'
-    { 0x08,0x0C,0x3E,0x0C,0x0C,0x2C,0x18,0x00 }, // 't'
-    { 0x00,0x00,0x33,0x33,0x33,0x33,0x6E,0x00 }, // 'u'
-    { 0x00,0x00,0x33,0x33,0x33,0x1E,0x0C,0x00 }, // 'v'
-    { 0x00,0x00,0x63,0x6B,0x7F,0x7F,0x36,0x00 }, // 'w'
-    { 0x00,0x00,0x63,0x36,0x1C,0x36,0x63,0x00 }, // 'x'
-    { 0x00,0x00,0x33,0x33,0x33,0x3E,0x30,0x1F }, // 'y'
-    { 0x00,0x00,0x3F,0x19,0x0C,0x26,0x3F,0x00 }, // 'z'
-    { 0x38,0x0C,0x0C,0x07,0x0C,0x0C,0x38,0x00 }, // '{'
-    { 0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x00 }, // '|'
-    { 0x07,0x0C,0x0C,0x38,0x0C,0x0C,0x07,0x00 }, // '}'
-    { 0x6E,0x3B,0x00,0x00,0x00,0x00,0x00,0x00 }, // '~'
-    { 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF }, // DEL
-};
-
 // Parse "#RRGGBB" → 0xFFRRGGBB (XRGB8888)
 static uint32_t hex_to_u32(const std::string& hex) {
     if (hex.size() < 7 || hex[0] != '#') return 0xFF808080u;
@@ -182,73 +83,6 @@ static uint32_t hex_to_u32(const std::string& hex) {
         uint32_t b = std::stoul(hex.substr(5,2), nullptr, 16);
         return 0xFF000000u | (r<<16) | (g<<8) | b;
     } catch (...) { return 0xFF808080u; }
-}
-
-// Draw a single character glyph at pixel origin (ox,oy), scaled by `scale`
-static void draw_glyph(uint32_t* pixels, uint32_t stride_u32,
-                       int ox, int oy, unsigned char ch,
-                       uint32_t color, int scale,
-                       uint32_t sw, uint32_t sh) {
-    if (ch < 32 || ch > 127) ch = '?';
-    const uint8_t* glyph = kFont8x8[ch - 32];
-    for (int row = 0; row < 8; row++) {
-        uint8_t bits = glyph[row];
-        for (int col = 0; col < 8; col++) {
-            if (!(bits & (1u << col))) continue;
-            for (int sy = 0; sy < scale; sy++) {
-                int py = oy + row*scale + sy;
-                if (py < 0 || py >= (int)sh) continue;
-                for (int sx = 0; sx < scale; sx++) {
-                    int px = ox + col*scale + sx;
-                    if (px >= 0 && px < (int)sw)
-                        pixels[(uint32_t)py * stride_u32 + (uint32_t)px] = color;
-                }
-            }
-        }
-    }
-}
-
-// Draw text centred at (cx, cy)
-static void draw_text_centred(uint32_t* pixels, uint32_t stride_u32,
-                               const std::string& text,
-                               uint32_t cx, uint32_t cy,
-                               uint32_t color, int scale,
-                               uint32_t sw, uint32_t sh) {
-    if (text.empty() || scale < 1) return;
-    int cw = 8 * scale;
-    int ch = 8 * scale;
-    int ox = (int)cx - (int)(text.size() * cw) / 2;
-    int oy = (int)cy - ch / 2;
-    for (size_t i = 0; i < text.size(); i++)
-        draw_glyph(pixels, stride_u32, ox + (int)i*cw, oy,
-                   (unsigned char)text[i], color, scale, sw, sh);
-}
-
-// Draw text right-aligned: right edge at rx, top at ty
-static void draw_text_right(uint32_t* pixels, uint32_t stride_u32,
-                             const std::string& text,
-                             uint32_t rx, uint32_t ty,
-                             uint32_t color, int scale,
-                             uint32_t sw, uint32_t sh) {
-    if (text.empty() || scale < 1) return;
-    int cw = 8 * scale;
-    int ox = (int)rx - (int)(text.size() * cw);
-    for (size_t i = 0; i < text.size(); i++)
-        draw_glyph(pixels, stride_u32, ox + (int)i * cw, (int)ty,
-                   (unsigned char)text[i], color, scale, sw, sh);
-}
-
-// Draw text left-aligned: left edge at lx, top at ty
-static void draw_text_left(uint32_t* pixels, uint32_t stride_u32,
-                            const std::string& text,
-                            uint32_t lx, uint32_t ty,
-                            uint32_t color, int scale,
-                            uint32_t sw, uint32_t sh) {
-    if (text.empty() || scale < 1) return;
-    int cw = 8 * scale;
-    for (size_t i = 0; i < text.size(); i++)
-        draw_glyph(pixels, stride_u32, (int)lx + (int)i * cw, (int)ty,
-                   (unsigned char)text[i], color, scale, sw, sh);
 }
 
 // Draw an RGBA/RGB image (from stb_image) centred at (cx,cy), scaled to w pixels wide
@@ -292,68 +126,15 @@ static void draw_logo(uint32_t* pixels, uint32_t stride_u32,
 // RGA hardware color conversion removed — mainline kernels use V4L2 M2M
 // driver which is incompatible with librga. NEON software path is used instead.
 
-// BT.601 YUV->RGB, clamped to [0,255]
-static inline uint32_t yuv_to_xrgb(int y, int u, int v) {
-    int r = y + ((359 * (v - 128)) >> 8);
-    int g = y - ((88  * (u - 128) + 183 * (v - 128)) >> 8);
-    int b = y + ((453 * (u - 128)) >> 8);
-    if (r < 0) r = 0; if (r > 255) r = 255;
-    if (g < 0) g = 0; if (g > 255) g = 255;
-    if (b < 0) b = 0; if (b > 255) b = 255;
-    return (0xFF000000u) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-}
+#include "YuvToXrgb.h"
 
-// ---------------------------------------------------------------------------
-// ARM NEON accelerated YUV→XRGB conversion (BT.601)
-// Processes 8 pixels at a time — ~6-8x faster than scalar on A72/A53.
-// ---------------------------------------------------------------------------
 #if defined(__aarch64__) || defined(__ARM_NEON)
-#include <arm_neon.h>
-
-// Convert 8 Y values + 8 U/V values to 8 XRGB pixels using NEON.
-// BT.601: R = Y + 1.402*(V-128),  G = Y - 0.344*(U-128) - 0.714*(V-128),  B = Y + 1.772*(U-128)
-// Fixed-point: R = Y + (359*(V-128))>>8,  G = Y - (88*(U-128) + 183*(V-128))>>8,  B = Y + (453*(U-128))>>8
-static inline void neon_yuv_to_xrgb_8px(const uint8_t* y_ptr, const uint8_t* u_ptr,
-                                         const uint8_t* v_ptr, uint32_t* dst) {
-    // Load 8 Y/U/V values and widen to 16-bit signed
-    int16x8_t y16 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(y_ptr)));
-    int16x8_t u16 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(u_ptr)));
-    int16x8_t v16 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(v_ptr)));
-
-    // Subtract 128 from U and V
-    int16x8_t u_off = vsubq_s16(u16, vdupq_n_s16(128));
-    int16x8_t v_off = vsubq_s16(v16, vdupq_n_s16(128));
-
-    // R = Y + (359*V')>>8
-    int16x8_t r16 = vaddq_s16(y16, vshrq_n_s16(vmulq_n_s16(v_off, 359), 8));
-    // G = Y - (88*U' + 183*V')>>8
-    int16x8_t g16 = vsubq_s16(y16, vshrq_n_s16(vaddq_s16(vmulq_n_s16(u_off, 88),
-                                                            vmulq_n_s16(v_off, 183)), 8));
-    // B = Y + (453*U')>>8
-    int16x8_t b16 = vaddq_s16(y16, vshrq_n_s16(vmulq_n_s16(u_off, 453), 8));
-
-    // Clamp to [0,255] and narrow to u8
-    uint8x8_t r8 = vqmovun_s16(r16);
-    uint8x8_t g8 = vqmovun_s16(g16);
-    uint8x8_t b8 = vqmovun_s16(b16);
-    uint8x8_t a8 = vdup_n_u8(0xFF);
-
-    // Interleave to XRGB (stored as BGRA in memory = 0xFFRRGGBB little-endian)
-    // Actually stored as B, G, R, A bytes in memory → XRGB when read as uint32_t LE
-    uint8x8x4_t rgba;
-    rgba.val[0] = b8;
-    rgba.val[1] = g8;
-    rgba.val[2] = r8;
-    rgba.val[3] = a8;
-    vst4_u8((uint8_t*)dst, rgba);
-}
-
 // NEON row converter: UYVY source → XRGB destination (1:1, no scaling)
 // Fully NEON — no scalar extraction loops inside the hot path.
 // UYVY layout: [U0 Y0 V0 Y1] [U2 Y2 V2 Y3] ... (4 bytes per macro-pixel, 2 pixels each)
 // vld4_u8 loads 32 bytes and deinterleaves into 4 x uint8x8 registers:
 //   val[0]=U, val[1]=Y_even, val[2]=V, val[3]=Y_odd   (8 macro-pixels = 16 pixels)
-static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t width) {
+static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t width, const YuvCoefficients& colour) {
     uint32_t x = 0;
     // Process 16 pixels (32 bytes UYVY = 8 macro-pixels) per iteration
     for (; x + 16 <= width; x += 16) {
@@ -375,11 +156,11 @@ static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t wi
         // Convert first 8 pixels
         neon_yuv_to_xrgb_8px((const uint8_t*)&y_zip.val[0],
                               (const uint8_t*)&u_zip.val[0],
-                              (const uint8_t*)&v_zip.val[0], dst + x);
+                              (const uint8_t*)&v_zip.val[0], dst + x, colour);
         // Convert next 8 pixels
         neon_yuv_to_xrgb_8px((const uint8_t*)&y_zip.val[1],
                               (const uint8_t*)&u_zip.val[1],
-                              (const uint8_t*)&v_zip.val[1], dst + x + 8);
+                              (const uint8_t*)&v_zip.val[1], dst + x + 8, colour);
     }
     // Process remaining 8 pixels if any
     if (x + 8 <= width) {
@@ -392,7 +173,7 @@ static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t wi
             vbuf[i*2] = vbuf[i*2+1] = p[i*4+2];
             ybuf[i*2+1] = p[i*4+3];
         }
-        neon_yuv_to_xrgb_8px(ybuf, ubuf, vbuf, dst + x);
+        neon_yuv_to_xrgb_8px(ybuf, ubuf, vbuf, dst + x, colour);
         x += 8;
     }
     // Scalar tail (< 8 pixels)
@@ -401,7 +182,7 @@ static void neon_uyvy_row_to_xrgb(const uint8_t* src, uint32_t* dst, uint32_t wi
         int u = src[pair * 2 + 0];
         int y = src[pair * 2 + 1 + (x & 1u) * 2];
         int v = src[pair * 2 + 2];
-        dst[x] = yuv_to_xrgb(y, u, v);
+        dst[x] = yuv_to_xrgb(y, u, v, colour);
     }
 }
 
@@ -444,13 +225,13 @@ static void neon_nv12_row_to_xrgb(const uint8_t* y_row, const uint8_t* uv_row,
 // horizontal nearest-neighbor resample. Much faster than scalar per-pixel YUV math.
 static void neon_uyvy_scale_row_to_xrgb(const uint8_t* src_row, uint32_t src_w,
                                           uint32_t* dst_row, uint32_t dst_w,
-                                          uint32_t x_step_fp16) {
+                                          uint32_t x_step_fp16, const YuvCoefficients& colour) {
     // Convert full source row to XRGB via NEON into a temp buffer
     // Use thread_local to avoid per-call allocation
     thread_local std::vector<uint32_t> line_buf;
     if (line_buf.size() < src_w) line_buf.resize(src_w);
 
-    neon_uyvy_row_to_xrgb(src_row, line_buf.data(), src_w);
+    neon_uyvy_row_to_xrgb(src_row, line_buf.data(), src_w, colour);
 
     // Horizontal nearest-neighbor resample (just uint32_t lookups — very fast)
     uint32_t sx_fp = 0;
@@ -904,6 +685,9 @@ bool DRMDisplay::setup_crtc(const std::string& connector_name,
         // Find the primary plane for this CRTC (needed for atomic plane commits)
         plane_id_ = 0;
         atomic_plane_state_ = 0;
+        unsafe_linear_rotation_ = true;
+        rotation_supported_mask_ = 0;
+        rotation_prop_id_ = 0;
         {
             drmModePlaneRes* pres = drmModeGetPlaneResources(drm_fd_);
             if (pres) {
@@ -955,9 +739,59 @@ bool DRMDisplay::setup_crtc(const std::string& connector_name,
                 prop_crtc_active_   = get_prop_id(drm_fd_, crtc_id_,      DRM_MODE_OBJECT_CRTC,      "ACTIVE");
                 prop_crtc_mode_id_  = get_prop_id(drm_fd_, crtc_id_,      DRM_MODE_OBJECT_CRTC,      "MODE_ID");
                 rotation_prop_id_   = get_prop_id(drm_fd_, plane_id_,     DRM_MODE_OBJECT_PLANE,     "rotation");
+                rotation_supported_mask_ = 0;
+                if (rotation_prop_id_) {
+                    auto* prop = drmModeGetProperty(drm_fd_, rotation_prop_id_);
+                    if (prop) {
+                        for (int i=0;i<prop->count_enums;++i)
+                            if (prop->enums[i].value < 64)
+                                rotation_supported_mask_ |= uint64_t(1) << prop->enums[i].value;
+                        drmModeFreeProperty(prop);
+                    }
+                }
                 if (rotation_prop_id_)
                     std::cout << "[DRM] Rotation property available on plane " << plane_id_ << "\n";
+
+                // Rockchip Cluster transforms require AFBC, whereas our splash
+                // and software conversion buffers are linear. Some BSP kernels
+                // accept TEST_ONLY yet fault the IOMMU on the actual scanout.
+                // NAME is an immutable bitmask: decode its active enum bit.
+                bool rockchip = true; // Unknown driver identity fails closed.
+                if (auto* version = drmGetVersion(drm_fd_)) {
+                    rockchip = !version->name || version->name_len <= 0 ||
+                        std::string(version->name, version->name_len) == "rockchip";
+                    drmFreeVersion(version);
+                }
+                std::string plane_name;
+                if (auto* props = drmModeObjectGetProperties(drm_fd_, plane_id_, DRM_MODE_OBJECT_PLANE)) {
+                    for (uint32_t p = 0; p < props->count_props; ++p) {
+                        auto* prop = drmModeGetProperty(drm_fd_, props->props[p]);
+                        if (!prop) continue;
+                        if (std::strcmp(prop->name, "NAME") == 0 &&
+                            (prop->flags & DRM_MODE_PROP_BITMASK)) {
+                            for (int e = 0; e < prop->count_enums; ++e) {
+                                const auto bit = prop->enums[e].value;
+                                if (bit < 64 && props->prop_values[p] == (uint64_t(1) << bit))
+                                    plane_name = prop->enums[e].name;
+                            }
+                        }
+                        drmModeFreeProperty(prop);
+                    }
+                    drmModeFreeObjectProperties(props);
+                }
+                const bool known_smart = plane_name.rfind("Esmart", 0) == 0 ||
+                                         plane_name.rfind("Smart", 0) == 0;
+                unsafe_linear_rotation_ = rockchip && !known_smart;
+                std::cout << "[DRM] Rotation policy plane=" << plane_id_
+                          << " name=" << (plane_name.empty() ? "unknown" : plane_name)
+                          << " advertised_mask=" << rotation_supported_mask_
+                          << " linear_transforms=" << !unsafe_linear_rotation_ << "\n";
             }
+        }
+        if (!rotation_allowed(rotation_degrees_)) {
+            rotation_degrees_ = 0;
+            rotation_drm_ = 1;
+            rotation_dirty_ = true;
         }
 
         std::cout << "[DRM] Connector " << this_name
@@ -1116,7 +950,7 @@ bool DRMDisplay::commit_fb(uint32_t fb_id) {
     // Atomic modesetting is required when: (a) rotation is active, or
     // (b) a previous atomic_plane_commit established the CRTC in atomic mode
     // (legacy SetCrtc/PageFlip fail after atomic has been used).
-    if (plane_id_ && (rotation_drm_ != 1 || atomic_plane_state_ == 1)) {
+    if (plane_id_ && (rotation_drm_ != 1 || rotation_dirty_ || atomic_plane_state_ == 1)) {
         Rect full_src = {0, 0, width_, height_};
         Rect full_dst = {0, 0, width_, height_};
         switch (atomic_plane_commit(fb_id, full_src, full_dst)) {
@@ -1244,15 +1078,26 @@ DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const R
     drmModeAtomicAddProperty(req, plane_id_, prop_plane_crtc_h_,  dst.h);
 
     // Hardware rotation (VOP2 Smart/Esmart planes)
-    if (rotation_prop_id_ && rotation_drm_ != 1)
+    if (rotation_prop_id_)
         drmModeAtomicAddProperty(req, plane_id_, rotation_prop_id_, rotation_drm_);
 
     flip_pending_ = true;
     int ret = drmModeAtomicCommit(drm_fd_, req, flags, this);
+    const int commit_error = errno;
     drmModeAtomicFree(req);
 
     if (ret != 0) {
         flip_pending_ = false;
+        if (rotation_drm_ != 1 && (commit_error == EINVAL || commit_error == ERANGE)) {
+            // Formats can change after TEST_ONLY; preserve output if the real
+            // commit becomes incompatible with the requested rotation.
+            std::cerr << "[DRM] Rotation commit failed; reverting display to 0 degrees\n";
+            rotation_degrees_=0;
+            rotation_drm_=1;
+            rotation_dirty_=true;
+            invalidate_fill_cache();
+            return atomic_plane_commit(fb_id,src,dst);
+        }
         if (!crtc_active_) {
             // Can't use atomic — caller should fall back to legacy path
             return CommitResult::Failed;
@@ -1261,6 +1106,7 @@ DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const R
         return CommitResult::Failed;
     }
 
+    rotation_dirty_ = false;
     crtc_active_ = true;
     return CommitResult::Ok;
 }
@@ -1268,39 +1114,60 @@ DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const R
 // ---------------------------------------------------------------------------
 // set_rotation — hardware rotation via VOP2 plane property
 // ---------------------------------------------------------------------------
-bool DRMDisplay::set_rotation(uint32_t degrees) {
-    uint32_t drm_val;
-    switch (degrees) {
-        case 0:   drm_val = 1;    break;  // DRM_MODE_ROTATE_0
-        case 90:  drm_val = 2;    break;  // DRM_MODE_ROTATE_90
-        case 180: drm_val = 0x30; break;  // reflect-x | reflect-y
-        case 270: drm_val = 8;    break;  // DRM_MODE_ROTATE_270
-        default:
-            std::cerr << "[DRM] Invalid rotation: " << degrees << "\n";
-            return false;
-    }
+std::vector<uint32_t> DRMDisplay::supported_rotations() const {
+    std::vector<uint32_t> result{0};
+    if (safe_rotation_value(180, rotation_supported_mask_, unsafe_linear_rotation_))
+        result.push_back(180);
+    return result;
+}
 
-    if (!rotation_prop_id_) {
-        std::cerr << "[DRM] Rotation not supported on this plane\n";
+bool DRMDisplay::rotation_allowed(uint32_t degrees) const {
+    return safe_rotation_value(degrees, rotation_supported_mask_, unsafe_linear_rotation_) != 0;
+}
+
+bool DRMDisplay::set_rotation(uint32_t degrees) {
+    rotation_busy_=false;
+    const auto drm_val = safe_rotation_value(degrees, rotation_supported_mask_, unsafe_linear_rotation_);
+    if (!drm_val) {
+        std::cerr << "[DRM] Rotation " << degrees << " unavailable for linear renderer on plane "
+                  << plane_id_ << " (quarter-turn geometry or plane transform restriction)\n";
         return false;
     }
-
-    rotation_degrees_ = degrees;
-    rotation_drm_     = drm_val;
-    invalidate_fill_cache();  // force bg redraw with new rotation
-
-    // Cluster planes (UYVY-capable) only support rotate-0 and reflect-y.
-    // Disable UYVY native path for any non-zero rotation so we fall through to
-    // software XRGB conversion on Smart/Esmart planes which support full rotation.
-    if (degrees != 0) {
-        for (auto& b : yuv_fb_) free_fb(b);
-        yuv_fb_state_ = -1;  // mark UYVY unsupported
-    } else if (yuv_fb_state_ == -1) {
-        yuv_fb_state_ = 0;   // re-enable UYVY probing at 0°
+    if (degrees==rotation_degrees_.load()) return true;
+    rotation_waiting_=true;
+    struct WaitingGuard {
+        std::atomic<bool>& flag;
+        ~WaitingGuard() { flag=false; }
+    } guard{rotation_waiting_};
+    std::unique_lock<std::mutex> lock(frame_mutex_,std::defer_lock);
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
+    while(!lock.try_lock()) {
+        if(std::chrono::steady_clock::now()>=deadline) { rotation_busy_=true;return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-
-    std::cout << "[DRM] Rotation set to " << degrees << "° (DRM value 0x"
-              << std::hex << drm_val << std::dec << ")\n";
+    if (degrees==rotation_degrees_) return true;
+    if (!rotation_prop_id_ || (rotation_supported_mask_ & drm_val)!=drm_val) {
+        std::cerr << "[DRM] Rotation " << degrees << " unsupported on plane " << plane_id_ << "\n";
+        return false;
+    }
+    // Test against the current plane format/scaling without changing scanout.
+    auto* req=drmModeAtomicAlloc();
+    if (!req) return false;
+    int add=drmModeAtomicAddProperty(req,plane_id_,rotation_prop_id_,drm_val);
+    int ret=add<0?-1:drmModeAtomicCommit(drm_fd_,req,DRM_MODE_ATOMIC_TEST_ONLY,nullptr);
+    drmModeAtomicFree(req);
+    if (ret) {
+        std::cerr << "[DRM] Rotation test rejected: " << std::strerror(errno) << "\n";
+        return false;
+    }
+    rotation_degrees_=degrees;
+    rotation_drm_=drm_val;
+    rotation_dirty_=true; // One atomic reset is required before legacy flips resume.
+    invalidate_fill_cache();
+    // Keep scanout buffers alive until normal mode teardown.
+    yuv_fb_state_ = degrees? -1:0;
+    uyvy_colour_cached_ = false;
+    std::cout << "[DRM] Rotation accepted: " << degrees << " degrees\n";
     return true;
 }
 
@@ -1372,13 +1239,18 @@ DRMDisplay::Rect DRMDisplay::compute_src_rect(uint32_t src_w, uint32_t src_h) co
 // Fills the black letterbox/crop bars in the CURRENT buffer (fb_[cur_buf_]).
 // Cache is tracked per-buffer so double-buffering doesn't cause stale bar
 // content from a prior show_splash() call to bleed through.
-void DRMDisplay::fill_bg(DRMBuffer& buf) {
-    if (scale_mode_ == ScaleMode::Stretch) return;
-
-    int idx = cur_buf_;  // which slot in the double-buffer ring
+void DRMDisplay::fill_bg(DRMBuffer& buf, const Rect& painted) {
+    int idx = cur_buf_;
+    if (scale_mode_ == ScaleMode::Stretch) {
+        last_bg_fill_w_[idx] = 0;
+        return;
+    }
+    const Rect& previous = last_bg_painted_[idx];
     if (buf.width  == last_bg_fill_w_[idx] &&
         buf.height == last_bg_fill_h_[idx] &&
-        scale_mode_ == last_bg_scale_[idx]) {
+        scale_mode_ == last_bg_scale_[idx] &&
+        painted.x == previous.x && painted.y == previous.y &&
+        painted.w == previous.w && painted.h == previous.h) {
         return;
     }
 
@@ -1387,6 +1259,7 @@ void DRMDisplay::fill_bg(DRMBuffer& buf) {
     last_bg_fill_w_[idx]  = buf.width;
     last_bg_fill_h_[idx]  = buf.height;
     last_bg_scale_[idx]   = scale_mode_;
+    last_bg_painted_[idx] = painted;
 }
 
 void DRMDisplay::invalidate_fill_cache() {
@@ -1461,7 +1334,7 @@ void DRMDisplay::sw_nv12_to_xrgb(const uint8_t* src,
 void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
                                    uint32_t src_w, uint32_t src_h, uint32_t src_stride,
                                    uint8_t* dst, uint32_t dst_stride,
-                                   const Rect& dr, uint32_t /*out_w*/, uint32_t /*out_h*/) {
+                                   const Rect& dr, uint32_t /*out_w*/, uint32_t /*out_h*/, const YuvCoefficients& colour) {
     if (dr.w == 0 || dr.h == 0) return;
 
     uint32_t y_step = (src_h << 16) / dr.h;
@@ -1472,7 +1345,7 @@ void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
         for (uint32_t sy = 0; sy < src_h; sy++) {
             const uint8_t* s = src + (size_t)sy * src_stride;
             uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + sy) * dst_stride) + dr.x;
-            neon_uyvy_row_to_xrgb(s, d, src_w);
+            neon_uyvy_row_to_xrgb(s, d, src_w, colour);
         }
         return;
     }
@@ -1483,7 +1356,7 @@ void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
         uint32_t sy = ((uint64_t)row * y_step) >> 16;
         const uint8_t* s = src + (size_t)sy * src_stride;
         uint32_t* d = (uint32_t*)(dst + (size_t)(dr.y + row) * dst_stride) + dr.x;
-        neon_uyvy_scale_row_to_xrgb(s, src_w, d, dr.w, x_step);
+        neon_uyvy_scale_row_to_xrgb(s, src_w, d, dr.w, x_step, colour);
     }
 #else
     uint32_t x_step = (src_w << 16) / dr.w;
@@ -1500,7 +1373,7 @@ void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
             int u = s[pair * 2 + 0];
             int y = s[pair * 2 + 1 + (sx & 1u) * 2];
             int v = s[pair * 2 + 2];
-            d[dx] = yuv_to_xrgb(y, u, v);
+            d[dx] = yuv_to_xrgb(y, u, v, colour);
         }
     }
 #endif
@@ -1510,6 +1383,64 @@ void DRMDisplay::sw_uyvy_to_xrgb(const uint8_t* src,
 // UYVY native plane path — VOP2 Cluster handles YUV→RGB during scanout.
 // ---------------------------------------------------------------------------
 
+static bool plane_colour_matches(int fd,uint32_t plane,const char* matrix) {
+    auto* props=drmModeObjectGetProperties(fd,plane,DRM_MODE_OBJECT_PLANE);
+    if(!props)return false;
+    bool encoding=false,range=false;
+    for(uint32_t i=0;i<props->count_props;++i) {
+        auto* p=drmModeGetProperty(fd,props->props[i]);if(!p)continue;
+        for(int n=0;n<p->count_enums;++n) if(p->enums[n].value==props->prop_values[i]) {
+            if(std::strcmp(p->name,"COLOR_ENCODING")==0 && std::strcmp(p->enums[n].name,matrix)==0)encoding=true;
+            if(std::strcmp(p->name,"COLOR_RANGE")==0 && std::strcmp(p->enums[n].name,"YCbCr limited range")==0)range=true;
+        }
+        drmModeFreeProperty(p);
+    }
+    drmModeFreeObjectProperties(props);return encoding&&range;
+}
+
+bool DRMDisplay::native_uyvy_colour_matches(uint32_t w,uint32_t h) {
+    const auto& colour=ndi_yuv_coefficients(w,h);
+    const char* matrix=&colour==&kYuv601?"ITU-R BT.601 YCbCr":&colour==&kYuv709?"ITU-R BT.709 YCbCr":"ITU-R BT.2020 YCbCr";
+    const uint32_t requested_plane=(atomic_plane_state_==1 || rotation_drm_!=1)?plane_id_:0;
+    if(uyvy_colour_cached_ && uyvy_colour_request_plane_==requested_plane && uyvy_colour_class_==&colour)
+        return uyvy_colour_compatible_;
+    uint32_t scanout=requested_plane;
+    if(!requested_plane) {
+        auto* planes=drmModeGetPlaneResources(drm_fd_);
+        if(planes) {
+            for(uint32_t i=0;i<planes->count_planes;++i) {
+                auto* plane=drmModeGetPlane(drm_fd_,planes->planes[i]);
+                if(!plane)continue;
+                if(plane->crtc_id==crtc_id_) {
+                    auto* props=drmModeObjectGetProperties(drm_fd_,plane->plane_id,DRM_MODE_OBJECT_PLANE);
+                    if(props) {
+                        for(uint32_t j=0;j<props->count_props;++j) {
+                            auto* p=drmModeGetProperty(drm_fd_,props->props[j]);
+                            if(p && std::strcmp(p->name,"type")==0 && props->prop_values[j]==DRM_PLANE_TYPE_PRIMARY)scanout=plane->plane_id;
+                            if(p)drmModeFreeProperty(p);
+                        }
+                        drmModeFreeObjectProperties(props);
+                    }
+                }
+                drmModeFreePlane(plane);
+            }
+            drmModeFreePlaneResources(planes);
+        }
+    }
+    bool compatible=scanout && plane_colour_matches(drm_fd_,scanout,matrix);
+    std::cout << "[DRM] UYVY colour plane=" << scanout << " matrix=" << colour.name
+              << " range=limited native-compatible=" << compatible << "\n";
+    uyvy_colour_cached_=true;
+    uyvy_colour_request_plane_=requested_plane;
+    uyvy_colour_class_=&colour;
+    uyvy_colour_compatible_=compatible;
+    if (!compatible) {
+        // Keep old buffers until mode teardown: one may still be scanned out.
+        yuv_fb_state_=-1; // Re-probed after rotation/mode reinitialisation.
+    }
+    return compatible;
+}
+
 bool DRMDisplay::alloc_yuv_fb_if_needed() {
     if (yuv_fb_state_ == 1) {
         if (yuv_fb_[0].width == width_ && yuv_fb_[0].height == height_)
@@ -1517,6 +1448,7 @@ bool DRMDisplay::alloc_yuv_fb_if_needed() {
         // Wrong size — free and reallocate
         for (auto& b : yuv_fb_) free_fb(b);
         yuv_fb_state_ = 0;
+        uyvy_colour_cached_ = false;
     }
     if (yuv_fb_state_ == -1) return false;
 
@@ -1641,6 +1573,7 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
                                     uint32_t frame_w, uint32_t frame_h,
                                     uint32_t stride, uint32_t drm_format) {
     if (!initialized_) return false;
+    if (rotation_waiting_.load(std::memory_order_relaxed) || mode_waiting_.load(std::memory_order_relaxed)) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
 
     // BGRX/BGRA direct path: SDK already converted to RGB — just copy to DRM buffer.
@@ -1653,13 +1586,13 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
         }
         if (!buf.map) return false;
 
-        fill_bg(buf);
         Rect dr = compute_dst_rect(frame_w, frame_h);
         Rect sr = compute_src_rect(frame_w, frame_h);
         uint32_t src_stride_bytes = stride ? stride : frame_w * 4u;
         const uint8_t* win = data + (size_t)sr.y * src_stride_bytes + (size_t)sr.x * 4u;
         uint32_t copy_w = std::min(sr.w, dr.w) * 4u;
         uint32_t copy_h = std::min(sr.h, dr.h);
+        fill_bg(buf, Rect{dr.x, dr.y, copy_w / 4u, copy_h});
 
         for (uint32_t y = 0; y < copy_h; y++) {
             memcpy((uint8_t*)buf.map + (size_t)(dr.y + y) * buf.stride + dr.x * 4u,
@@ -1670,9 +1603,7 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
         streaming_ = true;
         if (osd_enabled_ && !osd_text_.empty()) {
             uint32_t* px = (uint32_t*)buf.map;
-            draw_text_centred(px, buf.stride / 4, osd_text_,
-                              width_ / 2, (uint32_t)(0.04f * height_),
-                              0xFFFFFFFFu, 2, width_, height_);
+            draw_osd(px, buf.stride / 4);
         }
         bool ok = commit_fb(buf.fb_id);
         if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
@@ -1683,7 +1614,7 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
     // The display controller handles YUV→RGB during scanout — zero CPU colour math.
     // If commit_fb fails (plane doesn't support UYVY in this lease), fall back
     // to the software XRGB conversion path and mark UYVY as unsupported.
-    if (drm_format == DRM_FORMAT_UYVY && data && alloc_yuv_fb_if_needed()) {
+    if (drm_format == DRM_FORMAT_UYVY && data && yuv_fb_state_ != -1 && native_uyvy_colour_matches(frame_w,frame_h) && alloc_yuv_fb_if_needed()) {
         DRMBuffer& ybuf = yuv_fb_[cur_yuv_buf_];
         if (ybuf.map) {
             fill_bg_yuv(ybuf);
@@ -1726,10 +1657,17 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
     uint32_t src_stride = stride ? stride : frame_w;
 
     if (data) {
+        if (drm_format == DRM_FORMAT_UYVY || drm_format == DRM_FORMAT_YUYV) {
+            const auto& colour=ndi_yuv_coefficients(frame_w,frame_h);
+            if (colour_path_!=colour.name) {
+                colour_path_=colour.name;
+                std::cout << "[DRM] NDI colour path=yuv422-sw " << colour.name << " range=limited\n";
+            }
+        }
         // NEON software convert directly to DRM back buffer.
         // Triple buffering (3 buffers) ensures this buffer is never being
         // scanned out, so direct writes are tear-free.
-        fill_bg(buf);
+        fill_bg(buf, dr);
 
         if (drm_format == DRM_FORMAT_NV12 ||
             drm_format == DRM_FORMAT_NV15 ||
@@ -1744,21 +1682,19 @@ bool DRMDisplay::show_frame_memory(const uint8_t* data, size_t /*size*/,
             const uint8_t* win = data + (size_t)sr.y * uyvy_stride + (size_t)sr.x * 2u;
             sw_uyvy_to_xrgb(win, sr.w, sr.h, uyvy_stride,
                              (uint8_t*)buf.map, buf.stride,
-                             dr, width_, height_);
+                             dr, width_, height_, ndi_yuv_coefficients(frame_w,frame_h));
         } else {
             uint32_t src_row_bytes = stride ? stride : frame_w * 2u;
             const uint8_t* win = data + (size_t)sr.y * src_row_bytes + (size_t)sr.x * 2u;
             sw_uyvy_to_xrgb(win, sr.w, sr.h, src_row_bytes,
                              (uint8_t*)buf.map, buf.stride,
-                             dr, width_, height_);
+                             dr, width_, height_, ndi_yuv_coefficients(frame_w,frame_h));
         }
     }
 
     if (osd_enabled_ && !osd_text_.empty()) {
         uint32_t* px = (uint32_t*)buf.map;
-        draw_text_centred(px, buf.stride / 4, osd_text_,
-                          width_ / 2, (uint32_t)(0.04f * height_),
-                          0xFFFFFFFFu, 2, width_, height_);
+        draw_osd(px, buf.stride / 4);
     }
 
     streaming_ = true;
@@ -1775,6 +1711,7 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
                                  uint32_t frame_w, uint32_t frame_h,
                                  uint32_t stride_y, uint32_t stride_uv) {
     if (!initialized_) return false;
+    if (rotation_waiting_.load(std::memory_order_relaxed) || mode_waiting_.load(std::memory_order_relaxed)) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
     if (stride_uv == 0) stride_uv = stride_y;
 
@@ -1842,7 +1779,7 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
         }
         if (!buf.map) return false;
 
-        fill_bg(buf);
+        fill_bg(buf, dr);
 
         {
             // NEON convert directly to DRM back buffer.
@@ -1882,9 +1819,7 @@ bool DRMDisplay::show_frame_dma(int dma_fd, uint32_t format,
 
         if (osd_enabled_ && !osd_text_.empty()) {
             uint32_t* px = (uint32_t*)buf.map;
-            draw_text_centred(px, buf.stride / 4, osd_text_,
-                              width_ / 2, (uint32_t)(0.04f * height_),
-                              0xFFFFFFFFu, 2, width_, height_);
+            draw_osd(px, buf.stride / 4);
         }
 
         streaming_ = true;
@@ -1962,6 +1897,7 @@ bool DRMDisplay::show_frame_dma_explicit(int dma_fd, uint32_t format,
                                          const uint32_t offsets[4], const uint32_t pitches[4],
                                          int num_planes, uint64_t modifier) {
     if (!initialized_) return false;
+    if (rotation_waiting_.load(std::memory_order_relaxed) || mode_waiting_.load(std::memory_order_relaxed)) return false;
     std::lock_guard<std::mutex> lk(frame_mutex_);
     if (num_planes <= 0) num_planes = 1;
     if (num_planes > 4)  num_planes = 4;
@@ -2060,45 +1996,24 @@ bool DRMDisplay::show_splash(bool source_available) {
     }
     if (!buf.map) return false;
 
+    using namespace ndimon;
+    using namespace ndimon::paint;
     uint32_t* pixels = (uint32_t*)buf.map;
-    uint32_t stride_u32 = buf.stride / 4;
+    const uint32_t stride_u32 = buf.stride / 4;
+    const uint32_t W = width_, H = height_;
 
     const SplashConfig& sc = Config::instance().splash;
+    const uint32_t bg     = hex_to_u32(source_available ? sc.bg_live     : sc.bg_idle)     & 0xFFFFFFu;
+    const uint32_t accent = hex_to_u32(source_available ? sc.accent_live : sc.accent_idle) & 0xFFFFFFu;
+    const uint32_t white  = 0xFFFFFFu;
 
-    uint32_t bg_color     = hex_to_u32(source_available ? sc.bg_live    : sc.bg_idle);
-    uint32_t accent_color = hex_to_u32(source_available ? sc.accent_live : sc.accent_idle);
-    // Darken accent for the box fill (50% blend toward bg)
-    uint32_t box_r = (((bg_color>>16)&0xFF) + ((accent_color>>16)&0xFF)) / 2;
-    uint32_t box_g = (((bg_color>> 8)&0xFF) + ((accent_color>> 8)&0xFF)) / 2;
-    uint32_t box_b = (( bg_color     &0xFF) + ( accent_color     &0xFF)) / 2;
-    uint32_t box_color = 0xFF000000u | (box_r<<16) | (box_g<<8) | box_b;
-
-    // ── Fill background ──────────────────────────────────────────────────────
-    for (uint32_t y = 0; y < height_; y++)
-        for (uint32_t x = 0; x < width_; x++)
-            pixels[y * stride_u32 + x] = bg_color;
-
-    // ── Decorative centre box ────────────────────────────────────────────────
-    if (sc.show_box) {
-        uint32_t bx0 = width_  / 3,  bx1 = width_  * 2 / 3;
-        uint32_t by0 = height_ / 3,  by1 = height_ * 2 / 3;
-
-        for (uint32_t y = by0; y < by1; y++)
-            for (uint32_t x = bx0; x < bx1; x++)
-                pixels[y * stride_u32 + x] = box_color;
-
-        for (uint32_t b = 0; b < 2; b++) {
-            uint32_t top = by0+b, bot = by1-1-b;
-            uint32_t lft = bx0+b, rgt = bx1-1-b;
-            for (uint32_t x = bx0; x < bx1; x++) {
-                pixels[top * stride_u32 + x] = accent_color;
-                pixels[bot * stride_u32 + x] = accent_color;
-            }
-            for (uint32_t y = by0; y < by1; y++) {
-                pixels[y * stride_u32 + lft] = accent_color;
-                pixels[y * stride_u32 + rgt] = accent_color;
-            }
-        }
+    // ── Backdrop: gradient with a soft accent glow, or the flat colour ───────
+    if (backdrop_from_string(sc.backdrop) == Backdrop::Gradient) {
+        fill_vertical_gradient(pixels, stride_u32, W, H, bg, darken(bg, 0.55f));
+        add_radial_glow(pixels, stride_u32, W, H, (int)(W * 0.12f), 0, (int)(H * 0.9f), accent, 56);
+    } else {
+        for (uint32_t y = 0; y < H; y++)
+            std::fill_n(pixels + (size_t)y * stride_u32, W, 0xFF000000u | bg);
     }
 
     // ── Logo image ───────────────────────────────────────────────────────────
@@ -2106,10 +2021,10 @@ bool DRMDisplay::show_splash(bool source_available) {
         int iw = 0, ih = 0, ic = 0;
         uint8_t* img = stbi_load(sc.logo_path.c_str(), &iw, &ih, &ic, 0);
         if (img) {
-            uint32_t cx = (uint32_t)(sc.logo_x_pct / 100.0f * width_);
-            uint32_t cy = (uint32_t)(sc.logo_y_pct / 100.0f * height_);
-            uint32_t dw = (uint32_t)(sc.logo_w_pct / 100.0f * width_);
-            draw_logo(pixels, stride_u32, img, iw, ih, ic, cx, cy, dw, width_, height_);
+            uint32_t cx = (uint32_t)(sc.logo_x_pct / 100.0f * W);
+            uint32_t cy = (uint32_t)(sc.logo_y_pct / 100.0f * H);
+            uint32_t dw = (uint32_t)(sc.logo_w_pct / 100.0f * W);
+            draw_logo(pixels, stride_u32, img, iw, ih, ic, cx, cy, dw, W, H);
             stbi_image_free(img);
         } else {
             std::cerr << "[DRM] splash logo load failed: " << sc.logo_path
@@ -2117,79 +2032,85 @@ bool DRMDisplay::show_splash(bool source_available) {
         }
     }
 
-    // ── Compute proportional font scale from text_height_pct ────────────────
-    // The 8x8 bitmap font has 8 pixel rows; scale = desired_pixel_height / 8.
-    // All text elements use the same scale for consistency.
-    float pct = std::max(1.0f, std::min(sc.text_height_pct, 20.0f));
-    int font_scale = std::max(1, (int)(pct / 100.0f * height_ / 8.0f));
-    int font_h = 8 * font_scale;
-    // 5% title-safe margin (standard broadcast safe area)
-    uint32_t margin_x = (uint32_t)(width_  * 0.05f);
-    uint32_t margin_y = (uint32_t)(height_ * 0.05f);
+    // ── Type scale from text_height_pct; secondary text at 60% ──────────────
+    ensure_text_renderer();
+    const float pct = std::max(1.0f, std::min(sc.text_height_pct, 20.0f));
+    const int status_px = std::max(12, (int)(pct / 100.0f * H));
+    const int sub_px    = std::max(10, (int)(status_px * 0.6f));
+    const int margin_x  = (int)(W * 0.05f);   // 5% title-safe margin
+    const int margin_y  = (int)(H * 0.05f);
 
-    // ── Top-left: signal text + sources available ──────────────────────────
-    {
-        int line_h = font_h + 4;
-        uint32_t ty = margin_y;
-
-        if (sc.show_signal_text) {
-            const std::string& label = source_available ? sc.text_live : sc.text_idle;
-            if (!label.empty()) {
-                draw_text_left(pixels, stride_u32, label,
-                               margin_x, ty,
-                               accent_color, font_scale, width_, height_);
-                ty += (uint32_t)line_h;
-            }
-        }
-
-        if (sc.show_sources_available) {
-            // Read source count from ndimon-sources.json, subtract 1 for "None"
-            int src_count = 0;
-            try {
-                std::ifstream f("/etc/ndimon-sources.json");
-                if (f.is_open()) {
-                    nlohmann::json j;
-                    f >> j;
-                    src_count = std::max(0, j.value("count", 0) - 1);
-                }
-            } catch (...) {}
-            std::string src_text = "Sources: " + std::to_string(src_count);
-            draw_text_left(pixels, stride_u32, src_text,
-                           margin_x, ty, accent_color, font_scale, width_, height_);
+    // ── Top-left: status pill with a glowing dot, then the source count ─────
+    int left_x = margin_x;
+    int ty = margin_y;
+    if (sc.show_signal_text) {
+        const std::string& label = source_available ? sc.text_live : sc.text_idle;
+        if (!label.empty()) {
+            TextBitmap t = text_.render(label, status_px, true);
+            const int pad_x = (int)(status_px * 0.6f), pad_y = (int)(status_px * 0.3f);
+            const int dot_r = std::max(3, (int)(status_px * 0.18f));
+            const int gap   = (int)(status_px * 0.4f);
+            const int pill_h = t.h + 2 * pad_y;
+            const int pill_w = pad_x + 2 * dot_r + gap + t.w + pad_x;
+            fill_rounded_rect(pixels, stride_u32, W, H, margin_x, margin_y, pill_w, pill_h, pill_h / 2,
+                              white, 18, mix(white, accent, 0.5f), 48);
+            const float dcx = margin_x + pad_x + dot_r, dcy = margin_y + pill_h * 0.5f;
+            add_radial_glow(pixels, stride_u32, W, H, (int)dcx, (int)dcy, dot_r * 3, accent, 140);
+            fill_circle(pixels, stride_u32, W, H, dcx, dcy, (float)dot_r, accent);
+            blit_text(pixels, stride_u32, W, H, t, margin_x + pad_x + 2 * dot_r + gap, margin_y + pad_y, white);
+            left_x = margin_x + pad_x;
+            ty = margin_y + pill_h + (int)(sub_px * 0.6f);
         }
     }
+    if (sc.show_sources_available) {
+        // Read source count from ndimon-sources.json, subtract 1 for "None"
+        int src_count = 0;
+        try {
+            std::ifstream f("/var/lib/ndimon/ndimon-sources.json");
+            if (f.is_open()) {
+                nlohmann::json j;
+                f >> j;
+                src_count = std::max(0, j.value("count", 0) - 1);
+            }
+        } catch (...) {}
+        std::string src_text = src_count == 0 ? "No sources found"
+                             : std::to_string(src_count) + (src_count == 1 ? " source available" : " sources available");
+        TextBitmap t = text_.render(src_text, sub_px, false);
+        blit_text(pixels, stride_u32, W, H, t, left_x, ty, white, 150);
+    }
 
-    // ── Top-right: NDI name + URL ────────────────────────────────────────────
+    // ── Top-right: NDI name and URL ──────────────────────────────────────────
     {
         const auto& dev = Config::instance().device;
-        int line_h = font_h + 4;
-        uint32_t rx = width_ - margin_x;
-        uint32_t ty = margin_y;
-
-        const std::string& ndi_name = dev.ndi_recv_name.empty()
-                                        ? dev.device_name : dev.ndi_recv_name;
+        const int rx = (int)W - margin_x;
+        int ry = margin_y;
+        const std::string& ndi_name = dev.ndi_recv_name.empty() ? dev.device_name : dev.ndi_recv_name;
         if (sc.show_device_name && !ndi_name.empty()) {
-            draw_text_right(pixels, stride_u32, ndi_name,
-                            rx, ty, accent_color, font_scale, width_, height_);
-            ty += (uint32_t)line_h;
+            TextBitmap t = text_.render(ndi_name, (int)(status_px * 0.8f), true);
+            blit_text(pixels, stride_u32, W, H, t, rx - t.w, ry, white);
+            ry += t.h + (int)(sub_px * 0.3f);
         }
         std::string ip = Config::instance().runtime_ip();
         if (sc.show_device_url && !ip.empty()) {
-            std::string url = "http://" + ip;
-            draw_text_right(pixels, stride_u32, url,
-                            rx, ty, accent_color, font_scale, width_, height_);
+            TextBitmap t = text_.render("http://" + ip, sub_px, false);
+            blit_text(pixels, stride_u32, W, H, t, rx - t.w, ry, white, 160);
         }
     }
 
-    // Written by the network helper while a change is waiting to be confirmed.
+    // ── Bottom-centre: banner while a network change waits to be confirmed ──
+    // Written by the network helper; the confirmation token is never drawn.
     {
         std::ifstream pending("/run/ndimon/net-pending");
         std::string line;
         if (pending && std::getline(pending, line) && !line.empty()) {
             if (line.size() > 80) line.resize(80);
-            draw_text_centred(pixels, stride_u32, line,
-                              width_ / 2, height_ - margin_y - (uint32_t)font_h,
-                              accent_color, font_scale, width_, height_);
+            TextBitmap t = text_.render(line, sub_px, false);
+            const int pad_x = (int)(sub_px * 0.8f), pad_y = (int)(sub_px * 0.4f);
+            const int pill_w = t.w + 2 * pad_x, pill_h = t.h + 2 * pad_y;
+            const int px0 = (int)W / 2 - pill_w / 2, py0 = (int)H - margin_y - pill_h;
+            fill_rounded_rect(pixels, stride_u32, W, H, px0, py0, pill_w, pill_h, pill_h / 2,
+                              white, 18, white, 40);
+            blit_text(pixels, stride_u32, W, H, t, px0 + pad_x, py0 + pad_y, white, 220);
         }
     }
 
@@ -2202,6 +2123,45 @@ bool DRMDisplay::show_splash(bool source_available) {
     bool ok = commit_fb(buf.fb_id);
     if (ok) cur_buf_ = (cur_buf_ + 1) % kNumBuffers;
     return true;  // frame rendered (even if flip was dropped)
+}
+
+// ---------------------------------------------------------------------------
+// Text engine: fonts load on first use. NDIMON_FONT_DIR overrides the install
+// location (handy for the diagnostics build); missing files mean the embedded
+// bitmap font, logged once.
+// ---------------------------------------------------------------------------
+void DRMDisplay::ensure_text_renderer() {
+    if (text_load_tried_) return;
+    text_load_tried_ = true;
+    const char* env = getenv("NDIMON_FONT_DIR");
+    std::string dir = (env && *env) ? env : "/usr/local/share/ndimon/fonts";
+    if (text_.load(dir + "/Inter-Regular.ttf", dir + "/Inter-SemiBold.ttf"))
+        std::cerr << "[DRM] Text: Inter loaded from " << dir << "\n";
+    else
+        std::cerr << "[DRM] Text: no TrueType font in " << dir << " — using the embedded bitmap font\n";
+}
+
+// OSD line over live video: white text in a translucent dark pill, top centre.
+// Rasterised once per text/size; per frame this is a small fill and a blit.
+void DRMDisplay::draw_osd(uint32_t* px, uint32_t stride_u32) {
+    if (!osd_enabled_ || osd_text_.empty() || !px) return;
+    using namespace ndimon;
+    using namespace ndimon::paint;
+    ensure_text_renderer();
+    const int osd_px = std::max(14, (int)(height_ * 0.03f));
+    if (osd_bitmap_text_ != osd_text_ || osd_bitmap_px_ != osd_px) {
+        osd_bitmap_ = text_.render(osd_text_, osd_px, true);
+        osd_bitmap_text_ = osd_text_;
+        osd_bitmap_px_ = osd_px;
+    }
+    const TextBitmap& t = osd_bitmap_;
+    if (t.w <= 0) return;
+    const int pad_x = (int)(osd_px * 0.7f), pad_y = (int)(osd_px * 0.35f);
+    const int pill_w = t.w + 2 * pad_x, pill_h = t.h + 2 * pad_y;
+    const int x0 = (int)width_ / 2 - pill_w / 2, y0 = (int)(height_ * 0.03f);
+    fill_rounded_rect(px, stride_u32, width_, height_, x0, y0, pill_w, pill_h, pill_h / 2,
+                      0x000000u, 140, 0xFFFFFFu, 40);
+    blit_text(px, stride_u32, width_, height_, t, x0 + pad_x, y0 + pad_y, 0xFFFFFFu);
 }
 
 // ---------------------------------------------------------------------------
@@ -2235,10 +2195,17 @@ bool DRMDisplay::show_black() {
 // ---------------------------------------------------------------------------
 // set_mode
 // ---------------------------------------------------------------------------
-bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
-    if (!initialized_) return false;
-
-    std::lock_guard<std::mutex> lk(frame_mutex_);
+ResolutionResult DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz,
+                                       int64_t deadline_monotonic_ms) {
+    if (!initialized_) return ResolutionResult::Failed;
+    mode_waiting_ = true;
+    struct WaitingGuard {
+        std::atomic<bool>& flag;
+        ~WaitingGuard() { flag = false; }
+    } guard{mode_waiting_};
+    std::unique_lock<std::mutex> lock(frame_mutex_, std::defer_lock);
+    auto acquired = lock_resolution_control(lock, deadline_monotonic_ms);
+    if (acquired != ResolutionResult::Applied) return acquired;
 
     // Match against available_modes_ using refresh_hz for fractional rate support.
     // refresh_hz == 0 → pick preferred/first mode for this resolution.
@@ -2257,12 +2224,12 @@ bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
     }
     if (!match) {
         std::cerr << "[DRM] Mode " << w << "x" << h << "@" << refresh_hz << " not available\n";
-        return false;
+        return ResolutionResult::Failed;
     }
 
     // Find the exact drmModeModeInfo by pixel-clock match against available_modes_ entry
     drmModeRes* res = drmModeGetResources(drm_fd_);
-    if (!res) return false;
+    if (!res) return ResolutionResult::Failed;
 
     drmModeConnector* conn = nullptr;
     for (int i = 0; i < res->count_connectors; i++) {
@@ -2271,31 +2238,39 @@ bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
         if (conn) { drmModeFreeConnector(conn); conn = nullptr; }
     }
     drmModeFreeResources(res);
-    if (!conn) return false;
+    if (!conn) return ResolutionResult::Failed;
 
     bool found = false;
+    drmModeModeInfo next_mode{};
     for (int m = 0; m < conn->count_modes; m++) {
         if ((uint32_t)conn->modes[m].hdisplay == w &&
             (uint32_t)conn->modes[m].vdisplay == h) {
             double hz = calc_refresh_hz(conn->modes[m]);
             if (std::abs(hz - match->refresh_hz) < 0.02) {
-                mode_        = conn->modes[m];
-                width_       = w;
-                height_      = h;
-                vrefresh_    = conn->modes[m].vrefresh;
-                vrefresh_hz_ = hz;
+                next_mode = conn->modes[m];
                 found        = true;
                 break;
             }
         }
     }
     drmModeFreeConnector(conn);
-    if (!found) return false;
+    if (!found) return ResolutionResult::Failed;
+
+    if (resolution_expired(deadline_monotonic_ms)) return ResolutionResult::Expired;
+    if (crtc_active_ && std::memcmp(&mode_, &next_mode, sizeof(mode_)) == 0)
+        return ResolutionResult::Applied;
+    mode_ = next_mode;
+    width_ = w;
+    height_ = h;
+    vrefresh_ = next_mode.vrefresh;
+    vrefresh_hz_ = calc_refresh_hz(next_mode);
 
     // Free existing FBs (sized for old mode)
     for (auto& b : fb_)     free_fb(b);
     for (auto& b : yuv_fb_) free_fb(b);
-    yuv_fb_state_ = 0;
+    // A modeset must preserve the rotated renderer's software-only YUV path.
+    yuv_fb_state_ = rotation_drm_ != 1 ? -1 : 0;
+    uyvy_colour_cached_ = false;
     atomic_plane_state_ = 0;  // re-probe on mode change
     if (import_fb_id_) { drmModeRmFB(drm_fd_, import_fb_id_); import_fb_id_ = 0; }
     if (import_bo_) {
@@ -2314,17 +2289,17 @@ bool DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz) {
     for (auto& b : fb_) {
         if (!alloc_fb(b, width_, height_)) {
             std::cerr << "[DRM] set_mode: alloc_fb failed\n";
-            return false;
+            return ResolutionResult::Failed;
         }
     }
 
     if (!show_black_impl()) {
         std::cerr << "[DRM] set_mode: failed to activate new mode\n";
-        return false;
+        return ResolutionResult::Failed;
     }
 
     std::cout << "[DRM] Mode changed to " << w << "x" << h << "@" << vrefresh_hz_ << "\n";
-    return true;
+    return ResolutionResult::Applied;
 }
 
 // ---------------------------------------------------------------------------
@@ -2408,6 +2383,8 @@ void DRMDisplay::destroy() {
     connector_id_ = crtc_id_ = 0;
     cur_buf_ = 0;
     cur_yuv_buf_  = 0;
-    yuv_fb_state_ = 0;
+    // Effective rotation survives teardown until the next plane is validated.
+    yuv_fb_state_ = rotation_drm_ != 1 ? -1 : 0;
+    uyvy_colour_cached_ = false;
     invalidate_fill_cache();
 }

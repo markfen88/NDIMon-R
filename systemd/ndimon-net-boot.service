@@ -1,12 +1,13 @@
 [Unit]
 Description=Roll back an unconfirmed NDIMon-R network change
 After=network.target
-Before=ndimon-r.service
-ConditionPathExists=/var/lib/ndimon/net/pending/state.json
+Before=ndimon-r.service ndimon-finder.service ndimon-api.service
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/local/sbin/ndimon-priv net-rollback
+ExecStart=/usr/local/sbin/ndimon-priv net-profiles-boot
 
 [Install]
 WantedBy=multi-user.target

@@ -15,7 +15,7 @@ struct DecoderConfig {
 };
 
 struct TransportConfig {
-    std::string rxpm = "TCP";  // TCP | UDP | Multicast | M-TCP | RUDP
+    std::string rxpm = "RUDP";  // RUDP (default) | Multicast | M-TCP | UDP | TCP
 };
 
 struct FinderConfig {
@@ -30,6 +30,7 @@ struct DeviceConfig {
     std::string host_name = "";
     std::string device_ip = "";          // populated at runtime, not persisted
     std::string ndi_recv_name = "";      // NDI alias shown in discovery tools (empty = auto)
+    std::string audio_engine = "v1";
     std::string decode_mode = "auto";    // auto | hardware | software (HX decode path)
 };
 
@@ -68,8 +69,10 @@ struct SplashConfig {
     std::string text_live  = "Signal Available";
     float text_height_pct = 4.0f;   // font size as % of screen height [1–20]
 
+    // "gradient" (default) or "flat"; replaced the old show_box decoration
+    std::string backdrop = "gradient";
+
     // Element visibility toggles
-    bool show_box          = false;
     bool show_signal_text  = true;
     bool show_device_name  = true;
     bool show_device_url   = true;

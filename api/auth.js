@@ -56,15 +56,7 @@ function verifyPassword(password) {
 }
 
 function writeAuthFile(data) {
-    const tmp = AUTH_FILE + '.tmp';
-    const fd = fs.openSync(tmp, 'w', 0o600);
-    try {
-        fs.writeSync(fd, JSON.stringify(data));
-        fs.fsyncSync(fd);
-    } finally {
-        fs.closeSync(fd);
-    }
-    fs.renameSync(tmp, AUTH_FILE);
+    require('./persistence').writeConfig(AUTH_FILE, JSON.stringify(data));
 }
 
 function setPassword(password) {

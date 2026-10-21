@@ -4,8 +4,8 @@ const router  = express.Router();
 const fs      = require('fs');
 const { readJson, writeJson, sendIPC, corsHeaders, runPriv } = require('./lib');
 
-const PARAM_FILE    = '/etc/ndi_src_find_param';
-const SRC_LIST      = '/etc/ndimon-sources.json';
+const PARAM_FILE    = '/var/lib/ndimon/ndi_src_find_param';
+const SRC_LIST      = '/var/lib/ndimon/ndimon-sources.json';
 const FIND_SETTINGS = '/etc/ndimon-find-settings.json';
 const NDI_CONFIG    = '/etc/ndi-config.json';
 const NDI_GROUP     = '/etc/ndi-group.json';
@@ -51,9 +51,7 @@ router.post('/NdiOffSnSrc', (req, res) => {
         return p.length === 4 && p.every(o => /^\d+$/.test(o) && Number(o) >= 0 && Number(o) <= 255);
     });
     if (!valid) return res.send('Bad request - Invalid IP');
-    const tmp = NDI_CONFIG + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(ips));
-    fs.renameSync(tmp, NDI_CONFIG);
+    writeJson(NDI_CONFIG, ips);
     res.send('success');
 });
 

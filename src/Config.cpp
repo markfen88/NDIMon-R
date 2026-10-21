@@ -4,12 +4,16 @@
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
+#include <fcntl.h>
+#include <grp.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static const char* DEC1_SETTINGS    = "/etc/ndimon-dec1-settings.json";
 static const char* SPLASH_SETTINGS  = "/etc/ndimon-splash-settings.json";
 static const char* RX_SETTINGS      = "/etc/ndimon-rx-settings.json";
 static const char* FIND_SETTINGS    = "/etc/ndimon-find-settings.json";
-static const char* NDI_SRC          = "/etc/ndimon-sources.json";
+static const char* NDI_SRC          = "/var/lib/ndimon/ndimon-sources.json";
 static const char* DEVICE_SETTINGS  = "/etc/ndimon-device-settings.json";
 static const char* NDI_CONFIG       = "/etc/ndi-config.json";
 static const char* NDI_GROUP        = "/etc/ndi-group.json";
@@ -38,6 +42,12 @@ void Config::write_json(const std::string& path, const nlohmann::json& j) {
             if (!f.is_open()) throw std::runtime_error("cannot open " + tmp);
             f << j.dump(2);
         }
+        auto* group = getgrnam("ndimon");
+        int fd = open(tmp.c_str(), O_RDONLY | O_NOFOLLOW);
+        if (fd < 0) throw std::runtime_error("cannot reopen config temporary");
+        bool secured = group && fchown(fd, 0, group->gr_gid) == 0 && fchmod(fd, 0640) == 0 && fsync(fd) == 0;
+        close(fd);
+        if (!secured) throw std::runtime_error("cannot secure config temporary");
         if (std::rename(tmp.c_str(), path.c_str()) != 0)
             throw std::runtime_error("rename failed: " + std::string(strerror(errno)));
     } catch (const std::exception& e) {
@@ -72,7 +82,7 @@ void Config::load() {
     // Transport
     auto rx = read_json(RX_SETTINGS);
     if (!rx.empty() && rx.is_object()) {
-        transport.rxpm = rx.value("Rxpm", "TCP");
+        transport.rxpm = rx.value("Rxpm", std::string("RUDP"));
     }
 
     // Finder / discovery server
@@ -88,6 +98,8 @@ void Config::load() {
         device.mode          = dev.value("mode", "decode");
         device.video_output  = dev.value("videooutput", "hdmi");
         device.ndi_recv_name = dev.value("ndi_recv_name", "");
+        device.audio_engine = dev.value("audio_engine", "v1");
+        if (device.audio_engine != "v2") device.audio_engine = "v1";
         device.decode_mode   = dev.value("decode_mode", "auto");
     }
 
@@ -120,7 +132,8 @@ void Config::load() {
         splash.text_idle  = sp.value("text_idle",  "No Signal");
         splash.text_live  = sp.value("text_live",  "Signal Available");
         splash.text_height_pct = sp.value("text_height_pct", 4.0f);
-        splash.show_box          = sp.value("show_box",          false);
+        // show_box from older settings files is ignored; the backdrop replaced it.
+        splash.backdrop          = sp.value("backdrop",          "gradient");
         splash.show_signal_text  = sp.value("show_signal_text",  true);
         splash.show_device_name  = sp.value("show_device_name",  true);
         splash.show_device_url   = sp.value("show_device_url",   true);

@@ -1,6 +1,7 @@
 [Unit]
 Description=NDIMon-R REST API
-After=network-online.target ndimon-r.service
+After=network-online.target ndimon-net-boot.service ndimon-r.service
+Requires=ndimon-net-boot.service
 Wants=network-online.target
 
 [Service]
@@ -16,7 +17,7 @@ Environment=PORT=80
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/etc /tmp /opt/ndimon-r /var/tmp /var/lib/ndimon /run/ndimon
+ReadWritePaths=/etc /tmp /opt/ndimon-r /var/tmp /var/lib/ndimon -/run/ndimon -/var/lib/ndimon-network
 
 [Install]
 WantedBy=multi-user.target

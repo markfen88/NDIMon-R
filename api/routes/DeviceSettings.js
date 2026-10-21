@@ -8,6 +8,16 @@ const DEVICE_SETTINGS = '/etc/ndimon-device-settings.json';
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
 
+router.get('/audioEngine',(req,res)=>res.json({audio_engine:readJson(DEVICE_SETTINGS).audio_engine||'v1'}));
+router.post('/audioEngine',async(req,res)=>{
+    const value=req.body && req.body.audio_engine;
+    if(!['v1','v2'].includes(value))return res.status(400).json({ok:false,error:'audio_engine must be v1 or v2'});
+    const cfg=readJson(DEVICE_SETTINGS);cfg.audio_engine=value;
+    if(!writeJson(DEVICE_SETTINGS,cfg))return res.status(500).json({ok:false,error:'could not write device settings'});
+    await sendIPC({action:'reload_config'});
+    return res.json({ok:true,audio_engine:value,restart_required:true});
+});
+
 // GET|POST /operationmode
 router.get('/operationmode', (req, res) => {
     res.header('Content-Type','text/plain');

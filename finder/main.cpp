@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <Processing.NDI.Lib.h>
 #include <nlohmann/json.hpp>
+#include "../src/NdiSdkConfig.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -24,9 +25,9 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-static const char* PARAM_FILE    = "/etc/ndi_src_find_param";
-static const char* SRC_LIST_FILE = "/etc/ndimon-sources.json";
-static const char* WEBUI_LIST    = "/etc/NDIFinderSrcList.json";
+static const char* PARAM_FILE    = "/var/lib/ndimon/ndi_src_find_param";
+static const char* SRC_LIST_FILE = "/var/lib/ndimon/ndimon-sources.json";
+static const char* WEBUI_LIST    = "/var/lib/ndimon/NDIFinderSrcList.json";
 static const char* FIND_SETTINGS = "/etc/ndimon-find-settings.json";
 static const char* NDI_CONFIG    = "/etc/ndi-config.json";
 static const char* NDI_GROUP     = "/etc/ndi-group.json";
@@ -95,7 +96,7 @@ struct FindSettings {
     std::string discovery_server_ip;
     std::string extra_ips;  // off-subnet IPs
     std::string groups;
-    std::string rxpm = "RUDP";  // transport mode (TCP/UDP/Multicast/M-TCP/RUDP)
+    std::string rxpm = ndisdk::kDefaultRxpm;  // TCP/UDP/Multicast/M-TCP/RUDP
 };
 
 // Escape a string for embedding inside a JSON string literal.
@@ -117,17 +118,6 @@ static std::string json_escape(const std::string& s) {
     return out;
 }
 
-// Mirror of ndimon-r's transport mapping so the shared ndi-config.v1.json keeps
-// consistent transport keys regardless of which process wrote it last.
-static std::string transport_json(const std::string& rxpm) {
-    bool rudp  = (rxpm == "RUDP" || rxpm == "Multicast" || rxpm.empty());
-    bool mcast = (rxpm == "Multicast");
-    std::string r = rudp ? "true" : "false";
-    std::string m = mcast ? "true" : "false";
-    return std::string("    \"rudp\": { \"recv\": { \"enable\": ") + r + " } },\n"
-         + "    \"multicast\": { \"recv\": { \"enable\": " + m + " } },\n";
-}
-
 static std::string ndimon_ndi_home() {
     if (access("/var/lib/ndimon", W_OK) == 0)
         return "/var/lib/ndimon";
@@ -139,6 +129,11 @@ static std::string ndimon_ndi_home() {
 static void pin_ndi_home() {
     std::string h = ndimon_ndi_home();
     setenv("HOME", h.c_str(), 1);
+    // The SDK reads the config of the *passwd* home of the running user (root's
+    // is /root), not $HOME. NDI_CONFIG_DIR is the documented override; without
+    // it the decoder never saw the file written here (groups, discovery and
+    // transport all fell back to SDK defaults).
+    setenv("NDI_CONFIG_DIR", (h + "/.ndi").c_str(), 1);
 }
 
 static void relax_ndi_config_perms(const std::string& dir, const std::string& file) {
@@ -168,11 +163,6 @@ static void write_ndi_sdk_config(const FindSettings& s) {
     if (s.use_discovery_server && !s.discovery_server_ip.empty())
         discovery = json_escape(s.discovery_server_ip);
 
-    // Include codec passthrough keys so the NDI SDK delivers H.264/H.265 as
-    // compressed bitstream rather than decoding internally. Without these,
-    // the SDK renders a "Video Decoder not Found" error frame on Noble (Ubuntu
-    // 24.04) where libavcodec.so.61 is absent. ndimon-r also writes this file,
-    // but we write it here too so we never overwrite it without the codec keys.
     std::string json =
         "{\n"
         "  \"ndi\": {\n"
@@ -184,18 +174,11 @@ static void write_ndi_sdk_config(const FindSettings& s) {
         "      \"ips\": \"" + extra + "\",\n"
         "      \"discovery\": \"" + discovery + "\"\n"
         "    },\n"
-        + transport_json(s.rxpm) +
-        "    \"codec\": {\n"
-        "      \"h264\": { \"passthrough\": true },\n"
-        "      \"h265\": { \"passthrough\": true }\n"
-        "    }\n"
+        + ndisdk::config_tail_json(s.rxpm) +
         "  }\n"
         "}\n";
 
-    std::ofstream f(path);
-    if (f) {
-        f << json;
-        f.close();
+    if (ndisdk::write_file_atomic(path, json)) {
         relax_ndi_config_perms(ndi_dir, path);
         std::cout << "[ NDIFinder ] NDI config written: " << path << "\n";
     } else {
@@ -215,7 +198,7 @@ static FindSettings load_settings() {
     auto grp = read_json(NDI_GROUP);
     if (!grp.empty() && grp.is_object()) s.groups = grp.value("ndi_groups", "public");
     auto rx = read_json("/etc/ndimon-rx-settings.json");
-    if (!rx.empty() && rx.is_object()) s.rxpm = rx.value("Rxpm", "RUDP");
+    if (!rx.empty() && rx.is_object()) s.rxpm = rx.value("Rxpm", std::string(ndisdk::kDefaultRxpm));
     return s;
 }
 
@@ -242,6 +225,7 @@ static void write_source_list(const std::vector<SrcEntry>& sources) {
 }
 
 static void run_once() {
+    if (!ndisdk::network_selection().ready()) return;
     std::cout << "[ NDIFinder ] run ones\n";
 
     // Load settings and write NDI SDK config BEFORE NDIlib_initialize() so
@@ -298,6 +282,11 @@ static void run_once() {
 }
 
 static void run_continuous() {
+    const auto selected_ndi_network = ndisdk::network_selection();
+    if (!selected_ndi_network.ready()) {
+        std::cerr << "[NDIFinder] Selected NDI network unavailable; refusing automatic fallback\n";
+        return;
+    }
     // Load settings and write NDI SDK config BEFORE NDIlib_initialize() so
     // NDI SDK 6.2+ uses the discovery server from the very start.
     auto settings = load_settings();
@@ -334,6 +323,7 @@ static void run_continuous() {
     std::cout << "[ NDIFinder ] continuous discovery running\n";
     int wd_counter = 0;
     while (g_running) {
+        if (ndisdk::network_selection().signature() != selected_ndi_network.signature()) break;
         // Check for command from param file
         std::string param = read_file(PARAM_FILE);
         if (param == "-run") {

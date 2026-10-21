@@ -1,4 +1,6 @@
 #pragma once
+#include "ResolutionControl.h"
+#include "TextRender.h"
 #include <cstdint>
 #include <set>
 #include <string>
@@ -38,6 +40,8 @@ struct ConnectorInfo {
     std::vector<DRMMode> modes;
 };
 
+struct YuvCoefficients;
+
 class DRMDisplay {
 public:
     DRMDisplay();
@@ -74,6 +78,9 @@ public:
 
     // Hardware display rotation (0, 90, 180, 270 degrees)
     bool set_rotation(uint32_t degrees);
+    bool rotation_allowed(uint32_t degrees) const;
+    std::vector<uint32_t> supported_rotations() const;
+    bool rotation_busy() const { return rotation_busy_.load(); }
     uint32_t rotation() const { return rotation_degrees_; }
 
     // Called by the video pipeline to block splash from interrupting live video
@@ -106,7 +113,8 @@ public:
     std::vector<DRMMode> list_modes() const { return available_modes_; }
     // refresh_hz = 0 → pick preferred/first mode for this resolution.
     // Pass exact fractional value (e.g. 59.94) to select NTSC rates precisely.
-    bool set_mode(uint32_t w, uint32_t h, double refresh_hz = 0.0);
+    ResolutionResult set_mode(uint32_t w, uint32_t h, double refresh_hz = 0.0,
+                              int64_t deadline_monotonic_ms = 0);
 
     // Hotplug: returns true if just reconnected (init was deferred)
     bool check_hotplug();
@@ -141,7 +149,7 @@ private:
     Rect compute_dst_rect(uint32_t src_w, uint32_t src_h) const;
     Rect compute_src_rect(uint32_t src_w, uint32_t src_h) const;
 
-    void fill_bg(DRMBuffer& buf);   // fill with black respecting scale mode
+    void fill_bg(DRMBuffer& buf, const Rect& painted);   // fill with black respecting scale mode
 
     // Software conversion + scaled blit (always available)
     void sw_nv12_to_xrgb(const uint8_t* src,
@@ -153,7 +161,10 @@ private:
     void sw_uyvy_to_xrgb(const uint8_t* src,
                          uint32_t src_w, uint32_t src_h, uint32_t src_stride,
                          uint8_t* dst, uint32_t dst_stride,
-                         const Rect& dr, uint32_t out_w, uint32_t out_h);
+                         const Rect& dr, uint32_t out_w, uint32_t out_h,
+                         const YuvCoefficients& colour);
+    bool native_uyvy_colour_matches(uint32_t width,uint32_t height);
+    const char* colour_path_ = nullptr;
 
     // UYVY native plane path — VOP2 Cluster handles YUV→RGB during scanout.
     // Eliminates all per-pixel color conversion CPU work.
@@ -195,16 +206,33 @@ private:
     int       cur_yuv_buf_  = 0;
     int       yuv_fb_state_ = 0;   // 0=untried, 1=ok, -1=unsupported by plane
 
+    bool uyvy_colour_cached_ = false;
+    uint32_t uyvy_colour_request_plane_ = 0;
+    const YuvCoefficients* uyvy_colour_class_ = nullptr;
+    bool uyvy_colour_compatible_ = false;
+
     // Per-buffer fill cache — prevents overwriting bars every frame,
     // but must be tracked independently for each buffer in the triple-buffer set.
     uint32_t  last_bg_fill_w_[kNumBuffers]   = {};
     uint32_t  last_bg_fill_h_[kNumBuffers]   = {};
+    Rect last_bg_painted_[kNumBuffers] = {};
     ScaleMode last_bg_scale_[kNumBuffers]    = { ScaleMode::Stretch, ScaleMode::Stretch, ScaleMode::Stretch };
     void invalidate_fill_cache();   // invalidates all buffers
 
     bool        streaming_   = false;    // true while video frames are being rendered
     bool        osd_enabled_ = false;
     std::string osd_text_;               // current OSD string, drawn after video blit
+
+    // Anti-aliased text for the splash and OSD. Fonts load on first use; the
+    // OSD line is rasterised once per text/size and blitted per frame. All of
+    // this is touched only with frame_mutex_ held.
+    ndimon::TextRenderer text_;
+    bool                 text_load_tried_ = false;
+    ndimon::TextBitmap   osd_bitmap_;
+    std::string          osd_bitmap_text_;
+    int                  osd_bitmap_px_ = 0;
+    void ensure_text_renderer();
+    void draw_osd(uint32_t* px, uint32_t stride_u32);
 
     // DMA-BUF import state (reused across frames)
     uint32_t import_fb_id_ = 0;
@@ -214,8 +242,14 @@ private:
     int  atomic_plane_state_ = 0;  // 0=untried, 1=ok, -1=unsupported
 
     // Hardware rotation
-    uint32_t rotation_degrees_ = 0;    // user-facing: 0, 90, 180, 270
-    uint32_t rotation_drm_     = 1;    // DRM bitmask: 1=0°, 2=90°, 0x30=180°, 8=270°
+    std::atomic<uint32_t> rotation_degrees_{0};    // user-facing: 0, 90, 180, 270
+    uint32_t rotation_drm_     = 1;    // DRM bitmask: 1=0°, 4 or 0x31=180°
+    std::atomic<uint64_t> rotation_supported_mask_{0};
+    std::atomic<bool> unsafe_linear_rotation_{true};
+    bool rotation_dirty_ = false;
+    std::atomic<bool> rotation_waiting_{false};
+    std::atomic<bool> mode_waiting_{false};
+    std::atomic<bool> rotation_busy_{false};
     uint32_t rotation_prop_id_ = 0;    // cached plane property ID
 
     // Cached property IDs for atomic_plane_commit (looked up once at CRTC

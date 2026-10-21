@@ -4,6 +4,7 @@
 // Recall sends a connect IPC with the pre-resolved source+IP so switching is
 // immediate and does not wait for a network rescan.
 const express = require('express');
+const { isNdiEndpoint, resolveNdiEndpoint } = require('../ndi-endpoint');
 const router  = express.Router();
 const { readJson, writeJson, sendIPC, corsHeaders, parseChannel } = require('./lib');
 const { notifyManualConnect, stopReconnectLoop } = require('./Status');
@@ -33,7 +34,8 @@ router.post('/save', (req, res) => {
     const body = req.body || {};
     const name   = String(body.name || '').trim().slice(0, 64);
     const source = String(body.source || '').trim();
-    const ip     = String(body.ip || '').trim();
+    const ip     = body.ip == null ? '' : body.ip;
+    if (ip !== '' && !isNdiEndpoint(ip)) return res.status(400).json({ ok: false, error: 'invalid source IPv4 endpoint' });
     if (!name)   return res.status(400).json({ ok: false, error: 'name required' });
     if (!source) return res.status(400).json({ ok: false, error: 'source required' });
 
@@ -77,15 +79,17 @@ router.post('/recall', (req, res) => {
     notifyManualConnect(output);
 
     // Persist selection so it survives reboot, then connect immediately.
+    const sourceIp = resolveNdiEndpoint(preset.source, preset.ip,
+        preset.ip ? null : readJson('/var/lib/ndimon/ndimon-sources.json'));
     const settingsFile = `/etc/ndimon-dec${ch}-settings.json`;
     const cfg = readJson(settingsFile);
     cfg.SourceName = preset.source;
-    cfg.SourceIP   = preset.ip || '';
+    cfg.SourceIP   = sourceIp;
     cfg.SourceSelection = 'NDI';
     writeJson(settingsFile, cfg);
 
     sendIPC({ action: 'connect', source_name: preset.source,
-              source_ip: preset.ip || '', output });
+              source_ip: sourceIp, output });
     res.json({ ok: true, recalled: preset.name, source: preset.source });
 });
 
