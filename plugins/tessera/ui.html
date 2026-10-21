@@ -1,0 +1,182 @@
+<div class="d-flex align-items-center gap-2 mb-3"><h4 class="mb-0">Network audio · Tessera</h4><span class="badge bg-warning text-dark">Experimental · Ubuntu</span></div>
+<div class="alert alert-danger" data-error role="alert" hidden></div>
+<div class="alert alert-secondary" role="status" data-status>Connecting to Tessera…</div>
+<div class="card mb-3"><div class="card-body"><h5>Audio network</h5><label class="form-label" for="tessera-network-profile">Configured network</label><select id="tessera-network-profile" class="form-select mb-2" data-network-profile></select><button class="btn btn-primary" data-network-apply>Apply Tessera network</button><p class="form-text mt-2">Create networks and configure VLAN IDs and IP addresses in Settings → Network. This assignment carries Tessera audio, clock and control traffic. Changing it can interrupt audio.</p><p class="text-danger" data-network-error role="alert"></p></div></div>
+<div class="card mb-3"><div class="card-body"><h5>Status</h5><dl class="row mb-0" data-metrics></dl></div></div>
+<div class="card mb-3"><div class="card-body"><h5>Device</h5>
+<form data-form="device"><div class="row g-3">
+<div class="col-md-6"><label class="form-label" for="tessera-name">Device name</label><input id="tessera-name" name="name" class="form-control" maxlength="31" required><button class="btn btn-outline-primary mt-2" type="submit" name="field" value="name">Save name</button></div>
+<div class="col-md-6"><label class="form-label" for="tessera-rate">Sample rate</label><select id="tessera-rate" name="sample_rate" class="form-select"><option value="48000">48 kHz</option></select><div class="form-text">The NDIMon audio engine requires 48 kHz.</div><button class="btn btn-outline-primary mt-2" type="submit" name="field" value="sample_rate">Set 48 kHz</button></div>
+<div class="col-md-6"><label class="form-label" for="tessera-encoding">PCM encoding</label><select id="tessera-encoding" name="encoding" class="form-select"><option value="16">16 bit</option><option value="24">24 bit</option><option value="32">32 bit</option></select><button class="btn btn-outline-primary mt-2" type="submit" name="field" value="encoding">Save encoding</button></div>
+<div class="col-md-6"><label class="form-label" for="tessera-latency">Device latency (µs)</label><input id="tessera-latency" name="latency_us" class="form-control" type="number" min="1" step="1" required><button class="btn btn-outline-primary mt-2" type="submit" name="field" value="latency_us">Save latency</button></div>
+</div></form>
+<form data-form="channels" class="row g-3 mt-1"><div class="col-md-4"><label class="form-label" for="tessera-rx">RX channels</label><input id="tessera-rx" name="rx" type="number" min="1" max="16" step="1" required class="form-control"></div><div class="col-md-4"><label class="form-label" for="tessera-tx">TX channels</label><input id="tessera-tx" name="tx" type="number" min="1" max="16" step="1" required class="form-control"></div><div class="col-md-4 d-flex align-items-end"><button class="btn btn-outline-primary">Save channels</button></div><div class="form-text">Flow channels follow these counts. Both peers must agree.</div></form>
+<h6 class="mt-3">Channel names</h6><p class="form-text">Name individual receive and transmit channels for reusable audio endpoint choices. Reset restores the default name.</p><div data-channel-labels></div>
+</div></div>
+<div class="card mb-3"><div class="card-body"><h5>Clock</h5><form data-form="clock" class="row g-3"><div class="col-md-6"><label class="form-label" for="tessera-role">Clock role</label><select id="tessera-role" name="role" class="form-select"><option value="auto">Auto</option><option value="follower">Follower</option><option value="leader">Leader</option></select><button type="submit" name="field" value="role" class="btn btn-outline-primary mt-2">Save role</button></div><div class="col-md-6"><label class="form-label" for="tessera-priority">Clock priority</label><input id="tessera-priority" name="priority" type="number" min="0" max="255" step="1" required class="form-control"><button type="submit" name="field" value="priority" class="btn btn-outline-primary mt-2">Save priority</button></div></form><p class="form-text mb-0" data-clock></p></div></div>
+<div class="card mb-3"><div class="card-body"><h5>Network flows</h5><div class="alert alert-info">Flows are static until the control protocols exist. Automatic subscriptions are unavailable. Configure a matching peer address, UDP port and channel count at both ends.</div><div data-flows></div><button type="button" class="btn btn-outline-secondary mt-2" data-add-flow>Add flow</button><button type="button" class="btn btn-primary mt-2" data-save-flows>Save flows</button><p class="form-text">RX receives network audio; TX sends the network output mix. Peer must be a unicast IPv4 address; ports are 1024–65535.</p></div></div>
+<div class="card mb-3"><div class="card-body"><h5>Current primary-output mapping</h5><p data-audio-state>Audio integration status unavailable.</p><button type="button" class="btn btn-primary" data-enable>Enable network audio</button> <button type="button" class="btn btn-outline-secondary" data-disable>Disable network audio and return to v1</button><p class="form-text">Enabling selects audio engine v2 and restarts the decoder. Video may pause briefly. Disabling returns to audio engine v1 and restarts the decoder briefly. Installing the plugin does not enable this automatically.</p>
+<form data-form="delay" class="mt-3"><label class="form-label" for="tessera-delay">Network input delay (ms)</label><div class="d-flex gap-3 align-items-center"><input id="tessera-delay" name="ms" type="number" min="0" max="2000" step="1" required class="form-control" style="max-width:8rem"><input aria-label="Network input delay slider" data-delay-slider type="range" min="0" max="2000" step="1" class="form-range"><button class="btn btn-outline-primary">Save delay</button></div></form>
+<form data-form="routing" class="mt-3"><h6>Source gains</h6><p class="form-text">Gain in dB. −60 dB mutes a source; 0 dB keeps its original level. Mix NDI and network input independently for each output.</p><div class="row g-3" data-routing></div><button class="btn btn-outline-primary mt-3">Save routing</button></form></div></div>
+<div class="card"><div class="card-body"><h5>Advanced</h5><p data-version></p><p data-restart class="text-warning"></p><div class="d-flex gap-2 mb-3"><button class="btn btn-outline-primary" data-service="start">Start daemon</button><button class="btn btn-outline-secondary" data-service="stop">Stop daemon</button><button class="btn btn-outline-secondary" data-service="restart">Restart daemon</button><button class="btn btn-outline-secondary" data-diagnostics>Download diagnostics</button></div><details><summary>Generated static flow configuration</summary><pre class="mt-2" data-toml></pre></details></div></div>
+<dialog data-confirm class="border rounded p-4" aria-labelledby="tessera-confirm-title" style="max-width:36rem"><h5 id="tessera-confirm-title">Confirm audio change</h5><p data-confirm-text></p><pre data-impact style="white-space:pre-wrap"></pre><div class="d-flex justify-content-end gap-2"><button type="button" class="btn btn-outline-secondary" data-cancel>Cancel</button><button type="button" class="btn btn-primary" data-accept>Apply change</button></div></dialog>
+<script>
+window.NDIMON_PLUGIN_INIT_tessera = function(pane) {
+  'use strict';
+  const host = window.NDIMON, base = '/v1/plugins/tessera';
+  const $ = s => pane.querySelector(s), all = s => [...pane.querySelectorAll(s)];
+  let stopped = false, timer, busy = false, initialized = false, flowDirty = false, resolveConfirm;
+  const networkSelect=$('[data-network-profile]');
+  if (window.NDIMON_NETWORK) {
+    window.NDIMON_NETWORK.loadRole('tessera',networkSelect).catch(e=>{$('[data-network-error]').textContent=e.message;});
+    $('[data-network-apply]').onclick=()=>window.NDIMON_NETWORK.changeRole('tessera',networkSelect.value).catch(e=>{$('[data-network-error]').textContent=e.message;});
+  } else {
+    networkSelect.disabled=true;$('[data-network-apply]').disabled=true;
+    $('[data-network-error]').textContent='Update the appliance network controls before selecting a network.';
+  }
+  const channelLabelRows = new Map(), dirtyChannelLabels = new Set();
+  const error = message => { if(stopped) return; $('[data-error]').textContent = message; $('[data-error]').hidden = !message; };
+  const val = (name,value) => { const el = pane.querySelector('[name="'+name+'"]'); if(el && value !== undefined && value !== null) el.value = value; };
+  function confirmChange(message, impact) {
+    if(stopped) return Promise.resolve(false);
+    $('[data-confirm-text]').textContent = message;
+    $('[data-impact]').textContent = impact ? JSON.stringify(impact,null,2) : '';
+    $('[data-confirm]').showModal();
+    return new Promise(resolve => { resolveConfirm = resolve; });
+  }
+  function finishConfirm(yes) { $('[data-confirm]').close(); const resolve=resolveConfirm; resolveConfirm=null; resolve?.(yes); }
+  $('[data-accept]').onclick=()=>finishConfirm(true); $('[data-cancel]').onclick=()=>finishConfirm(false);
+  $('[data-confirm]').addEventListener('cancel',e=>{e.preventDefault(); finishConfirm(false);});
+  async function send(path,body) {
+    let result = await host.post(base+path,body);
+    if(result.error === 'confirmation_required' && result.impact) {
+      if(!await confirmChange('This change affects active audio. Review the impact before applying.',result.impact)) return false;
+      if(!result.impact.token) throw Error('Daemon did not provide a confirmation token. Refresh and try again.');
+      result = await host.post(base+path,{...body,expect:result.impact.token});
+    }
+    if(result.ok === false || result.error) throw Error((typeof result.error === 'string' ? result.error : JSON.stringify(result.error))+(result.detail?' · '+(typeof result.detail==='string'?result.detail:JSON.stringify(result.detail)):''));
+    return true;
+  }
+  async function action(fn) {
+    if(busy || stopped) return; busy=true; error('');
+    all('button').filter(b=>!b.closest('dialog')).forEach(b=>b.disabled=true);
+    try { if(await fn() !== false) { host.toast('Tessera settings saved','success'); await refresh(true); } }
+    catch(e) { error(e.message); }
+    finally { busy=false; if(!stopped) all('button').forEach(b=>b.disabled=false); }
+  }
+  function addFlow(flow={}) {
+    const row=document.createElement('div'); row.className='row g-2 border-bottom py-2'; row.dataset.flow='';
+    const fields=[['id','Flow ID','text'],['direction','Direction','select'],['peer','Peer IPv4','text'],['port','UDP port','number']];
+    for(const [name,label,type] of fields) {
+      const col=document.createElement('div'); col.className='col-md'; const l=document.createElement('label'); l.className='form-label'; l.textContent=label;
+      const input=document.createElement(type==='select'?'select':'input'); input.className=type==='select'?'form-select':'form-control'; input.dataset.field=name; input.required=true;
+      if(type==='select') for(const d of ['rx','tx']) { const option=document.createElement('option'); option.value=d; option.textContent=d.toUpperCase(); input.append(option); }
+      else input.type=type;
+      if(name==='port') { input.min='1024'; input.max='65535'; input.step='1'; }
+      if(name==='id') { input.pattern='[A-Za-z0-9_-]{1,32}'; input.maxLength=32; }
+      input.value=flow[name] ?? (name==='direction'?'rx':name==='port'?5004:'');
+      l.append(input); col.append(l); row.append(col);
+    }
+    const policy=document.createElement('label'); policy.className='form-check-label small col-12'; const any=document.createElement('input'); any.type='checkbox'; any.className='form-check-input me-1'; any.dataset.anySource=''; any.checked=flow.any_source===true; policy.append(any,document.createTextNode('RX: accept any source')); row.append(policy);
+    // Preserve packet sizing when editing existing flows.
+    row._original=flow;
+    const col=document.createElement('div'); col.className='col-md-auto d-flex align-items-end pb-2'; const remove=document.createElement('button'); remove.type='button'; remove.className='btn btn-outline-danger'; remove.textContent='Remove'; remove.onclick=()=>{row.remove(); flowDirty=true;}; col.append(remove); row.append(col);
+    row.addEventListener('input',()=>flowDirty=true); $('[data-flows]').append(row);
+  }
+  function readFlows() {
+    const seen=new Set(), ports=new Set();
+    return all('[data-flow]').map(row=>{
+      const flow={...row._original}; delete flow.any_source;
+      for(const input of row.querySelectorAll('[data-field]')) { if(input.dataset.field==='peer') input.required=!(row.querySelector('[data-any-source]').checked && row.querySelector('[data-field="direction"]').value==='rx'); if(!input.reportValidity()) throw Error('Complete the highlighted flow field.'); flow[input.dataset.field]=input.dataset.field==='port'?Number(input.value):input.value.trim(); }
+      const anySource=row.querySelector('[data-any-source]').checked;
+      const octets=flow.peer.split('.');
+      if(!(anySource && flow.direction==='rx') && (octets.length!==4 || octets.some(n=>!/^\d{1,3}$/.test(n)||Number(n)>255) || Number(octets[0])===0 || Number(octets[0])>=224 || flow.peer==='255.255.255.255')) throw Error('Flow '+flow.id+': peer must be a unicast IPv4 address.');
+      if(anySource && flow.direction==='rx') { flow.any_source=true; delete flow.peer; }
+      if(seen.has(flow.id)) throw Error('Flow IDs must be unique.'); seen.add(flow.id);
+      if(flow.direction==='rx' && ports.size) throw Error('Only one RX flow is supported because it uses every device RX channel.');
+      if(flow.direction==='rx') ports.add(flow.port);
+      return flow;
+    });
+  }
+  $('[data-add-flow]').onclick=()=>{addFlow(); flowDirty=true;};
+  $('[data-save-flows]').onclick=()=>action(async()=>{ const ok=await send('/flows',{flows:readFlows()}); if(ok) flowDirty=false; return ok; });
+  for(const sink of ['hdmi','net_out']) for(const source of ['ndi','net-in']) {
+    const col=document.createElement('div'); col.className='col-md-6'; const label=document.createElement('label'); label.className='form-label'; label.textContent=(sink==='hdmi'?'HDMI':'Network output')+' ← '+(source==='ndi'?'NDI audio':'Network input')+' (dB)';
+    const input=document.createElement('input'); input.type='number'; input.min='-60'; input.max='12'; input.step='0.1'; input.required=true; input.className='form-control'; input.dataset.sink=sink; input.dataset.source=source; input.value='0'; label.append(input); col.append(label); $('[data-routing]').append(col);
+  }
+  all('form').forEach(form=>form.addEventListener('submit',event=>{
+    event.preventDefault(); if(!form.reportValidity()) return;
+    const kind=form.dataset.form;
+    if(kind==='device' && event.submitter?.value==='name' && new TextEncoder().encode(form.elements.name.value).length>31) { error('Device name must be at most 31 UTF-8 bytes.'); return; }
+    action(async()=>{
+      if(kind==='device'||kind==='clock') { const field=event.submitter?.value; if(!field) throw Error('Choose the setting to save.'); const value=form.elements[field].value; return send('/'+kind,{[field]:['name','role'].includes(field)?value:Number(value)}); }
+      if(kind==='channels') return send('/channels',{rx:Number(form.elements.rx.value),tx:Number(form.elements.tx.value)});
+      if(kind==='delay') return send('/audio/delay',{ms:Number(form.elements.ms.value)});
+      const body={hdmi:{},net_out:{}}; all('[data-sink]').forEach(input=>body[input.dataset.sink][input.dataset.source]=Number(input.value)); return send('/audio/routing',body);
+    });
+  }));
+  $('[data-delay-slider]').oninput=event=>val('ms',event.target.value);
+  $('[name="ms"]').oninput=event=>{ $('[data-delay-slider]').value=event.target.value; };
+  $('[data-enable]').onclick=()=>action(async()=>await confirmChange('Enable network audio and audio engine v2? The decoder will restart and video may pause briefly.') ? send('/audio/enable',{confirm:true}) : false);
+  $('[data-disable]').onclick=()=>action(()=>send('/audio/disable',{}));
+  all('[data-service]').forEach(button=>button.onclick=()=>action(async()=>{ const name=button.dataset.service; if(name!=='start' && !await confirmChange((name==='stop'?'Stop':'Restart')+' the Tessera daemon? Active network audio will be interrupted.')) return false; return send('/service',{action:name,confirm:true}); }));
+  $('[data-diagnostics]').onclick=()=>action(async()=>{
+    const result=await host.get(base+'/diagnostics'); if(result.ok===false || result.error) throw Error(result.error||'Diagnostics unavailable');
+    const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'})); const link=document.createElement('a'); link.href=url; link.download='tessera-diagnostics.json'; link.click(); URL.revokeObjectURL(url); return false;
+  });
+  function renderChannelLabels(device) {
+    const present=new Set();
+    for(const direction of ['rx','tx']) for(const channel of device[direction+'_channels']||[]) {
+      const key=direction+':'+channel.channel;present.add(key);let row=channelLabelRows.get(key);
+      if(!row) {
+        const form=document.createElement('form');form.className='d-flex gap-2 align-items-end flex-wrap mb-2';
+        const label=document.createElement('label');label.className='form-label mb-0 flex-grow-1';label.textContent=direction.toUpperCase()+' channel '+channel.channel;
+        const input=document.createElement('input');input.className='form-control form-control-sm';input.type='text';input.maxLength=31;input.placeholder=direction.toUpperCase()+' '+channel.channel;input.oninput=()=>dirtyChannelLabels.add(key);label.append(input);form.append(label);
+        const save=document.createElement('button');save.type='submit';save.className='btn btn-outline-primary btn-sm';save.textContent='Save channel name';form.append(save);
+        const reset=document.createElement('button');reset.type='button';reset.className='btn btn-outline-secondary btn-sm';reset.textContent='Reset';form.append(reset);
+        const apply=value=>action(async()=>{
+          if(value!==null && (new TextEncoder().encode(value).length>31 || /[\x00-\x1f\x7f]/.test(value))) throw Error('Channel name must contain at most 31 UTF-8 bytes and no control characters.');
+          const ok=await send('/device',{label:{direction,channel:channel.channel,label:value}});if(ok)dirtyChannelLabels.delete(key);return ok;
+        });
+        form.addEventListener('submit',event=>{event.preventDefault();if(form.reportValidity())apply(input.value || null);});reset.onclick=()=>apply(null);
+        row={form,input};channelLabelRows.set(key,row);$('[data-channel-labels]').append(form);
+      }
+      if(!dirtyChannelLabels.has(key))row.input.value=channel.label??'';
+    }
+    for(const [key,row] of channelLabelRows)if(!present.has(key)){row.form.remove();channelLabelRows.delete(key);dirtyChannelLabels.delete(key);}
+  }
+  function render(data,force) {
+    const status=data.status||{}, device=status.devices?.find(d=>d.key==='main')||status.devices?.[0]||{}, clock=status.clocks?.find(c=>c.interface===status.network?.primary)||status.clocks?.[0]||{}, audio=data.audio||{}, metrics=data.metrics||{};
+    if(data.daemon==='online')renderChannelLabels(device);
+    $('[data-status]').textContent=data.daemon==='online'?'Daemon online':'Daemon offline — network audio is unavailable. Start the daemon or check diagnostics.';
+    $('[data-status]').className='alert '+(data.daemon==='online'?'alert-success':'alert-warning');
+    const values={'Daemon version':status.version,'RX packets':metrics.flows?.filter(f=>f.direction==='rx').reduce((n,f)=>n+(f.packets||0),0),'TX packets':metrics.flows?.filter(f=>f.direction==='tx').reduce((n,f)=>n+(f.packets||0),0),'Clock':clock.state ?? status.clock_state,'Offset (ns)':clock.offset_ns,'Interface':status.network?.primary,'RX late':metrics.flows?.reduce((n,f)=>n+(f.rx?.late_packets||0),0),'TX late skips':metrics.flows?.reduce((n,f)=>n+(f.tx?.late_skips||0),0)};
+    for(const [label,key] of [['Network input','net-in'],['Network output','net-out']]) { const item=data.engine?.sources?.[key]||data.engine?.sinks?.[key]||{}; values[label+' fill']=item.fill ?? item.fill_frames; values[label+' ppm']=item.ppm; values[label+' xruns']=item.xruns; }
+    $('[data-metrics]').replaceChildren(); for(const [label,value] of Object.entries(values)) { const dt=document.createElement('dt'),dd=document.createElement('dd'); dt.className='col-sm-4'; dd.className='col-sm-8'; dt.textContent=label; dd.textContent=value??'Unavailable'; $('[data-metrics]').append(dt,dd); }
+    $('[data-clock]').textContent='Timestamping: '+(clock.timestamping ?? status.network?.timestamping ?? 'unavailable')+' · State: '+(clock.state??'unavailable');
+    $('[data-version]').textContent='Embedded Ubuntu experimental bundle: '+(data.bundle?.embedded_version??'unknown')+' · Daemon: '+(data.bundle?.daemon_version??status.version??'unknown')+'. Plugin updates are available from the Plugins list.';
+    $('[data-toml]').textContent=data.flow_toml??'';
+    $('[data-restart]').textContent=[...(status.restart_keys?.length?['Restart required: '+status.restart_keys.join(', ')]:[]),...(status.warnings||[]).map(w=>typeof w==='string'?w:JSON.stringify(w))].join(' · ');
+    const enabled=data.audio_enabled===true;
+    $('[data-audio-state]').textContent=(enabled?'Network audio enabled.':'Network audio disabled.')+' · Audio engine '+(data.audio_engine||'unknown');
+    if(!initialized || force) {
+      for(const key of ['name','sample_rate','encoding','latency_us']) val(key,key==='latency_us'?device.latency:device[key]);
+      val('rx',device.rx_channels?.length); val('tx',device.tx_channels?.length); val('role',status.clock_settings?.role); val('priority',status.clock_settings?.priority);
+      val('ms',audio.sources?.['net-in']?.delay_ms??0); $('[data-delay-slider]').value=$('[name="ms"]').value;
+      all('[data-sink]').forEach(input=>{input.value=audio.sinks?.[input.dataset.sink==='net_out'?'net-out':'hdmi']?.mix?.[input.dataset.source]??(input.dataset.source==='ndi'?0:-60);});
+      initialized=!!device.key;
+    }
+    if(!flowDirty) { $('[data-flows]').replaceChildren(); (data.flows||[]).forEach(addFlow); }
+  }
+  async function refresh(force=false) {
+    if(window.NDIMON_NETWORK) window.NDIMON_NETWORK.loadRole('tessera',networkSelect).then(()=>{
+      if(!stopped)$('[data-network-error]').textContent='';
+    }).catch(e=>{if(!stopped)$('[data-network-error]').textContent=e.message;});
+    try { const data=await host.get(base+'/status'); if(stopped) return; if(data.ok===false) throw Error(data.error||'Status unavailable'); render(data,force); }
+    catch(e) { if(!stopped) { $('[data-status]').textContent='Daemon offline — could not read status.'; $('[data-status]').className='alert alert-warning'; error(e.message); } }
+  }
+  async function poll() { if(stopped) return; if(!busy) await refresh(); if(!stopped) timer=setTimeout(poll,2000); }
+  poll();
+  return ()=>{ stopped=true; clearTimeout(timer); if(resolveConfirm) finishConfirm(false); };
+};
+</script>

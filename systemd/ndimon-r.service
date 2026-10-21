@@ -13,12 +13,17 @@ RestartSec=3
 ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon0/bind'
 ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon1/bind'
 ExecStartPre=-/bin/sh -c 'echo 1 > /sys/class/graphics/fb0/blank'
+# RK3588 only: faster global ondemand response; original value restored at stop.
+ExecStartPre=-/usr/bin/python3 -I /usr/local/lib/ndimon/ndimon-cpu-sampling apply
 ExecStart=/usr/local/bin/ndimon-r
+ExecStopPost=-/usr/bin/python3 -I /usr/local/lib/ndimon/ndimon-cpu-sampling restore
 ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon0/bind'
 ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon1/bind'
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/aarch64-linux-gnu:/usr/lib/x86_64-linux-gnu
-# Share /var/lib/ndimon/.ndi with ndimon-finder. Official NDI config is per $HOME.
+# Share /var/lib/ndimon/.ndi with ndimon-finder. The SDK ignores $HOME (it uses the
+# passwd home, /root for this service); NDI_CONFIG_DIR is the documented override.
 Environment=HOME=/var/lib/ndimon
+Environment=NDI_CONFIG_DIR=/var/lib/ndimon/.ndi
 NoNewPrivileges=true
 # High priority for real-time video
 Nice=-10

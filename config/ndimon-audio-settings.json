@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "engine": { "enabled": true, "rate": 48000, "period_frames": 512, "master": "hdmi" },
+  "sources": { "ndi": { "type": "ndi", "enabled": true, "channels": 2, "delay_ms": 0, "gain_db": 0 } },
+  "sinks": { "hdmi": { "type": "alsa", "enabled": true, "channels": 2, "alsa_pcm": "auto", "delay_ms": 0, "mix": { "ndi": 0 } } },
+  "video_delay_ms": 0
+}

@@ -10,7 +10,7 @@
 //   machinename into ndi-config.v1.json; the SDK docs discourage that because
 //   it causes mDNS clashes.
 // - ndi-config.v1.json is NOT part of the backup. The decoder rewrites it on
-//   startup from the files restored here, including HX passthrough.
+//   startup from the files restored here.
 // - NTP is the OS clock. NDI has no time server of its own.
 const express    = require('express');
 const bodyParser = require('body-parser');
@@ -20,10 +20,13 @@ const os         = require('os');
 const path       = require('path');
 const Ajv        = require('ajv');
 const router  = express.Router();
-const { readJson, writeJson, corsHeaders, runPrivAsync } = require('./lib');
+const { readJson, writeJson, corsHeaders, runPrivAsync, sendIPC } = require('./lib');
 const auth    = require('../auth');
+const { isNdiEndpoint } = require('../ndi-endpoint');
+const { readBackupAuth, findConfiguredLogo, restorableLogo } = require('../backup-assets');
 const network = require('./Network');
 const device  = require('./DeviceSettings');
+const audio = require('../audio-settings');
 
 const IMPORT_DIR   = '/var/lib/ndimon/import';
 const BACKUP_DIR   = '/var/lib/ndimon/backups';
@@ -35,15 +38,11 @@ const OUTPUT_KEYS = [
     'videooutput', 'NDIAudio', 'TallyMode', 'ScreenSaverMode', 'ColorSpace',
 ];
 const DEVICE_KEYS = [
-    'watchdog_mode', 'decode_mode', 'ntp_server',
+    'watchdog_mode', 'decode_mode', 'audio_engine', 'ntp_server',
     'reboot_schedule_enabled', 'reboot_schedule_time', 'reboot_schedule_days',
 ];
-const SPLASH_KEYS = [
-    'bg_idle', 'bg_live', 'accent_idle', 'accent_live', 'logo_path',
-    'logo_x_pct', 'logo_y_pct', 'logo_w_pct', 'text_idle', 'text_live',
-    'text_height_pct', 'show_box', 'show_signal_text', 'show_device_name',
-    'show_device_url', 'show_sources_available',
-];
+// Shared with the Splash route so an export always matches what it stores.
+const { SPLASH_KEYS, BACKDROPS } = require('../splash-config');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
 
@@ -73,11 +72,19 @@ const validateFile = ajv.compile({
         created_at: { type: 'string', maxLength: 40 },
         checksum: { type: 'string', pattern: '^[0-9a-f]{64}$' },
         app: { type: 'object' },
+        warnings: { type: 'array', items: { type: 'string' } },
         source_device: { type: 'object' },
         sections: {
             type: 'object',
             additionalProperties: false,
             properties: {
+                plugins: {
+                    type: 'object', propertyNames: { pattern: '^[a-z][a-z0-9-]{1,31}$' },
+                    additionalProperties: {
+                        type: 'object', required: ['version', 'data'], additionalProperties: false,
+                        properties: { version: { type: 'string' }, data: { type: 'object' } },
+                    },
+                },
                 outputs: {
                     type: 'object', additionalProperties: false,
                     patternProperties: { '^[1-8]$': outputItem },
@@ -126,11 +133,13 @@ const validateFile = ajv.compile({
                         logo_ext: { enum: ['png', 'jpg', 'jpeg', ''] },
                     },
                 },
+                audio: {type:'object',additionalProperties:false,required:['settings'],properties:{settings:audio.schema}},
                 device: {
                     type: 'object', additionalProperties: false,
                     properties: {
                         watchdog_mode: { enum: ['disabled', 'passive', 'active'] },
                         decode_mode: { enum: ['auto', 'hardware', 'software'] },
+                        audio_engine: { enum: ['v1','v2'] },
                         ntp_server: { type: 'string', maxLength: 253 },
                         reboot_schedule_enabled: { type: 'boolean' },
                         reboot_schedule_time: { type: 'string', pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' },
@@ -151,11 +160,26 @@ const validateFile = ajv.compile({
                     type: 'object', additionalProperties: false,
                     required: ['mode'],
                     properties: {
+                        vlans: {
+                            type: 'array', maxItems: 8,
+                            items: {
+                                type: 'object', additionalProperties: false, required: ['id', 'mode'],
+                                properties: {
+                                    id: { type: 'integer', minimum: 1, maximum: 4094 },
+                                    mode: { enum: ['dhcp', 'static'] },
+                                    address: { type: 'string', maxLength: 32 },
+                                    prefix: { type: 'integer', minimum: 0, maximum: 30 },
+                                    gateway: { type: 'string', maxLength: 32 },
+                                    allow_gateway: { type: 'boolean' },
+                                },
+                            },
+                        },
                         mode: { enum: ['dhcp', 'static', 'unknown'] },
                         address: { type: 'string', maxLength: 32 },
                         prefix: { type: 'integer', minimum: 0, maximum: 32 },
                         gateway: { type: 'string', maxLength: 32 },
                         dns: { type: 'array', maxItems: 3, items: { type: 'string', maxLength: 32 } },
+                        profiles: require('../network-profiles').schema,
                         manager: { type: 'string', maxLength: 32 },
                         interface: { type: 'string', maxLength: 32 },
                         applicable: { type: 'boolean' },
@@ -198,11 +222,8 @@ function cleanDiscovery(value) {
     if (!text) return '';
     const parts = text.split(',').map(p => p.trim()).filter(Boolean);
     for (const part of parts) {
-        const match = part.match(/^(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?$/);
-        if (!match || !isIpv4(match[1]))
-            throw new Error('Discovery Server must be an IPv4 address, with an optional :port');
-        if (match[2] && (Number(match[2]) < 1 || Number(match[2]) > 65535))
-            throw new Error('Discovery Server port is out of range');
+        if (!isNdiEndpoint(part))
+            throw new Error('Discovery Server must be IPv4 with an optional port from 1 to 65535');
     }
     return parts.join(',');
 }
@@ -247,7 +268,11 @@ function readOutputs() {
         if (!fs.existsSync(file)) continue;
         const cfg = readJson(file);
         if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) continue;
-        outputs[String(ch)] = pick(cfg, OUTPUT_KEYS);
+        const output = pick(cfg, OUTPUT_KEYS);
+        // Older decoder saves use an empty string for the default letterbox mode.
+        // Export the effective value so our own strict import schema accepts it.
+        if (output.ScaleMode === '') output.ScaleMode = 'letterbox';
+        outputs[String(ch)] = output;
     }
     return outputs;
 }
@@ -269,25 +294,57 @@ function buildSections(opts) {
             ndi_groups: readJson('/etc/ndi-group.json').ndi_groups || 'public',
             off_subnet_ips: readOffSubnet(),
         },
-        transport: { Rxpm: readJson('/etc/ndimon-rx-settings.json').Rxpm || 'TCP' },
+        transport: { Rxpm: readJson('/etc/ndimon-rx-settings.json').Rxpm || 'RUDP' },
         display: {
             splash: pick(splash, SPLASH_KEYS),
             osd: { enabled: !!osd.enabled, text: String(osd.text || '').slice(0, 128) },
         },
+        audio: { settings: audio.getSettings() },
         device: pick(deviceCfg, DEVICE_KEYS),
         identity: {
             ndi_recv_name: deviceCfg.ndi_recv_name || '',
             hostname: os.hostname(),
         },
     };
-    const logo = findLogo();
-    if (logo) {
-        sections.display.logo_base64 = fs.readFileSync(logo.file).toString('base64');
-        sections.display.logo_ext = logo.ext;
+    const registry = require('../plugins').getRegistry();
+    sections.plugins = {};
+    for (const [name, hook] of Object.entries(registry?.backupHooks() || {})) {
+        const plugin = registry.get(name);
+        if (!opts.includeDisabledPlugins && plugin.state !== 'enabled') continue;
+        try {
+            const isPlainObject = value => value !== null && typeof value === 'object' &&
+                (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+            const data = hook.export();
+            if (!isPlainObject(data)) throw new Error('export must be a plain object');
+            const serialized = JSON.stringify(data, (key,value) => {
+                if (['undefined','function','symbol','bigint'].includes(typeof value) ||
+                    (typeof value === 'number' && !Number.isFinite(value))) {
+                    throw new Error('export contains non-JSON values');
+                }
+                return value;
+            });
+            if (Buffer.byteLength(serialized,'utf8') > 1024*1024) throw new Error('export exceeds 1 MiB');
+            const normalized = JSON.parse(serialized);
+            if (!isPlainObject(normalized)) throw new Error('serialized export must be a plain object');
+            sections.plugins[name] = { version: plugin.version, data: normalized };
+        }
+        catch (e) { opts.warnings.push(`plugin ${name}: export failed: ${e.message || String(e)}`); }
+    }
+    if (!Object.keys(sections.plugins).length) delete sections.plugins;
+    const logo = findConfiguredLogo(splash.logo_path);
+    if (!splash.logo_path) {
+        sections.display.logo_base64 = '';
+        sections.display.logo_ext = '';
+    } else if (logo) {
+        try {
+            sections.display.logo_base64 = fs.readFileSync(logo.file).toString('base64');
+            sections.display.logo_ext = logo.ext;
+        } catch { /* Unknown/unreadable configured logo: preserve it on restore. */ }
     }
     if (opts.network && opts.networkStatus) {
         const n = opts.networkStatus;
         sections.network = {
+            ...(n.profiles ? { profiles: n.profiles } : {}),
             mode: n.mode || 'unknown',
             address: n.address || '',
             prefix: Number(n.prefix) || 0,
@@ -296,32 +353,26 @@ function buildSections(opts) {
             manager: n.backend || '',
             interface: n.interface || '',
             applicable: !!n.applicable,
+            vlans: (n.vlans || []).filter(v => v.managed !== false && v.mode !== 'unknown').map(network.vlanSettings),
         };
     }
     if (opts.password) {
-        const stored = readJson('/etc/ndimon-auth.json');
+        const stored = readBackupAuth('/etc/ndimon-auth.json');
         if (stored && stored.salt && stored.hash)
             sections.auth = { salt: stored.salt, hash: stored.hash };
     }
     return sections;
 }
 
-function findLogo() {
-    for (const ext of ['png', 'jpg', 'jpeg']) {
-        const file = `/etc/ndi-splash-logo.${ext}`;
-        if (fs.existsSync(file)) return { file, ext: ext === 'jpeg' ? 'jpg' : ext };
-    }
-    return null;
-}
-
-function buildDocument(sections) {
+function buildDocument(sections, warnings = []) {
     const alias = (sections.identity && sections.identity.ndi_recv_name) || 'ndimon';
     return {
+        ...(warnings.length ? { warnings } : {}),
         format: 'ndimon-backup',
         schema_version: 1,
         created_at: new Date().toISOString(),
         app: {
-            firmware: readTrim('/etc/ndimon-firmware-version') || '1.2.0-beta',
+            firmware: readTrim('/etc/ndimon-firmware-version') || '1.3.0',
             commit: readTrim('/etc/ndimon-build-commit'),
             ndi_version: readTrim('/etc/ndimon-ndi-version') || '6.x',
         },
@@ -355,8 +406,9 @@ router.get('/export', async (req, res) => {
             try { networkStatus = await network.readStatus(); }
             catch (e) { networkStatus = null; }
         }
-        const sections = buildSections({ network: wantNet && networkStatus, networkStatus, password: wantPw });
-        const doc = buildDocument(sections);
+        const warnings = [];
+        const sections = buildSections({ network: wantNet && networkStatus, networkStatus, password: wantPw, warnings });
+        const doc = buildDocument(sections, warnings);
         const name = `ndimon-${safeAlias(doc.source_device.ndi_alias)}-${fileStamp()}.json`;
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
@@ -379,6 +431,7 @@ function sweepDir(dir, ttl) {
 }
 
 function semanticCheck(sections) {
+    if(sections.audio){const checked=audio.validate(sections.audio.settings);if(!checked.ok)throw new Error(checked.errors.join('; '));}
     if (sections.discovery) {
         if (sections.discovery.NDIDisServIP != null)
             sections.discovery.NDIDisServIP = cleanDiscovery(sections.discovery.NDIDisServIP);
@@ -389,14 +442,14 @@ function semanticCheck(sections) {
     }
     if (sections.presets) {
         for (const preset of sections.presets.presets || []) {
-            if (preset.ip && !isIpv4(preset.ip))
-                throw new Error('a preset IP is not a valid IPv4 address');
+            if (preset.ip && !isNdiEndpoint(preset.ip))
+                throw new Error('a preset IP is not a valid IPv4 endpoint');
         }
     }
     if (sections.outputs) {
         for (const item of Object.values(sections.outputs)) {
-            if (item.SourceIP && !isIpv4(item.SourceIP))
-                throw new Error('an output source IP is not a valid IPv4 address');
+            if (item.SourceIP && !isNdiEndpoint(item.SourceIP))
+                throw new Error('an output source IP is not a valid IPv4 endpoint');
             if (item.SourceName && /[\u0000-\u001f]/.test(item.SourceName))
                 throw new Error('a source name contains control characters');
         }
@@ -410,10 +463,24 @@ function semanticCheck(sections) {
             if (splash[key] && !/^#[0-9A-Fa-f]{6}$/.test(String(splash[key])))
                 throw new Error('splash colour ' + key + ' must be #RRGGBB');
         }
+        if (splash.backdrop !== undefined && !BACKDROPS.includes(splash.backdrop))
+            throw new Error('splash backdrop must be one of ' + BACKDROPS.join(', '));
         sections.display.splash = splash;
     }
     if (sections.network && sections.network.mode === 'static')
         network.normalizeRequest(sections.network);
+    if (sections.network?.profiles) {
+        network.validateProfiles(sections.network.profiles);
+        for (const row of sections.network.profiles.networks) network.normalizeRequest(row);
+    }
+    if (sections.network && !sections.network.profiles && sections.network.vlans) {
+        const ids = new Set();
+        for (const vlan of sections.network.vlans) {
+            if (ids.has(vlan.id)) throw new Error('duplicate VLAN id');
+            ids.add(vlan.id);
+            network.normalizeVlanRequest(vlan.id, vlan, sections.network);
+        }
+    }
 }
 
 function diffOutputs(current, incoming) {
@@ -451,7 +518,8 @@ function diffDisplay(incoming) {
     if (curOsd.enabled !== nextOsd.enabled || curOsd.text !== nextOsd.text)
         lines.push(`OSD ${curOsd.enabled ? 'on' : 'off'} → ${nextOsd.enabled ? 'on' : 'off'}`
             + (curOsd.text !== nextOsd.text ? `; text “${curOsd.text || '(none)'}” → “${nextOsd.text || '(none)'}”` : ''));
-    const logo = findLogo();
+    incoming = restorableLogo(incoming);
+    const logo = findConfiguredLogo(splash.logo_path);
     const haveLogo = !!logo;
     const incomingLogo = !!(incoming.logo_base64);
     if (incoming.logo_base64 === '' && haveLogo) lines.push('Logo will be removed');
@@ -498,13 +566,14 @@ function sectionRows(sections) {
             changed ? `Groups “${cur.ndi_groups}” → “${sections.discovery.ndi_groups || 'public'}”; Discovery Server “${cur.NDIDisServIP}” → “${sections.discovery.NDIDisServIP || ''}”` : 'No changes');
     }
     if (sections.transport) {
-        const cur = readJson('/etc/ndimon-rx-settings.json').Rxpm || 'TCP';
+        const cur = readJson('/etc/ndimon-rx-settings.json').Rxpm || 'RUDP';
         add('transport', 'Transport', cur !== sections.transport.Rxpm, `${cur} → ${sections.transport.Rxpm}`);
     }
     if (sections.display) {
         const lines = diffDisplay(sections.display);
         add('display', 'Splash and OSD', lines.length > 0, lines.join('\n') || 'No changes');
     }
+    if (sections.audio) add('audio','Audio',canonicalize(audio.getSettings())!==canonicalize(sections.audio.settings),'Audio routing, gains and delays');
     if (sections.device) {
         const cur = pick(deviceCfg, DEVICE_KEYS);
         const changed = canonicalize(cur) !== canonicalize(sections.device);
@@ -522,6 +591,9 @@ function sectionRows(sections) {
             summary: `Backup “${sections.identity.ndi_recv_name || sections.identity.hostname || ''}”, this device “${deviceCfg.ndi_recv_name || os.hostname()}”.`
                 + (same ? '' : ' Leave this off when setting up a second device from this backup.'),
         });
+    }
+    if (sections.plugins) {
+        add('plugins', 'Plugins', true, Object.keys(sections.plugins).join(', ') || 'No plugin settings');
     }
     if (sections.auth) {
         rows.push({
@@ -607,12 +679,7 @@ function mergeFile(file, patch) {
 
 function writeLogo(display) {
     if (display.logo_base64 == null) return;
-    if (display.logo_base64 === '') {
-        for (const ext of ['png', 'jpg', 'jpeg']) {
-            try { fs.unlinkSync(`/etc/ndi-splash-logo.${ext}`); } catch {}
-        }
-        return;
-    }
+    if (display.logo_base64 === '') return null;
     const buf = Buffer.from(display.logo_base64, 'base64');
     if (buf.length < 8 || buf.length > 3 * 1024 * 1024)
         throw new Error('logo is empty or larger than 3 MB');
@@ -621,18 +688,7 @@ function writeLogo(display) {
     if (!png && !jpg) throw new Error('logo is not a PNG or JPEG');
     const ext = png ? 'png' : 'jpg';
     const file = `/etc/ndi-splash-logo.${ext}`;
-    const tmp = file + '.tmp';
-    const fd = fs.openSync(tmp, 'w', 0o640);
-    try {
-        fs.writeSync(fd, buf);
-        fs.fsyncSync(fd);
-    } finally {
-        fs.closeSync(fd);
-    }
-    fs.renameSync(tmp, file);
-    for (const other of ['png', 'jpg', 'jpeg']) {
-        if (other !== ext) { try { fs.unlinkSync(`/etc/ndi-splash-logo.${other}`); } catch {} }
-    }
+    require('../persistence').writeConfig(file, buf);
     return file;
 }
 
@@ -643,30 +699,39 @@ function hostnameFor(identity) {
     return cleaned;
 }
 
-const FILE_SECTIONS = ['outputs', 'presets', 'discovery', 'transport', 'display', 'device', 'identity', 'auth'];
+const FILE_SECTIONS = ['outputs', 'presets', 'discovery', 'transport', 'display', 'device', 'identity', 'auth', 'audio'];
 
-async function applyDocument(doc, selected, applyNetwork) {
+async function applyDocument(doc, selected, applyNetwork, requesterIp = '') {
     const results = {};
     const sections = doc.sections || {};
     const want = new Set(selected || []);
     const writing = FILE_SECTIONS.some(key => want.has(key) && sections[key]);
     const changingNet = !!(applyNetwork && sections.network && sections.network.mode !== 'unknown');
-    if (!writing && !changingNet)
+    const changingPlugins = want.has('plugins') && sections.plugins;
+    if (!writing && !changingNet && !changingPlugins)
         return { snapshot: null, results: {}, network: null, relogin: false, noop: true };
 
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const snapshotWarnings = [];
     const snapSections = buildSections({
+        warnings: snapshotWarnings,
+        includeDisabledPlugins: true,
         network: true,
         networkStatus: await network.readStatus().catch(() => null),
         password: true,
     });
     if (snapSections.network == null) delete snapSections.network;
-    const snap = buildDocument(snapSections);
+    const snap = buildDocument(snapSections, snapshotWarnings);
     const snapName = `pre-restore-${fileStamp()}-${crypto.randomBytes(3).toString('hex')}.json`;
     if (!writeJson(path.join(BACKUP_DIR, snapName), snap))
         throw new Error('could not snapshot the current settings');
     pruneSnapshots();
 
+    if(want.has('audio') && sections.audio && sections.audio.settings.video_delay_ms>0){
+        const cap=await sendIPC({action:'check_audio'});
+        if(!cap.ok || !Number.isInteger(cap.video_delay_cap_ms))throw new Error('cannot check video delay cap');
+        if(sections.audio.settings.video_delay_ms>cap.video_delay_cap_ms)throw new Error(`video delay capped at ${cap.video_delay_cap_ms} ms`);
+    }
     if (writing) await runPrivAsync(['stop-core'], 20000);
     try {
         if (want.has('outputs') && sections.outputs) {
@@ -709,12 +774,27 @@ async function applyDocument(doc, selected, applyNetwork) {
                     enabled: !!sections.display.osd.enabled,
                     text: String(sections.display.osd.text || '').slice(0, 128),
                 });
-            const logo = writeLogo(sections.display);
+            const display = restorableLogo(sections.display);
+            const logo = writeLogo(display);
             if (logo)
                 mergeFile('/etc/ndimon-splash-settings.json', { logo_path: logo });
-            else if (sections.display.logo_base64 === '')
+            else if (display.logo_base64 === '')
                 mergeFile('/etc/ndimon-splash-settings.json', { logo_path: '' });
+            // Commit the new pointer before removing images it replaces. A failed
+            // settings write must leave the previously configured image intact.
+            if (logo || display.logo_base64 === '') {
+                for (const ext of ['png', 'jpg', 'jpeg']) {
+                    const file = `/etc/ndi-splash-logo.${ext}`;
+                    if (file !== logo) require('../persistence').removeLogo(file);
+                }
+            }
             results.display = { ok: true };
+        }
+        if(want.has('audio') && sections.audio){
+            const checked=audio.validate(sections.audio.settings);
+            if(!checked.ok)throw new Error(checked.errors.join('; '));
+            if(!writeJson('/etc/ndimon-audio-settings.json',sections.audio.settings))throw new Error('could not write audio settings');
+            results.audio='restored';
         }
         if (want.has('device') && sections.device) {
             mergeFile('/etc/ndimon-device-settings.json', pick(sections.device, DEVICE_KEYS));
@@ -738,13 +818,40 @@ async function applyDocument(doc, selected, applyNetwork) {
             catch (e) { results.services = { ok: false, error: (e.stderr || e.message || '').trim() }; }
         }
     }
+    if (changingPlugins) {
+        const registry = require('../plugins').getRegistry();
+        const hooks = registry?.backupHooks() || {};
+        const plugins = {}, warnings = [], errors = [];
+        for (const [name, section] of Object.entries(sections.plugins)) {
+            const plugin = registry?.get(name);
+            if (!plugin) {
+                const warning = `plugin ${name} not installed; section skipped`;
+                warnings.push(warning); plugins[name] = { ok: true, skipped: true, warning };
+                continue;
+            }
+            const hook = hooks[name];
+            try {
+                if (!hook) throw new Error(`plugin ${name} has no available backup hook; section skipped`);
+                const error = hook.validate(section.data);
+                if (error) throw new Error(error);
+                await hook.import(section.data);
+                plugins[name] = { ok: true };
+            } catch (e) {
+                errors.push(`plugin ${name}: ${e.message}`);
+                plugins[name] = { ok: false, error: e.message };
+            }
+        }
+        results.plugins = { ok: !errors.length, plugins };
+        if (warnings.length) results.plugins.warning = warnings.join('; ');
+        if (errors.length) results.plugins.error = errors.join('; ');
+    }
     try { device.applySavedNtp(); } catch {}
     try { device.applySavedRebootSchedule(); } catch {}
 
     let pending = null;
     if (applyNetwork && sections.network && sections.network.mode !== 'unknown') {
         const current = await network.readStatus().catch(() => null);
-        if (current && network.settingsEqual(current, sections.network)) {
+        if (current && !network.describeDifference(current, sections.network, requesterIp).needs_prompt && network.vlanSettingsEqual(current.vlans, sections.network.vlans)) {
             results.network = { ok: true, skipped: 'already matches' };
         } else if (current && current.applicable === false) {
             results.network = { ok: false, error: current.reason || 'not supported' };
@@ -782,12 +889,12 @@ router.post('/apply', async (req, res) => {
             return res.status(400).json({ ok: false, error: 'that restore expired; choose the file again' });
         const doc = readJson(file);
         const selected = Array.isArray(req.body.sections) ? req.body.sections.map(String) : [];
-        const known = ['outputs', 'presets', 'discovery', 'transport', 'display', 'device', 'identity', 'auth'];
+        const known = ['plugins', 'outputs', 'presets', 'discovery', 'transport', 'display', 'device', 'identity', 'auth', 'audio'];
         if (selected.some(s => !known.includes(s)))
             return res.status(400).json({ ok: false, error: 'unknown section' });
         if (!selected.length && !req.body.apply_network)
             return res.status(400).json({ ok: false, error: 'choose at least one section' });
-        const out = await applyDocument(doc, selected, !!req.body.apply_network);
+        const out = await applyDocument(doc, selected, !!req.body.apply_network, network.clientIp(req));
         try { fs.unlinkSync(file); } catch {}
         res.json({ ok: true, ...out });
     } catch (e) {
@@ -824,9 +931,9 @@ router.post('/undo', async (req, res) => {
         let applyNetwork = false;
         if (doc.sections.network) {
             const current = await network.readStatus().catch(() => null);
-            applyNetwork = !!(current && !network.settingsEqual(current, doc.sections.network));
+            applyNetwork = !!(current && network.describeDifference(current, doc.sections.network, network.clientIp(req)).needs_prompt);
         }
-        const out = await applyDocument(doc, selected, applyNetwork);
+        const out = await applyDocument(doc, selected, applyNetwork, network.clientIp(req));
         res.json({ ok: true, restored: name, ...out });
     } catch (e) {
         res.status(500).json({ ok: false, error: (e.stderr || e.message || 'undo failed').toString().trim() });

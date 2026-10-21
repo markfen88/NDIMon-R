@@ -77,6 +77,9 @@ function connectSubscriber() {
     sock.on('close', () => {
         _subSocket = null;
         _subReconnectTimer = setTimeout(connectSubscriber, 2000);
+        // The server keeps the loop alive through its listening socket; never let
+        // this retry timer pin tests, one-shot CLIs or a shutting-down process.
+        if (_subReconnectTimer.unref) _subReconnectTimer.unref();
     });
     sock.on('error', () => {});  // handled by close
 }
@@ -85,12 +88,17 @@ connectSubscriber();
 function readJson(file) {
     try {
         return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
+    } catch (err) {
+        if (path.dirname(file) === '/etc' && err.code !== 'ENOENT') throw err;
         return {};
     }
 }
 
 function writeJson(file, obj) {
+    if (path.dirname(file) === '/etc') {
+        require('../persistence').writeConfig(file, JSON.stringify(obj));
+        return true;
+    }
     const tmp = file + '.tmp';
     let fd = null;
     try {
@@ -116,9 +124,9 @@ function writeJson(file, obj) {
     }
 }
 
-function runPrivAsync(args, timeout) {
+function runPrivAsync(args, timeout, input) {
     return new Promise((resolve, reject) => {
-        runPriv(args, { timeout: timeout || 15000 }, (err, stdout, stderr) => {
+        runPriv(args, { timeout: timeout || 15000, input }, (err, stdout, stderr) => {
             if (err) {
                 err.stdout = stdout;
                 err.stderr = stderr;
@@ -144,7 +152,14 @@ function runPriv(args, opts, cb) {
     if (typeof opts === 'function') { cb = opts; opts = {}; }
     const timeout = (opts && opts.timeout) || 10000;
     const done = cb || (() => {});
-    const run = (bin, argv) => execFile(bin, argv, { timeout }, done);
+    const run = (bin, argv) => {
+        const child = execFile(bin, argv, { timeout }, done);
+        if (opts && opts.input !== undefined && child && child.stdin) {
+            child.stdin.on('error', () => {}); // execFile's completion reports helper failures.
+            child.stdin.end(opts.input);
+        }
+        return child;
+    };
     if (fs.existsSync(PRIV)) {
         if (process.getuid && process.getuid() === 0) return run(PRIV, args);
         return run('sudo', ['-n', PRIV, ...args]);
@@ -167,7 +182,11 @@ function runPriv(args, opts, cb) {
     if (cmd === 'set-ntp' || cmd === 'set-reboot-schedule' || cmd === 'start-update' ||
         cmd === 'stop-core' || cmd === 'start-core' ||
         cmd === 'net-status' || cmd === 'net-check-address' || cmd === 'net-apply' ||
-        cmd === 'net-confirm' || cmd === 'net-rollback')
+        cmd === 'net-confirm' || cmd === 'net-rollback' ||
+        cmd === 'plugin-inspect' || cmd === 'plugin-install' || cmd === 'plugin-uninstall' || cmd === 'plugin-exec' ||
+        cmd === 'service-ctl' || cmd === 'restart-api' ||
+        cmd === 'plugin-job-status' || cmd === 'plugin-job-cancel' ||
+        cmd === 'net-vlan-list' || cmd === 'net-vlan-apply' || cmd === 'net-vlan-remove')
         return done(new Error('ndimon-priv not installed'));
     return done(new Error('unknown priv command'));
 }

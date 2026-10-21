@@ -5,6 +5,13 @@ const { sendIPC, corsHeaders, parseOutputIndex } = require('./lib');
 
 router.use((req, res, next) => { corsHeaders(res); next(); });
 
+function resolutionResponse(res, data) {
+    const status = data.error === 'timeout' || data.error === 'expired' ? 504
+        : data.error === 'decoder_offline' ? 503 : data.error === 'resolution_busy' ? 409
+        : data.ok === false ? 400 : 200;
+    return res.status(status).json(data);
+}
+
 // GET /modes?output=0  — list available display modes for an output (0-based index)
 router.get('/modes', async (req, res) => {
     const output = parseOutputIndex(req.query.output, 0);
@@ -25,12 +32,13 @@ router.get('/resolution', async (req, res) => {
 router.post('/resolution', async (req, res) => {
     const body = req.body || {};
     const output = parseOutputIndex(body.output, 0);
+    // The IPC client times out at 2s. Expire queued resolution commands first,
+    // leaving a margin for a modeset that is already being applied.
+    const deadline_monotonic_ms = Number(process.hrtime.bigint() / 1000000n) + 1500;
 
     if (body.auto) {
-        await sendIPC({ action: 'auto_resolution', output });
-        const data = await sendIPC({ action: 'get_modes', output });
-        data.ok = true;
-        return res.json(data);
+        const data = await sendIPC({ action: 'auto_resolution', output, deadline_monotonic_ms });
+        return resolutionResponse(res, data);
     }
 
     const { width, height, refresh, refresh_hz } = body;
@@ -44,8 +52,9 @@ router.post('/resolution', async (req, res) => {
         refresh:    parseInt(refresh || 0, 10),
         refresh_hz: parseFloat(refresh_hz || 0),
         output,
+        deadline_monotonic_ms,
     });
-    res.json(data);
+    resolutionResponse(res, data);
 });
 
 // POST /scaleMode  — set display scale mode (letterbox/stretch/crop)
@@ -67,8 +76,9 @@ router.post('/rotation', async (req, res) => {
     const deg = parseInt(degrees, 10);
     if (!allowed.includes(deg))
         return res.status(400).json({ ok: false, error: 'degrees must be 0, 90, 180, or 270' });
-    await sendIPC({ action: 'set_rotation', rotation: deg, output: parseOutputIndex(output, 0) });
-    res.json({ ok: true, rotation: deg });
+    const result = await sendIPC({ action: 'set_rotation', rotation: deg, output: parseOutputIndex(output, 0) });
+    const status = result.error === 'timeout' ? 504 : result.error === 'decoder_offline' ? 503 : result.error === 'rotation_busy' ? 409 : result.ok === false ? 400 : 200;
+    res.status(status).json(result);
 });
 
 // GET /setresolution via query string (legacy)

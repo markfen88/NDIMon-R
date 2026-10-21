@@ -19,6 +19,6 @@ curl -sS --max-time 3 http://127.0.0.1/api/health 2>/dev/null | python3 -m json.
 
 echo ""
 echo "=== Sources ==="
-python3 -m json.tool /etc/ndimon-sources.json 2>/dev/null \
-    || cat /etc/ndimon-sources.json 2>/dev/null \
-    || echo "(no /etc/ndimon-sources.json)"
+python3 -m json.tool /var/lib/ndimon/ndimon-sources.json 2>/dev/null \
+    || cat /var/lib/ndimon/ndimon-sources.json 2>/dev/null \
+    || echo "(no /var/lib/ndimon/ndimon-sources.json)"

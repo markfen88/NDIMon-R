@@ -34,11 +34,18 @@ app.use((req, res, next) => {
 // 4mb covers splash logo uploads without a 20mb JSON DoS surface.
 // Backup inspect carries that logo again, so it gets its own 8mb parser.
 app.use((req, res, next) => {
-    if (req.method === 'POST' && req.path === '/v1/Backup/inspect') return next();
+    if (req.method === 'POST' && (req.path === '/v1/Backup/inspect' || req.path === '/v1/plugins/upload')) return next();
     bodyParser.json({ limit: '4mb' })(req, res, next);
 });
 app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.text());
+app.use((req,res,next) => req.path === '/v1/plugins/upload' ? next() : bodyParser.text()(req,res,next));
+// Bootstrap and its icon font are npm dependencies so the UI works on a LAN
+// with no internet access. index.html falls back to the CDN if these 404.
+for (const pkg of ['bootstrap', 'bootstrap-icons']) {
+    app.use(`/vendor/${pkg}`, express.static(path.join(__dirname, 'node_modules', pkg, pkg === 'bootstrap' ? 'dist' : ''), {
+        maxAge: '7d', immutable: true,
+    }));
+}
 app.use(express.static(path.join(__dirname, 'public'), {
     setHeaders: (res, filePath) => {
         // Prevent stale HTML/JS from being served after deploys
@@ -59,11 +66,28 @@ auth.installRoutes(app);
 // Confirming a network change lands on the new address, which does not have
 // the session cookie from the old one. The token is the credential.
 app.post('/api/net-confirm', require('./routes/Network').confirm);
+app.post('/api/net-pending', require('./routes/Network').profilePending);
+app.post('/api/net-revert', require('./routes/Network').profileRevert);
 app.use(['/v1', '/api', '/NDIDecode', '/NDIEncoder', '/NDIFinder',
-         '/VideoOutput', '/DeviceSettings', '/System', '/AboutMe'],
+         '/VideoOutput', '/DeviceSettings', '/System', '/AboutMe', '/plugins'],
         auth.middleware);
 
+// Management endpoints take precedence even when a plugin is named feed,
+// install or upload. Populate this router after the registry is available.
+const pluginManagement = express.Router();
+app.use('/v1/plugins', pluginManagement);
+const plugins = require('./plugins');
+let registry;
+try { registry = plugins.loadPlugins(app); }
+catch(e) {
+    console.warn('[Plugins] startup',e.message); plugins.reportLoadError?.(e);
+    registry = {list:()=>[],get:()=>undefined,reload(){},ready:Promise.resolve()};
+}
+pluginManagement.use(require('./routes/Plugins')(registry));
+app.use('/api/events', require('./plugin-events').trackClient);
+
 // --- Route modules ---
+app.use('/v1/Audio', require('./routes/Audio'));
 app.use('/v1/NDIDecode',    require('./routes/NDIDecode'));
 app.use('/v1/NDIEncoder',   require('./routes/NDIEncode'));
 app.use('/v1/NDIFinder',    require('./routes/NDIFinder'));
@@ -95,8 +119,15 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
+Promise.resolve(registry.ready).catch(e=>{
+    console.warn('[Plugins] startup',e.message); plugins.reportLoadError?.(e);
+}).finally(() => app.listen(PORT, () => {
     console.log(`[NDIMon-R] API running on port ${PORT}`);
+    try {
+        if (require('./transport').migrateDefaultTransport()) require('./routes/lib').sendIPC({ action: 'reload_config' });
+    } catch (e) {
+        console.warn('[transport] default migration failed:', e.message);
+    }
     // Re-apply NTP to the OS clock after reboot (config lives in /etc).
     try { require('./routes/DeviceSettings').applySavedNtp(); } catch (e) {
         console.warn('[ntp] startup apply failed:', e.message);
@@ -104,4 +135,4 @@ app.listen(PORT, () => {
     try { require('./routes/DeviceSettings').applySavedRebootSchedule(); } catch (e) {
         console.warn('[reboot-schedule] startup apply failed:', e.message);
     }
-});
+}));

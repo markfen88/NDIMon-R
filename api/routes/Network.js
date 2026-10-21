@@ -8,6 +8,8 @@ const crypto  = require('crypto');
 const fs      = require('fs');
 const router  = express.Router();
 const { corsHeaders, runPrivAsync, writeJson } = require('./lib');
+const {createProfiles,validateProfiles} = require('../network-profiles');
+const profiles = createProfiles(runPrivAsync);
 
 const STAGE_DIR = '/var/lib/ndimon/net';
 
@@ -130,6 +132,17 @@ async function readStatus() {
         const err = new Error((doc && doc.error) || 'network status failed');
         throw err;
     }
+    const status = await profiles.status();
+    doc.profiles = status.settings;
+    doc.profile_pending = status.pending;
+    if (status.settings && status.networks) {
+        const management=status.networks.find(n=>n.id===status.settings.management);
+        Object.assign(doc,{mode:management.mode,address:management.address,prefix:management.prefix,
+            gateway:management.gateway,dns:management.dns,live_address:management.live_address,
+            live_prefix:management.live_prefix,interface:management.interface});
+        doc.vlans=status.settings.networks.filter(n=>n.vlan_id!==null).map(n=>({id:n.vlan_id,
+            mode:n.mode,address:n.address,prefix:n.prefix,gateway:n.gateway,allow_gateway:n.id===status.settings.management,managed:true}));
+    }
     return doc;
 }
 
@@ -139,20 +152,24 @@ async function checkAddress(address) {
 }
 
 async function stageAndApply(settings) {
-    const requested = normalizeRequest(settings);
-    fs.mkdirSync(STAGE_DIR, { recursive: true });
-    const stage = `${STAGE_DIR}/stage-${crypto.randomBytes(8).toString('hex')}.json`;
-    if (!writeJson(stage, requested)) {
-        const err = new Error('could not stage network settings');
-        err.status = 500;
-        throw err;
+    const status = await profiles.status();
+    let doc = structuredClone(settings.profiles || status.settings);
+    doc.revision = status.settings.revision;
+    doc.interface = status.settings.interface;
+    doc.backend = status.settings.backend;
+    if (!settings.profiles) {
+        Object.assign(doc.networks.find(n => n.id === doc.management), normalizeRequest(settings));
+        if (Array.isArray(settings.vlans)) {
+            const base = doc.networks.filter(n => n.vlan_id === null);
+            doc.networks = [...base, ...settings.vlans.map(v => ({
+                id: status.settings.networks.find(n => n.vlan_id === v.id)?.id || 'vlan-' + v.id,
+                name: status.settings.networks.find(n => n.vlan_id === v.id)?.name || 'VLAN ' + v.id,
+                vlan_id: v.id, ...normalizeRequest({...v,dns:[]}),
+            }))];
+        }
     }
-    try {
-        const { stdout } = await runPrivAsync(['net-apply', stage], 20000);
-        return JSON.parse(stdout);
-    } finally {
-        try { fs.unlinkSync(stage); } catch {}
-    }
+    return profiles.apply(doc);
+
 }
 
 // What the restore screen should say. needs_prompt is false when both sides
@@ -161,6 +178,11 @@ function describeDifference(current, backup, browserIp) {
     const cur = current || {};
     const bak = backup || {};
     if (!backup) return { present: false, needs_prompt: false, warnings: [] };
+    if (backup.profiles) {
+        const strip = value => { const doc = {...value}; delete doc.revision; return JSON.stringify(doc); };
+        const changed = !current?.profiles || strip(current.profiles) !== strip(backup.profiles);
+        return {present:true,needs_prompt:changed,message:changed?'Network profiles or service assignments differ. Applying them requires confirmation through the management network.':'',warnings:changed?['All network profiles are restored in one protected transaction.']:[]};
+    }
     if (bak.mode === 'unknown' || cur.applicable === false) {
         return {
             present: true,
@@ -175,9 +197,9 @@ function describeDifference(current, backup, browserIp) {
         return {
             present: true,
             applicable: true,
-            needs_prompt: false,
             warnings: [],
-            message: '',
+            message: vlanSettingsEqual(cur.vlans, bak.vlans) ? '' : 'VLAN settings in the backup differ. Apply them?',
+            needs_prompt: !vlanSettingsEqual(cur.vlans, bak.vlans),
         };
     }
     const warnings = [];
@@ -245,6 +267,10 @@ async function confirm(req, res) {
         return res.status(400).json({ ok: false, error: 'bad token' });
     }
     try {
+        if (req.body && req.body.profiles === true) {
+            const address = String(req.socket?.localAddress || '').replace(/^::ffff:/, '');
+            return res.json(await profiles.confirm(token, address));
+        }
         await runPrivAsync(['net-confirm', token], 60000);
         res.json({ ok: true });
     } catch (e) {
@@ -258,6 +284,123 @@ async function confirm(req, res) {
                 : ((e.stderr || e.message || 'confirm failed') + '').trim(),
         });
     }
+}
+
+function vlanError(message, status = 400) {
+    return Object.assign(new Error(message), { status });
+}
+
+function normalizeVlanRequest(id, body, current = {}) {
+    if (!/^\d+$/.test(String(id)) || Number(id) < 1 || Number(id) > 4094)
+        throw vlanError('VLAN id must be between 1 and 4094');
+    id = Number(id);
+    if (!body || typeof body !== 'object' || Array.isArray(body))
+        throw vlanError('settings must be an object');
+    if (current.interface && `${current.interface}.${id}`.length > 15)
+        throw vlanError('VLAN interface name must fit within 15 characters');
+    const rows = current.vlans || [];
+    if (rows.length >= 8 && !rows.some(v => v.id === id))
+        throw vlanError('at most 8 VLANs are allowed');
+    if (rows.some(v => v.id === id && v.managed === false))
+        throw vlanError('VLAN is not managed by ndimon');
+    if (body.allow_gateway !== undefined && typeof body.allow_gateway !== 'boolean')
+        throw vlanError('allow_gateway must be a boolean');
+    if (body.gateway && body.allow_gateway !== true)
+        throw vlanError('gateway requires allow_gateway: true');
+    if (body.mode === 'static' && (typeof body.prefix === 'boolean' || !/^\d+$/.test(String(body.prefix))))
+        throw vlanError('prefix must be between 8 and 30');
+    const clean = normalizeRequest(body);
+    delete clean.dns;
+    if (clean.mode === 'static') {
+        for (const [addr, prefix] of [[current.address, current.prefix], [current.live_address, current.live_prefix]]) {
+            if (addr && prefix && sameSubnet(clean.address, addr, Math.min(clean.prefix, Number(prefix))))
+                throw vlanError('overlaps base subnet');
+        }
+    }
+    return { id, ...clean, allow_gateway: body.allow_gateway === true };
+}
+
+function vlanSettings(v) {
+    return { id: v.id, mode: v.mode, address: v.mode === 'static' ? (v.address || '') : '',
+        prefix: v.mode === 'static' ? (v.prefix || 0) : 0,
+        gateway: v.gateway || '', allow_gateway: v.allow_gateway === true };
+}
+
+function vlanSettingsEqual(current, incoming) {
+    if (!Array.isArray(incoming)) return true; // Legacy backups did not contain VLANs.
+    const key = rows => JSON.stringify((rows || []).filter(v => v.managed !== false)
+        .map(vlanSettings).sort((a, b) => a.id - b.id));
+    return key(current) === key(incoming);
+}
+
+function requireVlans(current) {
+    if (current.vlan_error) throw vlanError(current.vlan_error, 500);
+    if (current.vlan_capable !== true)
+        throw vlanError(current.vlan_reason || 'VLANs are not supported on this system', 501);
+}
+
+async function applyVlan(id, body, requesterIp, current) {
+    throw vlanError('Use the complete network profile transaction; independent VLAN writes are disabled',409);
+
+}
+
+function sendVlanError(res, error) {
+    const message = (error.stderr || error.message || 'VLAN change failed').toString().trim();
+    const code = Number(error.code) === 3 ? 500
+        : /this VLAN carries your session/.test(message) ? 409
+        : /cannot apply vlans with/.test(message) ? 501
+        : error.status || (error.code === 2 || /bad VLAN id|must be|overlaps|allow_gateway|not managed|at most/.test(message) ? 400 : 500);
+    return res.status(code).json({ ok: false, error: message });
+}
+
+router.get('/vlans', async (req, res) => {
+    try {
+        const current = await readStatus();
+        res.json({ ok: true, vlans: current.vlans || [], vlan_capable: current.vlan_capable === true,
+            vlan_reason: current.vlan_reason || '', vlan_error: current.vlan_error || '' });
+    } catch (error) { sendVlanError(res, error); }
+});
+
+router.put('/vlans/:id', async (req, res) => {
+    res.status(409).json({ok:false,error:'Edit the network profiles and use Apply network settings; immediate VLAN changes are disabled.'});
+});
+
+router.delete('/vlans/:id', async (req, res) => {
+    res.status(409).json({ok:false,error:'Reassign any services, then remove the network in Network Settings and apply the changes.'});
+});
+
+function profileError(res, error) {
+    const message = String(error.stderr || error.message || 'Network change failed').trim();
+    const status = /revision conflict|already pending|select a replacement/.test(message) ? 409
+        : /unsafe|failed|not installed|No such file/.test(message) ? 503 : 400;
+    return res.status(status).json({ok:false,error:message});
+}
+router.get('/profiles', async (req,res) => {
+    try { res.json(await profiles.status()); } catch(e) { profileError(res,e); }
+});
+for (const action of ['preview','apply']) router.post('/profiles/' + action, async(req,res) => {
+    try { res.json(await profiles[action](req.body)); } catch(e) { profileError(res,e); }
+});
+router.post('/profiles/rollback', async(req,res) => {
+    try { res.json(await profiles.rollback()); } catch(e) { profileError(res,e); }
+});
+
+async function profilePending(req,res) {
+    const token = String(req.body?.token || '');
+    if (!/^[0-9a-f]{64}$/.test(token)) return res.status(400).json({ok:false,error:'bad token'});
+    try {
+        const status = await profiles.status();
+        if (!status.pending || !crypto.timingSafeEqual(Buffer.from(token),Buffer.from(status.pending.token)))
+            return res.status(410).json({ok:false,error:'No matching pending network change; check the previous management address.'});
+        return res.json({ok:true,pending:status.pending});
+    } catch(e) { return res.status(503).json({ok:false,error:'Network confirmation status unavailable'}); }
+}
+
+async function profileRevert(req,res) {
+    const token=String(req.body?.token || '');
+    if (!/^[0-9a-f]{64}$/.test(token)) return res.status(400).json({ok:false,error:'bad token'});
+    try { return res.json(await profiles.revert(token)); }
+    catch(e) { return profileError(res,e); }
 }
 
 router.get('/status', async (req, res) => {
@@ -313,6 +456,7 @@ router.post('/rollback', async (req, res) => {
 });
 
 module.exports = {
-    router, confirm, readStatus, checkAddress, stageAndApply,
+    router, confirm, profilePending, profileRevert, profiles, validateProfiles, readStatus, checkAddress, stageAndApply,
     settingsEqual, describeDifference, clientIp, normalizeRequest,
+    normalizeVlanRequest, applyVlan, vlanSettings, vlanSettingsEqual,
 };

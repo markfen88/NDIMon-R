@@ -1,22 +1,30 @@
-# NDIMon-R 1.2 beta
+# NDIMon-R 1.3.0
 
 Dedicated **NDI receiver / HDMI decoder** for Linux appliances.
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/arch-aarch64%20%7C%20x86--64-blue)](https://github.com/markfen88/NDIMon-R)
 
-**1.2 beta** is the next minor release on the 1.x line. It keeps the 1.0 decoder and adds backup and restore, wired network settings with confirm-or-revert, and a scheduled reboot. The installer writes `1.2.0-beta` to `/etc/ndimon-firmware-version`. Treat the network and backup flows as beta until they have been exercised on the board you ship.
+**1.3.0** adds installable plugins, experimental Tessera network audio,
+per-output audio routing and delays, recoverable management/media VLAN
+assignments, and refreshed output and splash controls. It retains backup/restore
+and scheduled reboot from the 1.2 beta line. The installer writes
+`1.3.0` to `/etc/ndimon-firmware-version`. See [the changelog](CHANGELOG.md) for changes
+since the last documented 1.2 beta baseline and [the documentation index](docs/README.md)
+for operator guides. Network audio remains experimental.
 
 It takes a live NDI stream off the network, decodes it, and scans it out to HDMI or DisplayPort with DRM/KMS. Audio goes to ALSA. A web UI on port 80 is the day-to-day control surface. The decoder core is C++ because the path is memory-bandwidth limited on ARM boards.
 
 This is a **decoder**, not an encoder. It does not publish NDI.
 
-NDI protocol notes used while building this tree: [docs/ndi/REFERENCE.md](docs/ndi/REFERENCE.md). Official docs: [docs.ndi.video](https://docs.ndi.video/all/).
+Official NDI documentation: [docs.ndi.video](https://docs.ndi.video/all/).
 
 ---
 
 ## Contents
 
+- [Changes since 1.2 beta](CHANGELOG.md)
+- [Documentation index](docs/README.md)
 - [What it does](#what-it-does)
 - [Requirements](#requirements)
 - [Install](#install)
@@ -28,6 +36,7 @@ NDI protocol notes used while building this tree: [docs/ndi/REFERENCE.md](docs/n
 - [Recovery](#recovery)
 - [Web UI](#web-ui)
 - [HTTP API](#http-api)
+- [Plugins](#plugins)
 - [Backup file](#backup-file)
 - [Internal IPC](#internal-ipc)
 - [Configuration](#configuration)
@@ -46,11 +55,12 @@ NDIMon-R sits on a monitor or in a rack, remembers the last source, and comes ba
 | Incoming stream | What happens |
 |-----------------|--------------|
 | **Standard NDI** (SpeedHQ / UYVY / NV12) | The NDI SDK decodes SpeedHQ. FrameSync pulls video and audio to the local HDMI and ALSA clock. Colour conversion uses ARM NEON. Rockchip VOP2 can scan UYVY natively when rotation is 0. |
-| **NDI HX** (H.264 / H.265) | The SDK is asked for a compressed bitstream (passthrough). NDIMon-R decodes it: Rockchip MPP, Pi 4 V4L2, Intel/AMD VAAPI, or FFmpeg. The Linux NDI SDK has **no** GPU decode of its own. |
+| **NDI HX** (H.264 / H.265) | The Standard SDK decodes HX in software and hands the application uncompressed frames, where the SDK's codec runtime (libavcodec) is available. Hardware HX decode is not available; NDIMon-R does not use the Advanced SDK. |
 
-If a hardware decoder fails to initialise, the worker falls back to FFmpeg so the output is not left black.
-
-Each connector gets one worker: a DRM lease, an NDI receiver, an HX decoder, and a display thread. The first video frame chooses the pipeline. Compressed FourCCs (`H264`, `H265`, `HEVC`, `AVC1`) stay on the push capture path. Everything else switches to FrameSync.
+Each connector gets its own DRM lease, NDI receiver and display thread. With
+the Standard SDK, both Standard NDI and HX arrive as uncompressed frames and use
+FrameSync. The retained compressed-frame decoder factory can fall back to
+FFmpeg, but MPP/V4L2/VAAPI HX decoding is dormant on this SDK path.
 
 ---
 
@@ -62,6 +72,10 @@ Each connector gets one worker: a DRM lease, an NDI receiver, an HX decoder, and
 - **Network:** Avahi (`avahi-daemon`) for mDNS. An NDI Discovery Server is optional, for other subnets and for remote source control.
 - **Privileges:** a full install is **root** (`sudo`). The decoder stays root (DRM). The API and finder run as user `ndimon`.
 - **Build:** on the target. Do not cross-compile from Windows or macOS.
+
+These are NDIMon's host requirements. Tessera plugin bundles have their own
+OS/architecture requirements; the current Ubuntu ARM bundle is experimental.
+See [Tessera setup](docs/plugins/tessera.md) before installing it.
 
 Installing accepts the [NDI SDK License Agreement](https://www.ndi.tv/license). The SDK tarball (~60 MB) is downloaded from NDI on the first `setup-deps`.
 
@@ -93,7 +107,7 @@ The top-level `install.sh` always installs **system** units under `/etc/systemd/
 
 ### What each step does
 
-1. **`scripts/setup-deps.sh`** — build tools, libdrm, ALSA, Avahi, FFmpeg headers, Node.js 20, `python3`, `python3-yaml`, `iputils-arping`, and the NDI SDK into `/usr/local`. Rockchip MPP on RK boards. VAAPI drivers on x86 (Intel iHD/i965 and Mesa for AMD).
+1. **`scripts/setup-deps.sh`** — build tools, libdrm, ALSA, Avahi, FFmpeg headers, Node.js 20, `python3`, `python3-yaml`, `iputils-arping`, nftables, and the NDI SDK into `/usr/local`. Rockchip MPP on RK boards. VAAPI drivers on x86 (Intel iHD/i965 and Mesa for AMD).
 2. **`scripts/build.sh`** — `cmake -B build` and compile `ndimon-r` and `ndimon-finder`.
 3. **`scripts/install.sh`** — `/usr/local/bin`, `/opt/ndimon-r/api`, user `ndimon`, `/usr/local/sbin/ndimon-priv`, `/usr/local/lib/ndimon/ndimon-net`, sudoers, `/var/lib/ndimon/.ndi` (shared NDI home), enable and start the services.
 
@@ -115,8 +129,16 @@ sudo bash scripts/status.sh
 2. Log in. The default password is **`ndimon`**. Change it under **Settings → Security** before the box is on a real network. The UI keeps a warning up until you do.
 3. Open **NDI** and pick a source. That choice is written to `/etc/ndimon-dec{N}-settings.json` and survives reboot.
 4. Optional, on **NDI**: Discovery Server IP, NTP host, groups, extra IPs, transport, and HX decode mode.
-5. Optional, on **Settings → Network**: leave DHCP, or set one static IPv4 address on the primary wired port. Wi-Fi is not configured here.
+5. Optional, on **Settings → Network**: define named untagged/tagged networks,
+   choose management, and review/apply the draft. Select the shared NDI network
+   on **NDI** and the audio network inside **Plugins → Tessera**. Keep the change
+   explicitly at the new management address within 60 seconds once it is ready.
 6. Optional, on **System**: scheduled reboot, watchdog mode, backup.
+7. For network audio, install/enable the Tessera plugin, configure its device,
+   flows and channel names, then open each **Output → Advanced → Audio** to
+   choose inputs, destinations, gains and delays. Saving routes leaves the
+   current audio engine selected; switching to experimental v2 requires a
+   separate confirmation and restarts the decoder. See [the setup guide](docs/plugins/tessera.md).
 
 Factory watchdog mode is **active** (reconnect after about 30 s of stall). An existing `/etc/ndimon-device-settings.json` is not rewritten on update. Change an older box from `passive` under **System → Watchdog Mode**.
 
@@ -126,11 +148,17 @@ Factory watchdog mode is **active** (reconnect after about 30 s of stall). An ex
 
 ### Receive and display
 
-- Dual-mode NDI: Standard (FrameSync) and HX (passthrough to a local decoder).
+- Dual-mode NDI: Standard and SDK-decoded HX, both received through FrameSync.
 - One source per connector. HDMI-A-1, HDMI-A-2, and DP-1 keep channels 1, 2, and 3. Further connectors take the lowest free channel, up to 8.
-- Scale: letterbox, stretch, crop. Rotation 0 / 90 / 180 / 270.
+- Scale: letterbox, stretch, crop. Rotation follows `/modes.supported_rotations` (0; 180 on compatible planes).
 - HDMI mode auto-matched to the source, or a locked resolution from the UI.
-- ALSA audio from NDI planar float, downmixed to stereo. One output owns audio.
+- Default audio engine v1 plays NDI audio through one ALSA owner.
+- Opt-in v2 audio engine: multiple inputs and destinations per output, input
+  gains, separate input/destination delays, shared physical sink mixing,
+  drift compensation and memory-capped primary video delay. Routes can send
+  the same mix to HDMI and Tessera together. The default remains v1 pending soak.
+- Full-width output cards, Current Connections and Source Presets collapse
+  independently. Each output's blue **Advanced** control starts collapsed.
 - Custom splash and OSD when idle or disconnected.
 - Monitor hotplug: the receiver still advertises if no display is present at boot. The picture starts when HDMI lands.
 - Live address on the splash, refreshed about every 2 s. A short banner appears while a network change is waiting to be confirmed. The confirmation token is not drawn on HDMI.
@@ -145,6 +173,11 @@ Factory watchdog mode is **active** (reconnect after about 30 s of stall). An ex
 - Optional NTP host writes a timesyncd or chrony drop-in and reapplies on API start. NDI has no time server of its own.
 - Optional scheduled reboot (System page): local time and weekdays, as a systemd timer with `Persistent=false`. A missed window does not fire on the next boot.
 - Backup and restore of user settings. Wired DHCP or static, with automatic rollback unless you confirm from the new address.
+- Named management, shared NDI and Tessera network assignments on one wired port,
+  with untagged or 802.1Q VLANs, read-only **Used by** links, deletion guards,
+  and a device-side 60-second Keep/Revert window once activation is ready.
+- Installable plugin archives, feed updates, enable/disable/remove controls and
+  plugin backup extensions. Tessera is optional; its runtime lives in its own repo.
 
 ### Discovery and control
 
@@ -152,7 +185,7 @@ Factory watchdog mode is **active** (reconnect after about 30 s of stall). An ex
 - Receiver advertiser so the box shows up as a destination. `allow_controlling` lets the SDK switch sources. The app does **not** call `connect()` from a routing callback.
 - NDI groups are case-sensitive (`Production` and `production` are different). Empty becomes `public`.
 - Extra IPv4 addresses for senders off the local subnet.
-- Transport: TCP on a new install (the UI default). RUDP, UDP, Multicast, and M-TCP are selectable. A change rewrites `ndi-config.v1.json` and recreates the receiver. RUDP is the NDI SDK’s own default if you pick it. Multicast also requires the sender to be multicasting.
+- Transport: RUDP by default (the NDI SDK’s own default and the one the NDI docs recommend). TCP, Multi-TCP, UDP and Multicast are selectable; each enables exactly one of the SDK's `rudp`/`tcp`/`unicast`/`multicast` receive keys (Multicast also keeps RUDP as its fallback, and needs a multicasting sender). A change rewrites `ndi-config.v1.json` and restarts the decoder service, because the SDK only reads transport settings at startup (a few seconds of outage; the saved source reconnects). A saved `TCP` that was never chosen in the UI (no `Rxpm_user_set` marker) is migrated to RUDP once at API start.
 - Named source presets (up to 32). Recall connects immediately, without a rescan.
 - Device name is the OS hostname (`hostnamectl`). It is not written into the SDK config as `machinename`. That override causes mDNS name clashes.
 
@@ -161,6 +194,7 @@ Factory watchdog mode is **active** (reconnect after about 30 s of stall). An ex
 This is a LAN appliance, not a public service.
 
 - Password is scrypt in `/etc/ndimon-auth.json`. Until that file exists the password is `ndimon`.
+- Settings are atomically replaced by a root helper limited to named appliance files. The API and finder retain their unprivileged accounts. Config files are `root:ndimon`, mode `0640`.
 - Session cookie (`HttpOnly`, `SameSite=Lax`, 7 days) or `Authorization: Bearer`. Sessions live in memory and disappear when `ndimon-api` restarts.
 - Five failed logins per IP per minute returns 429.
 - Same-origin only. Mutating requests must send an `Origin` whose host matches `Host`. CORS is not enabled.
@@ -177,12 +211,15 @@ This is a LAN appliance, not a public service.
 ```
 NDI network
     │
-    ├─ ndimon-finder  →  /etc/ndimon-sources.json
+    ├─ ndimon-finder  →  /var/lib/ndimon/ndimon-sources.json
     │
     └─ ndimon-r (DRM master)
-           NDIReceiver ─┬─ Standard: FrameSync → DRM (+ NEON UYVY→XRGB)
-                        ├─ HX: bitstream → MPP | V4L2 | VAAPI | FFmpeg → DRM
-                        └─ ALSA
+           NDIReceiver → SDK-decoded frames (Standard or HX)
+                        ├─ FrameSync → DRM (+ CPU conversion/native UYVY)
+                        ├─ audio v1 → one ALSA output
+                        └─ audio v2 → central graph → HDMI / Tessera PCM
+                                                             │
+                                                   optional tesserad
            IPC  /tmp/ndi-decoder.sock
                         │
            ndimon-api   Web UI + REST  (port 80)
@@ -191,21 +228,29 @@ NDI network
 
 | | Standard NDI | NDI HX |
 |--|--------------|--------|
-| Payload | SpeedHQ, decoded by the SDK to UYVY or NV12 | H.264 or H.265 bitstream |
-| Capture | `NDIlib_framesync` pull, about an 8 ms loop | `NDIlib_recv_capture_v3`, every frame kept |
-| Why | A/V sync, duplicate, drop, silence insertion | Compressed frames cannot be dropped |
-| Picture | CPU blit into an XRGB dumb buffer | Hardware decode to DMA-BUF, then a DRM plane |
-| Copy | Frame is copied; the SDK frame is freed in the callback | SDK frame is held until the display thread frees it |
+| Payload | SpeedHQ decoded inside the SDK to uncompressed frames | H.264/H.265 decoded inside the Standard SDK to uncompressed frames |
+| Capture | FrameSync pull | FrameSync pull after SDK software decode |
+| Timing | A/V sync, duplication/drop and silence insertion | Same uncompressed timing path |
+| Picture | CPU conversion or supported native UYVY scanout | Same display path; allocating a hardware decoder does not make it active |
+| Copy | Application-owned frame planes survive SDK receiver replacement | Same ownership rule |
 
-### HX passthrough
+### HX on the Standard SDK
 
-Before `NDIlib_initialize`, the process writes `codec.h264.passthrough` and `codec.h265.passthrough` into `/var/lib/ndimon/.ndi/ndi-config.v1.json`. The SDK rewrites that file during init, so the process writes it again and checks the keys. `passthrough_ok` is on `/api/status` and `/api/health`. A failed check is a red banner in the UI.
+The build links the Standard SDK and creates v3 receivers in `fastest` mode. On SDK 6.3.2, NDI Screen Capture HX arrives as uncompressed UYVY: the SDK decodes the H.264/H.265 itself, in software, on the appliance CPU. The old global `codec.*.passthrough` keys (which exist as strings in `libndi` 6.3.2) did not enable compressed receive on that SDK and are no longer written; whether any earlier SDK build honoured them is unverified.
 
-Those keys work on the pinned standard SDK v6 line. They are not the documented Advanced SDK per-receiver override. The backup does **not** contain `ndi-config.v1.json`. The decoder rewrites it on startup, including passthrough and transport.
+Per-output `compressed_frame_observed` reports whether a compressed frame has
+actually reached the application (it stays false on the Standard SDK). Use
+`decode_backend` and `hw_decode` for the active backend. SDK-decoded UYVY does
+not use the compressed-stream saturation detector. HX consumes CPU inside the
+SDK, but the historical drop bursts did not establish a decode-speed ceiling;
+inspect source continuity and receiver diagnostics when investigating drops.
 
 ### Decoder factory
 
 `VideoDecoder::create()` reads `decode_mode` (`auto`, `hardware`, `software`) from device settings.
+
+This table describes the retained compressed-frame path. It does not select
+hardware HX decoding when the Standard SDK returns uncompressed frames.
 
 | Mode | Behaviour |
 |------|-----------|
@@ -223,9 +268,31 @@ Those keys work on the pinned standard SDK v6 line. They are not the documented 
 
 ### Picture and audio
 
-DRM leases give each connector its own master. Queues hold two frames and drop the oldest. Idle or disconnected outputs draw a splash (logo, colours, text). An OSD string can sit on the live picture.
+DRM leases give each connector its own master. Queues hold two frames and drop the oldest. Idle or disconnected outputs draw a splash: a gradient or flat backdrop in the chosen colours, a status pill with a glowing dot, the source count, device name and URL, and the logo. Text is anti-aliased Inter (`/usr/local/share/ndimon/fonts`, SIL OFL); if the font files are missing the embedded 8x8 bitmap font is used. An OSD string can sit on the live picture in a translucent pill.
 
-NDI audio is planar float. ALSA downmixes to interleaved S16LE stereo at 48 kHz. Layouts of 5.1 and above use an ITU-R BS.775 mix. The buffer is four periods of 1024 frames. FrameSync requests a sample count from elapsed time so the HDMI clock paces playback, not the sender.
+In the default v1 path, NDI planar float is downmixed to interleaved S16LE stereo
+at 48 kHz. Layouts of 5.1 and above use an ITU-R BS.775 mix. The buffer is four
+periods of 1024 frames. FrameSync requests samples from elapsed time so the
+HDMI clock paces playback. Experimental v2 uses a central graph and its selected
+master, with drift compensation for other clocks; see [per-output audio](#per-output-audio-experimental).
+
+### Receive status and renderer limits
+
+Per-output status includes `total_frames` and `dropped_frames` from the NDI SDK receive counters, `stream_type`, `rotation`, and the receiver's live `audio_enabled` state. Receive counters reset when a receiver is recreated; they do not measure display-side frame loss.
+
+With v1, `audio_available` identifies the worker with the legacy ALSA writer.
+With v2 it can report the shared engine attachment; `audio_enabled` reports the
+receiver's current capture state. Use `/v1/Audio/status` and endpoint readiness
+for the graph, rather than treating this legacy field as physical sink status.
+
+An uncompressed SDK receive path reports `decode_backend: ndi-sdk` and `hw_decode: false`; allocating an unused hardware decoder does not count as active hardware decoding.
+NDI packed YUV software conversion uses video range and the source-size matrix specified by the NDI SDK (BT.601 SD, BT.709 HD, BT.2020 UHD). Selection uses original dimensions before cropping/scaling. The native UYVY path is used only when the actual scanout plane already reports the required encoding and limited range; otherwise software conversion preserves colour correctness. This can reduce native acceleration on drivers whose plane colour defaults do not match. UHD matrix selection does not add HDMI gamut signalling or HDR tone mapping. NV12/HX metadata handling is unchanged by this fix.
+
+
+Rotation depends on the renderer and selected DRM plane. The modes API exposes the angles this renderer supports, rather than the raw driver enum. Quarter turns (90/270) are unavailable until the renderer supports a swapped logical canvas. Rockchip Cluster planes and unidentified Rockchip planes expose only 0 degrees: their linear framebuffers cannot safely use the AFBC transform path, even when a BSP kernel accepts TEST_ONLY. Other planes may offer 180 degrees when the driver advertises the required rotation or reflection bits; TEST_ONLY can still reject a format/scaling combination. Unsupported requests return HTTP 400 and preserve the output; busy requests return HTTP 409 without applying later. Unsupported saved angles are reset to the effective angle on startup, reload and hotplug. Software rotation is not implemented. See the [Rockchip driver format/rotation check](https://github.com/rockchip-linux/kernel/blob/develop-6.1/drivers/gpu/drm/rockchip/rockchip_drm_vop2.c).
+
+
+Source freshness follows incoming SDK frame-counter progress, so FrameSync duplicates cannot hide a frozen sender. In active watchdog mode a source that stays connected but sends no video for roughly 35 seconds is reconnected; paused/on-change sources may prefer passive or disabled watchdog mode. Receiver counter resets report zero FPS for the reset sample.
 
 ---
 
@@ -233,16 +300,18 @@ NDI audio is planar float. ALSA downmixes to interleaved S16LE stereo at 48 kHz.
 
 | Board | HX H.264 | HX H.265 | Standard NDI |
 |-------|----------|----------|----------------|
-| Radxa Rock 5B (RK3588) | MPP | MPP | SDK + NEON, or native UYVY |
-| Radxa Rock 4C+ / 4B+ (RK3399) | MPP | MPP | SDK + NEON, or native UYVY |
-| Raspberry Pi 4 | V4L2 M2M | FFmpeg | SDK + NEON |
-| Raspberry Pi 5 | FFmpeg | FFmpeg | SDK + NEON |
-| Other aarch64 | FFmpeg | FFmpeg | SDK + NEON |
-| Intel NUC | VAAPI | VAAPI | SDK + SSE |
-| AMD | Mesa VAAPI | Mesa VAAPI | SDK + SSE |
-| NVIDIA Linux | FFmpeg | FFmpeg | SDK + SSE |
+| Radxa Rock 5B (RK3588) | SDK software | SDK software | SDK + NEON, or native UYVY |
+| Radxa Rock 4C+ / 4B+ (RK3399) | SDK software | SDK software | SDK + NEON, or native UYVY |
+| Raspberry Pi 4 / 5 | SDK software | SDK software | SDK + NEON |
+| Other aarch64 | SDK software | SDK software | SDK + NEON |
+| Intel / AMD / NVIDIA Linux | SDK software | SDK software | SDK + CPU conversion |
 
-Pi HEVC is stateless and is not used. NVIDIA is skipped because there is no NVDEC path yet. The x86 System page shows the VAAPI driver and decode profiles captured by `vainfo` at install time.
+HX requires the SDK's compatible codec runtime. These describe the current
+receive paths, not certification of every board/image. MPP, V4L2 and VAAPI
+implementations remain in the source but are not active HX decoding with the
+Standard SDK. Pi HEVC's stateless path and NVIDIA NVDEC are not implemented.
+The x86 System page's install-time `vainfo` report does not prove that NDI is
+using hardware decoding.
 
 ---
 
@@ -251,13 +320,25 @@ Pi HEVC is stateless and is not used. NVIDIA is skipped because there is no NVDE
 | Unit | User | Role |
 |------|------|------|
 | `ndimon-r` | root | Capture, decode, DRM, ALSA, IPC. `Type=notify`, `WatchdogSec=30`, `Nice=-10` |
-| `ndimon-finder` | `ndimon` | Continuous NDI Find. Rewrites `/etc/ndimon-sources.json` when the list changes |
+| `ndimon-finder` | `ndimon` | Continuous NDI Find. Rewrites `/var/lib/ndimon/ndimon-sources.json` when the list changes |
 | `ndimon-api` | `ndimon` | Express on port 80, session auth, SSE, reconnect loops |
 | `ndimon-watchdog` | root | Every 15 s: process liveness, then the health policy |
 | `ndimon-net-boot` | root | Oneshot. If a network change was still unconfirmed at boot, roll it back |
 | `ndimon-update` | root | Oneshot, started by the Update button. Not left running |
+| `tesserad` | `tessera` | Optional plugin runtime; network audio, flows and its virtual PTP media clock |
 
-Finder and decoder pin `HOME` to `/var/lib/ndimon` so they share one official NDI config file, `/var/lib/ndimon/.ndi/ndi-config.v1.json`. Both emit the same transport keys from `Rxpm`. The SDK reads transport only when a receiver is created.
+Finder and decoder share one NDI config file, `/var/lib/ndimon/.ndi/ndi-config.v1.json`, selected with `NDI_CONFIG_DIR` (set in both units and before SDK initialization). Pinning `HOME` is not enough. Both processes emit the same transport keys from `Rxpm`. Transport is read at SDK/process startup, so applying a transport change restarts the decoder service; recreating just its receiver is insufficient.
+
+On RK3588 boards with the global `ondemand` governor interface, the root decoder service reduces `sampling_rate` to 10 ms while it runs. This shortens CPU demand sampling for bursty decoding work and affects **all CPU policies and processes**. The governor and frequency limits stay as configured. Stop/crash cleanup restores the saved interval when its applied value is still current; a shorter existing interval or a later operator change is preserved. Other boards, other governors and kernels exposing only per-policy tunables are skipped, with the reason recorded in the service journal.
+
+To disable this tuning, run `sudo systemctl edit ndimon-r` and add:
+
+```ini
+[Service]
+Environment=NDIMON_CPU_SAMPLING=off
+```
+
+Then restart `ndimon-r`. Before rolling back to older service units, stop the receiver with the current unit so its cleanup restores the interval. If the unit was already replaced, run `sudo /usr/bin/python3 -I /usr/local/lib/ndimon/ndimon-cpu-sampling restore`, or reboot.
 
 ```bash
 sudo systemctl restart ndimon-r ndimon-finder ndimon-api ndimon-watchdog
@@ -302,44 +383,102 @@ Process restarts still run in every mode.
 
 ## Web UI
 
-Single page at `/` (`api/public/index.html`). Dark theme. Four sidebar pages. Live state comes from `EventSource /api/events` about every 1.5 s. The page closes the previous stream before opening another.
+Single page at `/` (`api/public/index.html`). Dark theme, Inter typeface served
+from `/fonts/`. Sidebar pages are Dashboard, Outputs, NDI, Settings, System and
+Plugins; phones use a bottom tab bar. Page hashes preserve navigation on reload.
+Unsaved edits are marked, and live state comes from `EventSource /api/events`
+about every 1.5 s. The page closes an old stream before reconnecting. Bootstrap
+and icons are served locally from `/vendor/...`, with a CDN fallback.
 
 | Chrome | Behaviour |
 |--------|-----------|
 | Login overlay | Password field. `POST /api/login` |
-| Top bar | LIVE / IDLE, source, resolution, sign out |
+| Top bar | Device name, live count across outputs (or LIVE / IDLE with one output), sources, display mode, live-feed indicator, sign out |
 | Password warning | Shown while the password is still `ndimon` |
-| Passthrough warning | `passthrough_ok` is false |
 | Saturated warning | HX decode FPS under 85% of the source for 3 s |
+| Connection warning | The event stream dropped; values may be stale until it reconnects |
+
+Warnings stack in the page flow under the top bar. Destructive actions (reboot, restart, delete, update) confirm in a modal.
 
 ### Dashboard
 
-Stream status (LIVE/IDLE, source, resolutions, FPS, codec, platform, frame counters), system resources (CPU, memory, uptime, thermals), **Change Source**, **Refresh Sources**, and a read-only source list.
+One tile per output (LIVE/IDLE, source, input and output resolution, frame rate, codec, HW/SW decode, SATURATED), a system card (CPU, memory, thermals, platform, uptime, audio, frame counters), **Rescan sources**, **Change source**, and the source list with a **Connect** button per source. With more than one output, a selector in the card header picks which output the button connects.
 
-### NDI
+### Outputs
+
+Current Connections is a compact full-width card with output summaries side by
+side. Source Presets and every full-width output card collapse independently,
+so one output can stay open while the others are hidden. Within an output,
+**Advanced** is bright blue and starts collapsed after a page load; it contains
+video settings and the audio route editor. Live status does not replace unsaved
+audio drafts.
 
 | Control | Options | API |
 |---------|---------|-----|
 | Current connections | Per-output LIVE/IDLE, codec, HW/SW, SATURATED | SSE `/api/events` |
-| Tally | `TallyOff`, `TallyOn`, `VideoMode` | `POST /v1/NDIDecode/decodesetup` |
-| Audio | `NDIAudioEn`, `NDIAudioDis` | same |
 | Presets | Save, recall, delete | `/v1/Presets/*` |
 | Output name | Free text | `POST /v1/DeviceSettings/output-alias` |
-| NDI source | None, discovered, or manual name and IP | `POST /v1/NDIDecode/connectTo` |
+| NDI source | None, discovered, or manual name and IP. **Connect** / **Disconnect** | `POST /v1/NDIDecode/connectTo` |
 | Resolution | Auto, or a mode from the EDID list | `POST /v1/VideoOutput/resolution` |
 | Scale | letterbox, stretch, crop | `POST /v1/VideoOutput/scaleMode` |
-| Rotation | 0, 90, 180, 270 | `POST /v1/VideoOutput/rotation` |
+| Rotation | 0; 180 on compatible planes | `POST /v1/VideoOutput/rotation` |
+| Audio inputs | Multiple NDI/Tessera endpoints, each with gain and delay | `GET /v1/Audio/endpoints`, `GET/PUT /v1/Audio/outputs/:ch` |
+| Audio destinations | Multiple HDMI/Tessera endpoints, each with delay | Same output audio API |
+| Output audio enabled | Off retains selections; no active contributions | Same output audio API |
+| Audio engine | Explicit v1/v2 confirmation; decoder restarts | `GET/POST /v1/Audio/engine` |
+
+### Per-output audio (experimental)
+
+Open **Outputs → an output → Advanced → Audio**. Add any available NDI or
+Tessera inputs and HDMI or Tessera destinations. Each input feeds every selected
+destination: for example, NDI audio can feed both the TV's HDMI and a Tessera
+network output. Tessera supplies reusable full-device and named mono endpoints;
+configure their labels and network flows in its plugin. Two mono selections are
+mixed together, rather than interpreted as a left/right pair.
+
+Input gain is −60 to +12 dB (−60 mutes). Input and destination delays are whole
+milliseconds from 0–5000; the sum for an active input/destination pair must fit
+5000 ms. These are manual delays. There is no automatic HDMI/Dante latency
+measurement or per-output video delay.
+
+**Save output audio** affects that output and preserves other outputs. It does
+not select v2 or restart the decoder. Explicitly choose **Use experimental audio
+engine v2…** to activate saved routes; confirmation restarts the decoder and may
+briefly interrupt video. Fresh installs default to v1. **Return to audio engine
+v1…** restores the legacy path and retains saved choices. Disabling an output
+retains its choices without contributing audio. Known offline endpoints stay
+visible and are retried by the control side.
+
+One physical destination has one writer and can mix different receiver sources.
+Duplicate active contributions from the same physical source to the same sink,
+and overlapping channel writers, are refused. If another browser has saved
+audio, reload the saved output before retrying a revision conflict. Resource or
+busy errors preserve the previous graph; an explicit `restart_required` error
+may require returning to v1, saving, then selecting v2 again.
+
+See [the API contract](docs/api/output-audio.md). Audio v2 remains experimental; sustained clock stability and external hardware interoperability are not certified.
+
+### NDI
+
+Device-wide receive settings.
+
+| Control | Options | API |
+|---------|---------|-----|
 | Discovery Server IP | Blank = off | `POST /v1/NDIFinder/NDIDisServer` |
-| NTP | Hostname or IP. Blank keeps the OS default | `POST /v1/DeviceSettings/ntp` |
 | NDI groups | Case-sensitive tags | `POST /v1/NDIFinder/NdiGrpName` |
 | Off-subnet IPs | Comma-separated IPv4 | `POST /v1/NDIFinder/NdiOffSnSrc` |
 | Device name | Receiver name. Also sets the hostname | `POST /v1/DeviceSettings/ndi-alias` |
-| Screensaver | `BlackSS`, `SplashSS`, `CaptureSS` | `POST /v1/NDIDecode/decodesetup` |
-| Colour space | `YUV`, `RGB` | same |
 | Transport | TCP, UDP, Multicast, M-TCP, RUDP | `POST /v1/NDIDecode/decodeTransport` |
+| NDI network | One configured network shared by discovery and every receiver | Complete `/v1/Network/profiles/*` transaction |
 | HX decode | auto, hardware, software | `POST /v1/DeviceSettings/decode-mode` |
+| Tally | `TallyOff`, `TallyOn`, `VideoMode` | `POST /v1/NDIDecode/decodesetup` |
+| Audio | `NDIAudioEn`, `NDIAudioDis` (applies on change) | same |
 
 `Output` on connect and preset recall is **1–8**. VideoOutput query `output` is **0-based** (channel = index + 1).
+
+Transport, HX decode preference and tally remain global. Independent transport
+or NDI VLAN selection per output is deferred with receiver-process work. Per-output audio
+routing is independent of those settings.
 
 Screensaver and colour space are stored and sent in connect metadata. `CaptureSS` is stored; the core does not freeze a frame for it. `TallyMode` `VideoMode` is stored; program tally is applied when the mode is `TallyOn`.
 
@@ -348,13 +487,26 @@ Screensaver and colour space are stored and sent in connect metadata. `CaptureSS
 | Control | API |
 |---------|-----|
 | Change password (current, new, confirm, minimum 6 characters) | `POST /api/password` |
-| Wired network: DHCP or static, configured vs live address, gateway, DNS | `GET /v1/Network/status`, `POST /v1/Network/apply` |
-| Splash colours, logo position, overlay text, visibility | `POST /v1/Splash/config` |
+| Named wired networks: untagged/VLAN, DHCP/static, management assignment, read-only usage | `GET /v1/Network/profiles`, `POST /v1/Network/profiles/preview`, `/apply` |
+| Splash colours (with one-click palettes), gradient or flat backdrop, logo position, text, visibility, with an in-page preview that follows the controls | `POST /v1/Splash/config` |
 | Logo upload (PNG or JPEG) | `POST /v1/Splash/uploadLogo` |
 | Splash preview | `POST /v1/Splash/preview` |
 | OSD enable and text (max 128 characters) | `POST /v1/Splash/osd` |
 
-A network apply shows the difference, warns if the new address is on another subnet or already answers ARP, then waits for confirmation. **Cancel and revert** is on that dialog and on the Network card while a change is pending. Wi-Fi is not changed.
+Define networks here and select **Management / Control**. The NDI page and
+Tessera plugin select their roles from the same network IDs. The table's
+read-only **Used by** links show assignments. An assigned network cannot be
+removed until a replacement is selected. A blank tag means the switch port's
+untagged/native network; tags are 1–4094, with at most eight tagged networks on
+one wired port. This lists appliance configuration, not discovered switch VLANs.
+
+Edits are drafts until **Apply network settings**. Review the impact, then open
+the displayed management address and click **Keep changes** within 60 seconds
+once activation is ready. All applies use this protection, including media-role
+changes. Page loads never confirm. Revert, expiry, failure or boot recovery
+restores the prior settings; timers run independently of the browser/API.
+Only management supplies gateway/DNS. Wi-Fi is unchanged. See
+[network profiles and VLANs](docs/network-vlans.md) for switch, backend and recovery details.
 
 ### System
 
@@ -364,6 +516,7 @@ A network apply shows the difference, warns if the new address is on another sub
 | GPU decode (x86) | `GET /v1/System/vaapi-info` |
 | Check for updates / Update now | `GET /v1/System/version`, `POST /v1/System/update` |
 | Backup and restore | `/v1/Backup/*` |
+| NTP server (hostname or IP; blank keeps the OS default) | `GET` / `POST /v1/DeviceSettings/ntp` |
 | Scheduled reboot | `GET` / `POST /v1/DeviceSettings/reboot-schedule` |
 | Restart one service | `POST /api/services/:name/restart` |
 | Restart decoder and finder | Restarts those two units. The API and watchdog stay up |
@@ -376,7 +529,10 @@ A network apply shows the difference, warns if the new address is on another sub
 
 Restore shows where the file came from, then one row per section with a Changed or Unchanged badge. Unchanged sections start unticked. You choose what to import.
 
-Network settings are mentioned only when they differ.
+Network settings are mentioned when addressing, configured networks or role
+assignments differ. A profile comparison includes every network and the
+Management/NDI/Tessera assignments, even when the management IP stays the same.
+The following table describes older backups containing only primary addressing.
 
 | This device | Backup file | What you see |
 |-------------|-------------|--------------|
@@ -392,11 +548,53 @@ Network settings are mentioned only when they differ.
 
 Leave **Device name** unticked when cloning a second unit. It is pre-ticked only when the backup hostname matches this box and the name actually differs. Groups are restored with their original case.
 
-A network change reverts after about two minutes (three for DHCP) unless you open the new address and confirm. Rebooting during that window also reverts it. The confirm link is `http://<new-address>/#netconfirm=<token>`. For DHCP the link fills in once the lease appears, and the splash shows the address. Copy is on the dialog. Closing the tab does not lose the change: the Network card still offers **Show link** and **Cancel and revert** until it is confirmed or the timer fires.
+Restored networks and role assignments use one protected profile transaction,
+with 60 seconds to Keep once activation is ready. Open the management address
+shown in the dialog and click **Keep changes**; its transaction token works
+without the old login cookie. Revert, expiry or an unconfirmed reboot restores
+the prior configuration. For DHCP the address appears after a lease is acquired;
+if you lose contact before seeing it, let the device revert.
+
+Audio graphs and enabled plugin backup extensions are included. Restore skips
+missing plugins with a warning; it does not install their runtimes. Restoring
+**Device** settings can also restore `audio_engine` and restart the decoder, so
+review that selection before applying a backup from a v2 appliance.
 
 Undo last restore puts settings back to the automatic snapshot taken just before the import, including a network change if that address differs.
 
 ---
+
+## Plugins
+
+Open **Plugins** to upload a trusted plugin archive or choose a release from a
+configured feed. Enter the plugin name, choose its `.tar.gz` file, and select
+**Upload and install**. Installation restarts the API briefly, then enables the plugin; its tab opens
+on the Plugins page. Use **Disable**, **Update**, or **Remove**
+to manage it. A failed removal keeps files for **Retry remove** or **Force remove**;
+force removal skips the plugin's cleanup script. Normal removal keeps configuration.
+
+The installer accepts repeatable options:
+
+```bash
+sudo bash install.sh --with-plugin hello=/path/to/hello-plugin_1.0.0-1_amd64.tar.gz
+sudo bash install.sh --plugin-feed https://forge.example/team/plugins/index.json --with-plugin hello
+```
+
+`--with-plugin NAME=URL` also accepts an HTTP(S) archive URL. A bare name uses
+configured `plugin_feeds` in `/etc/ndimon-device-settings.json`. Feed downloads
+select the appliance architecture and check SHA256; an empty feed list shows
+upload only. Install only publishers you trust: plugin scripts run as root.
+Backups include enabled plugin settings; restore skips absent plugins with a
+warning. The framework installs no tessera packages by itself.
+See [the plugin authoring guide](docs/plugins.md) for manifests, feed formats,
+privileged hooks, purge and API details.
+
+For Tessera, use a matching plugin archive containing its precompiled bundle.
+Installing/enabling the plugin exposes its page; selecting experimental network
+audio is separate. Configure device/clock settings, static flows, reusable
+channel names and the Tessera network there. Configure each output's audio mix
+under **Outputs → Advanced → Audio**. [Tessera setup](docs/plugins/tessera.md)
+describes compatibility, ownership and current limitations.
 
 ## HTTP API
 
@@ -431,15 +629,17 @@ Then send the cookie, or `Authorization: Bearer <token>` from the login JSON.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/status` | UI status: stream, system, sources, decoder, discovery, `passthrough_ok`, `outputs[]` |
+| GET | `/api/status` | UI status: stream, system, sources, decoder, discovery, `outputs[]` |
 | GET | `/api/health` | IPC health. 503 if the decoder socket is down |
 | GET | `/api/watchdog-stats` | Counters from `/tmp/ndimon-watchdog-stats.json` |
 | GET | `/api/events` | SSE. First event `connected`, then `type: status` about every 1.5 s. At most 20 clients |
 | GET | `/api/services` | systemd state of the four long-running units |
 | POST | `/api/services/:name/restart` | `ndimon-r`, `ndimon-finder`, `ndimon-api`, or `ndimon-watchdog` |
-| POST | `/api/net-confirm` | `{ "token" }` — 64 hex characters. No session. 410 if it has expired. 429 after 5 failures in a minute |
+| POST | `/api/net-pending` | `{ "token" }` — pending profile status without an old login cookie |
+| POST | `/api/net-confirm` | `{ "token", "profiles": true }` for profile changes; explicit Keep through the new management socket address |
+| POST | `/api/net-revert` | `{ "token" }` — revert that profile transaction without an old login cookie |
 
-`/api/health` includes `alive`, `uptime_s`, `passthrough_ok`, and `outputs[]` with `output`, `connected`, `fps`, `health` (`idle`, `ok`, `degraded`, `stalled`), stale-age fields, and `stall_count`.
+`/api/health` includes `alive`, `uptime_s`, and `outputs[]` with `output`, `connected`, `fps`, `health` (`idle`, `ok`, `degraded`, `stalled`), stale-age fields, and `stall_count`.
 
 ### `/v1/NDIDecode`
 
@@ -449,7 +649,7 @@ Then send the cookie, or `Authorization: Bearer <token>` from the login JSON.
 | GET | `/decodesetup` | — | Reads `/etc/ndimon-dec1-settings.json` |
 | POST | `/decodesetup` | `NDIAudio`, `ScreenSaverMode`, `TallyMode`, `ColorSpace`, `ChNum` | Writes allowed fields, then `reload_config` |
 | GET | `/decodeTransport` | — | `{ Rxpm }` |
-| POST | `/decodeTransport` | `{ "Rxpm" }` | `TCP`, `UDP`, `Multicast`, `M-TCP`, or `RUDP`. Recreates the receiver |
+| POST | `/decodeTransport` | `{ "Rxpm" }` | `TCP`, `UDP`, `Multicast`, `M-TCP`, or `RUDP`. Restarts the decoder service so the SDK rereads transport |
 | POST | `/connectTo` | `{ "SourceName", "SourceIP", "Output" }` | `Output` is 1–8. Empty or `None` forgets the source. Otherwise saves it and connects. Starts a 30 s grace so a Discovery Server route does not immediately undo a local pick |
 | GET | `/connectTo` | — | 405 |
 | GET | `/capture` | — | Touches a capture flag and returns text. Not a freeze-frame |
@@ -477,11 +677,11 @@ Allowed `decodesetup` values: `NDIAudioEn` or `NDIAudioDis`; `BlackSS`, `SplashS
 
 | Method | Path | Body | Effect |
 |--------|------|------|--------|
-| GET | `/modes?output=0` | — | `{ modes, current, auto_resolution, rotation }` |
+| GET | `/modes?output=0` | — | `{ modes, current, auto_resolution, rotation, supported_rotations }` |
 | GET | `/resolution?output=0` | — | Current mode |
 | POST | `/resolution` | `{ "auto": true, "output" }` or `{ "width", "height", "refresh_hz", "output" }` | Auto-match, or lock a mode |
 | POST | `/scaleMode` | `{ "scale_mode", "output" }` | `letterbox`, `stretch`, or `crop` |
-| POST | `/rotation` | `{ "degrees", "output" }` | 0, 90, 180, or 270 |
+| POST | `/rotation` | `{ "degrees", "output" }` | Use `supported_rotations` from `/modes`; unsupported angles return 400 |
 
 ### `/v1/DeviceSettings`
 
@@ -496,11 +696,27 @@ Allowed `decodesetup` values: `NDIAudioEn` or `NDIAudioDis`; `BlackSS`, `SplashS
 | GET, POST | `/ntp` | `{ "ntp_server" }` | GET also returns `synchronized` and `active_server` |
 | GET, POST | `/reboot-schedule` | `{ "enabled", "time": "HH:MM", "days": ["sun", …] }` | systemd timer, `Persistent=false` |
 
+### `/v1/Audio`
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/endpoints` | Endpoint catalog with labels, channel/rate metadata and readiness |
+| GET, PUT | `/outputs/:ch` | Stable one-based output 1–8; enabled, inputs, destinations and global revision |
+| GET, POST | `/engine` | Read engine; explicitly select `v1`/`v2` with `confirm:true`, restarting the decoder |
+| GET, PUT | `/settings` | Full audio document; legacy projection is limited to the primary output |
+| PATCH | `/sources/:id`, `/sinks/:id` | Legacy endpoint overlay preserving other outputs; ambiguous edits refused |
+| GET | `/status` | Runtime master, period timing, endpoint readiness, xruns and drift compensation |
+
+Output writes require the current revision; stale writes return 409
+`revision_conflict`. Saving routes never switches the engine. See
+[the detailed output-audio API](docs/api/output-audio.md) for request shapes,
+delay limits, resource conflicts and legacy migration behavior.
+
 ### `/v1/Splash`
 
 | Method | Path | Body | Effect |
 |--------|------|------|--------|
-| GET, POST | `/config` | colours, logo percentages, text, `show_*` | `logo_path` is only an `/etc/ndi-splash-logo.*` path, or empty |
+| GET, POST | `/config` | colours, `backdrop` (`gradient` or `flat`), logo percentages, text, `show_*` | `logo_path` is only an `/etc/ndi-splash-logo.*` path, or empty. A stored `show_box` from older versions is ignored |
 | POST | `/preview` | `{ "source_available": true/false }` | Splash on idle outputs |
 | POST | `/uploadLogo` | `{ "data", "filename" }` | PNG or JPEG magic bytes. Writes `/etc/ndi-splash-logo.png` or `.jpg` |
 | GET, POST | `/osd` | `{ "enabled", "text" }` | Text max 128 characters |
@@ -546,22 +762,38 @@ Session required. Inspect accepts an 8 MB JSON body. The global JSON limit stays
 | GET | `/snapshots` | — | Automatic pre-restore files, newest first. Five are kept |
 | POST | `/undo` | `{ "name" }` | Restores that snapshot. Applies network only when it differs. Undo takes its own snapshot first |
 
-`sections` may be `outputs`, `presets`, `discovery`, `transport`, `display`, `device`, `identity`, `auth`. Network is not a section name; it is `apply_network`.
+`sections` may be `outputs`, `presets`, `discovery`, `transport`, `display`,
+`device`, `identity`, `auth`, `audio`, `plugins`. Network is selected separately
+with `apply_network` and restored through a protected profile transaction.
 
 A damaged checksum is refused. A newer `schema_version` is refused. Unknown keys are refused. Groups are not lowercased. Discovery Server is enabled only when the address is non-empty. The device name uses `hostnamectl`, never `machinename`. `ndi-config.v1.json` is not imported.
 
 ### `/v1/Network`
 
-Primary wired interface only: the interface of the default route if it is wired, otherwise the first wired interface that is up, otherwise the first wired interface. Wi-Fi is out of scope.
+One physical wired port hosts named networks and role assignments. Wi-Fi and
+switch trunk configuration are outside this API. The full profile document has
+`version`, `revision`, `interface`, `backend`, `networks`, and network IDs for
+`management`, `ndi`, `tessera`. See [the profile API](docs/network-vlans.md#api).
 
 | Method | Path | Body | Effect |
 |--------|------|------|--------|
-| GET | `/status` | — | Backend, interface, configured mode and fields, live address, gateway, DNS, `applicable`, and `pending` plus `pending_info` (token, address, deadline) while a change is open |
+| GET | `/profiles` | — | Committed profiles, live status, assignments and pending transaction |
+| POST | `/profiles/preview` | Complete candidate document | Validate revision and impact without changing the OS |
+| POST | `/profiles/apply` | Complete candidate document | Stage one recoverable change to networks and assignments |
+| POST | `/profiles/rollback` | — | Revert the pending profile transaction |
+| GET | `/status` | — | Compatibility status view: backend, configured/live addressing and pending information |
 | POST | `/check` | `{ "address" }` | Duplicate-address probe (`arping`). Advisory |
-| POST | `/apply` | `{ "mode", "address", "prefix", "gateway", "dns", "dry_run" }` | `mode` is `dhcp` or `static`. Prefix 8–30. Gateway must sit in the subnet. At most 3 DNS servers. `dry_run: true` returns the prompt and does not change anything |
-| POST | `/rollback` | — | Restores the previous configuration and cancels the pending change |
+| POST | `/apply` | `{ "mode", "address", "prefix", "gateway", "dns", "dry_run" }` | Compatibility wrapper for management addressing; non-dry-run applies use profile transactions |
+| GET | `/vlans` | — | Compatibility VLAN status view |
+| PUT, DELETE | `/vlans/:id` | — | Refused; use a complete profile transaction |
 
-Apply writes a staged file, schedules rollback (120 s static, 180 s DHCP), and applies about 2 seconds later so the HTTP response can leave before the address moves. Confirm with `POST /api/net-confirm` from the new address.
+Before activation the helper journals previous settings and arms a 150-second
+guard. The apply worker is limited to 90 seconds. Once required addresses and
+guards are ready, a separate 60-second Keep window begins. Confirm using
+`POST /api/net-confirm` with `{ "token": "...", "profiles": true }` through
+the new management address. Status polls do not confirm. Use
+`/profiles/rollback` or token-scoped `/api/net-revert` to revert this transaction;
+the retained `/rollback` endpoint belongs to the older primary-network helper.
 
 Supported managers, in detection order: NetworkManager, netplan (networkd renderer), systemd-networkd, ifupdown. dhcpcd is reported and not written. Anything else is `unsupported` and apply returns 409.
 
@@ -585,7 +817,9 @@ Supported managers, in detection order: NetworkManager, netplan (networkd render
 | Resolution auto / manual | `POST /v1/VideoOutput/resolution` | `auto_resolution` or `set_resolution` |
 | Scale / rotation | `/v1/VideoOutput/scaleMode`, `/rotation` | `set_scale_mode`, `set_rotation` |
 | Tally, audio, screensaver, colour | `POST /v1/NDIDecode/decodesetup` | `reload_config` |
-| Transport | `POST /v1/NDIDecode/decodeTransport` | Recreate the receiver |
+| Transport | `POST /v1/NDIDecode/decodeTransport` | Restart decoder service and reconnect saved source |
+| Output audio | `PUT /v1/Audio/outputs/:ch` | Validate revision, compile and apply graph; retain selected engine |
+| Audio engine | `POST /v1/Audio/engine` | Confirm and restart decoder |
 | HX decode mode | `POST /v1/DeviceSettings/decode-mode` | `reload_config` |
 | Discovery Server | `POST /v1/NDIFinder/NDIDisServer` | `reload_config` and restart the finder |
 | Groups | `POST /v1/NDIFinder/NdiGrpName` | `reload_config` |
@@ -595,7 +829,7 @@ Supported managers, in detection order: NetworkManager, netplan (networkd render
 | Splash preview | `POST /v1/Splash/preview` | `show_splash` |
 | Watchdog mode | `POST /v1/DeviceSettings/watchdog-mode` | The watchdog reads the file |
 | Scheduled reboot | `POST /v1/DeviceSettings/reboot-schedule` | `ndimon-priv set-reboot-schedule` |
-| Network apply | `POST /v1/Network/apply` | `ndimon-priv net-apply`, then `/api/net-confirm` |
+| Network apply | `POST /v1/Network/profiles/apply` | Privileged profile transaction, then explicit `/api/net-confirm` |
 | Update | `POST /v1/System/update` | Detached pull and rebuild |
 | Reboot | `POST /v1/System/reboot` | `ndimon-priv reboot` |
 
@@ -622,9 +856,11 @@ One UTF-8 JSON document, pretty-printed.
 | `discovery` | Discovery Server IP, groups, extra IPs | `ndimon-find-settings.json`, `ndi-group.json`, `ndi-config.json` |
 | `transport` | `Rxpm` | `/etc/ndimon-rx-settings.json` |
 | `display` | Splash, OSD, logo as base64 | splash and OSD JSON, `/etc/ndi-splash-logo.png` or `.jpg` |
-| `device` | Watchdog mode, decode mode, NTP, reboot schedule | device settings, those keys only |
+| `device` | Watchdog mode, decode mode, audio engine, NTP, reboot schedule | device settings, those keys only |
 | `identity` | `ndi_recv_name` and hostname | device settings and `hostnamectl` |
-| `network` | `dhcp` or `static`, plus address, prefix, gateway, DNS. Manager and interface names are informational | Applied to **this** device’s primary wired port, not by interface name |
+| `network` | Complete network profiles and Management/NDI/Tessera assignments, plus compatibility addressing fields | Applied together through protected network recovery; revision/interface/backend adapted to this device |
+| `audio` | Audio settings/graph, gains, delays and output choices | `/etc/ndimon-audio-settings.json` |
+| `plugins` | Enabled plugins' versioned backup extensions | Installed plugin handlers; absent plugins skipped with a warning |
 | `auth` | scrypt salt and hash. Only when the password checkbox was ticked | `/etc/ndimon-auth.json` |
 
 Not exported: the finder cache, status files, `ndi-config.v1.json`, build and version files, `device_ip`, and any other runtime key.
@@ -664,18 +900,23 @@ Templates in `config/` are copied to `/etc/` only when the file is missing. Writ
 | File | Writer | Contents |
 |------|--------|----------|
 | `ndimon-dec{N}-settings.json` | API and `ndimon-r` | Source, scale, rotation, alias, audio, tally. `N` is 1–8 |
-| `ndimon-device-settings.json` | API, plus alias init in C++ | Alias, watchdog mode, NTP, decode mode, reboot schedule |
-| `ndimon-rx-settings.json` | API | Transport `Rxpm`. New installs ship `TCP` |
+| `ndimon-device-settings.json` | API, plus alias init in C++ | Alias, watchdog mode, NTP, decode/audio engine modes, reboot schedule, plugin feeds |
+| `ndimon-rx-settings.json` | API | Transport `Rxpm` (default `RUDP`) and the `Rxpm_user_set` marker |
 | `ndimon-find-settings.json` | API | Discovery Server IP. Non-empty means enabled |
 | `ndi-group.json` | API | Groups, case-sensitive |
 | `ndi-config.json` | API | Extra finder IPs, stored as a JSON string |
 | `ndimon-presets.json` | API | Named presets |
+| `ndimon-audio-settings.json` | API | Audio graph, output choices, gains and delays |
+| `ndimon-plugins.json` | API | Plugin enabled/version state |
 | `ndimon-auth.json` | API | Password hash, mode `0600` |
 | `ndimon-splash-settings.json`, `ndimon-osd-settings.json` | API | Splash and OSD |
 | `ndimon-sources.json` | Finder | Name-to-URL cache |
-| `/var/lib/ndimon/.ndi/ndi-config.v1.json` | Both C++ processes | SDK home: groups, discovery, transport, HX passthrough |
+| `/var/lib/ndimon/.ndi/ndi-config.v1.json` | Both C++ processes | SDK home: groups, discovery and transport |
 | `/var/lib/ndimon/backups/` | API | Pre-restore snapshots |
-| Wired network | `ndimon-net` via `ndimon-priv` | Primary wired interface. The API only stages the request |
+| `/var/lib/ndimon-network/` | Root network helper | Private profiles, journal and recovery state |
+| `/etc/ndimon-network-interfaces.json` | Root network helper | Public interface mapping for the selected roles |
+| Wired network | `ndimon-net` via `ndimon-priv` | Management/media networks and bindings; API stages complete transactions |
+| Tessera flow/PCM files | Declared Tessera privileged hooks | Device flows and ALSA bridges; see the plugin guide |
 
 The splash IP is a runtime value. C++ does not write it back to disk.
 
@@ -698,6 +939,14 @@ sudo bash install.sh --no-deps
 
 Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 
+Core updates and plugin updates are separate. Update a Tessera plugin with its
+matching precompiled bundle through **Plugins**; a change in the Tessera source
+repository does not automatically replace the installed daemon or archive.
+The current host manifest checks `min_ndimon`; it does not yet show a tested-build
+compatibility matrix. See [release/upgrade notes](CHANGELOG.md#upgrade-notes).
+Network-profile upgrades also require the new nftables dependency; run the
+updated dependency setup if the host does not already have it.
+
 ---
 
 ## Troubleshooting
@@ -706,7 +955,7 @@ Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 
 **Empty source list.** `systemctl is-active ndimon-finder`. The Discovery Server IP must be reachable. Senders on another subnet need that server or extra IPs under **NDI**. Groups are case-sensitive.
 
-**HX is black, or the passthrough banner is up.** `/api/status` → `passthrough_ok`. If false, `ndi-config.v1.json` lost the passthrough keys after SDK init. Look in `/var/lib/ndimon/.ndi/`. `decode_backend` on the NDI page shows what actually ran.
+**HX is black.** The Standard SDK decodes HX inside the SDK and needs its codec runtime (`libavcodec.so.61` on the tested builds). Check `journalctl -u ndimon-r` for the first-frame line and confirm the runtime is installed. Hardware HX decode is not available.
 
 **Web UI down.** `systemctl status ndimon-api`. To use another port, set `Environment=PORT=8080` on the unit. Loopback health: `curl -s http://127.0.0.1/api/health`.
 
@@ -716,9 +965,27 @@ Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 
 **Source jumps.** The saved source is in `ndimon-dec{N}-settings.json`. A Discovery Server with controlling enabled can change it. That is the SDK, not a reconnect bug. A local connect is protected for 30 seconds.
 
-**Network change did not stick.** Open the confirm link from a host that can reach the new address before the countdown ends. If you rebooted first, `ndimon-net-boot` already restored the old settings. dhcpcd is reported and cannot be written; use NetworkManager, netplan, systemd-networkd, or ifupdown.
+**Network change did not stick.** Open the displayed management address directly
+and click Keep within the ready-state 60-second window. Proxy headers and
+opening the page alone do not confirm. An unconfirmed reboot or failed apply
+restores the old settings. dhcpcd is read-only; check
+[supported backends and adoption limits](docs/network-vlans.md#operating-system-integration).
 
-**Lost the confirm page.** **Settings → Network** still shows the pending change, with **Show link** and **Cancel and revert**, until the timer fires.
+**Lost the confirm page.** Reopen the pending transaction's management link
+before its countdown ends. If the new address is unknown or unreachable, leave
+it unconfirmed and let the device restore the previous configuration. Opening
+the link alone never keeps the change.
+
+**Saved audio is silent.** Check the selected engine and endpoint readiness in
+**Outputs → Advanced → Audio**. Saving choices leaves v1 active until you
+explicitly select v2. A disabled output retains its routes without playing them.
+Check Tessera flows, 48 kHz agreement and the selected audio network; review
+`GET /v1/Audio/status` for endpoint errors/xruns. Returning to v1 restores the
+legacy path. Persistent drift pinned at its limit needs investigation.
+
+**Plugin settings are missing.** Installing/enabling the plugin exposes its
+tab on Plugins; network-audio activation is a second action. A core-only update
+does not install Tessera. Check the archive's OS/architecture and `min_ndimon`.
 
 ---
 
@@ -727,7 +994,7 @@ Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 | Path | Role |
 |------|------|
 | `src/main.cpp` | Process entry, one worker per connector, health tick, systemd notify, IPC wiring |
-| `src/NDIReceiver.cpp` | SDK receive: advertiser, connect, FrameSync vs HX capture, tally, transport recreate |
+| `src/NDIReceiver.cpp` | SDK receive: advertiser, connect, FrameSync vs retained compressed capture, tally |
 | `src/VideoDecoder.cpp` | Factory: MPP, V4L2, VAAPI, FFmpeg, honoring `decode_mode` |
 | `src/MppDecoder.cpp` | Rockchip H.264/H.265 to NV12 DMA-BUF |
 | `src/V4L2Decoder.cpp` | Pi 4 M2M H.264 |
@@ -735,6 +1002,7 @@ Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 | `src/SoftwareDecoder.cpp` | FFmpeg NV12 |
 | `src/DRMDisplay.cpp` | KMS scanout, scale, rotation, colour convert, splash, OSD, hotplug |
 | `src/AlsaAudio.cpp` | Planar float to stereo S16LE. One output |
+| `src/audio/` | Optional central v2 audio graph, route delays, ALSA endpoints and drift compensation |
 | `src/IPCServer.cpp` | Unix socket JSON |
 | `src/Config.cpp` | Reads `/etc` JSON. C++ writes alias init and per-output source/mode only |
 | `finder/main.cpp` | NDI Find. Shares the NDI home with the decoder |
@@ -742,8 +1010,11 @@ Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 | `api/auth.js` | Scrypt, sessions, login rate limit |
 | `api/public/index.html` | The web UI |
 | `api/routes/` | REST modules, including `Backup.js` and `Network.js` |
+| `api/audio-settings.js`, `api/network-profiles.js` | Revision-guarded audio graphs and typed network transactions |
+| `api/plugins.js`, `plugins/tessera/` | Host plugin loader/lifecycle and Tessera adapter/UI |
 | `scripts/ndimon-priv.sh` | Root-only actions |
 | `scripts/ndimon-net.py` | Wired DHCP/static helper, installed as `/usr/local/lib/ndimon/ndimon-net` |
+| `scripts/ndimon_network_profiles.py` | Management/media profile activation, isolation and recovery |
 | `scripts/ndimon-watchdog.sh` | Process liveness, and active-mode stall recovery |
 | `systemd/` | Long-running units, the update oneshot, and boot rollback |
 | `config/` | Templates copied to `/etc` only when missing |
@@ -753,14 +1024,26 @@ Or `sudo bash scripts/update.sh`. `/etc` JSON is left alone.
 ## Limits
 
 - There is no encoder. `/v1/NDIEncoder/*` returns 404.
-- One output owns ALSA. The others are silent.
+- With default engine v1, one output owns ALSA. Experimental v2 adds the
+  independently configured audio routes described above.
 - Standard NDI frames are copied. At 1080p and 4K that is several megabytes per frame.
 - HDR `P216` and `PA16` are not converted to SDR.
-- Audio, tally, screensaver, and colour are stored on decoder 1 and applied as decoder-wide settings.
+- Tally, screensaver, colour and the legacy NDI-audio switch remain decoder-wide.
+  V2 audio choices are per output. Transport, HX decode preference and the NDI
+  network assignment remain global; separate receiver processes are deferred.
 - Sessions do not survive an API restart.
-- Wi-Fi, IPv6, VLANs, and more than one wired interface are not configured.
+- VLANs are supported on one physical wired port. Wi-Fi, IPv6 configuration and
+  multiple physical port management remain outside this feature.
 - dhcpcd (older Pi OS) can be read. It cannot be changed from this release.
-- VAAPI has not been compile-tested in the laptop tree. Build it on the NUC.
+- The Standard SDK uses software HX decoding even when VAAPI drivers are installed.
+- Audio v2 and the current Ubuntu ARM Tessera bundle remain experimental. Sustained clock stability, external hardware interoperability, HDMI/Dante delay
+  matching and hardware PTP support are not certified. No automatic lip-sync is provided.
+- Bluetooth speaker routing/latency calibration and HDMI ARC/eARC capture are
+  planned research, with no implementation in this release.
+- This integration configures static flows and exposes no automatic
+  vendor-controller subscription setup. Use the established controller workflow
+  where supported; ordinary Dante Controller discovery/routing interoperability
+  was not established by the local PCM checks.
 
 ---
 

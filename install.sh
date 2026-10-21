@@ -11,10 +11,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 SKIP_DEPS=0; SKIP_BUILD=0
-for arg in "$@"; do
-  [[ "$arg" == "--no-deps"  ]] && SKIP_DEPS=1
-  [[ "$arg" == "--no-build" ]] && SKIP_BUILD=1
+NDIMON_WITH_PLUGINS=''; NDIMON_PLUGIN_FEEDS=''
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-deps) SKIP_DEPS=1; shift ;;
+    --no-build) SKIP_BUILD=1; shift ;;
+    --with-plugin|--plugin-feed)
+      option=$1
+      [[ $# -ge 2 && -n "$2" && "$2" != --* && "$2" != *$'\n'* ]] || { echo "missing or invalid $option value" >&2; exit 2; }
+      if [[ "$option" == --with-plugin ]]; then
+        name=${2%%=*}
+        [[ "$name" =~ ^[a-z][a-z0-9-]{1,31}$ && "$2" != *= ]] || { echo 'invalid plugin name/archive' >&2; exit 2; }
+        NDIMON_WITH_PLUGINS+="${NDIMON_WITH_PLUGINS:+$'\n'}$2"
+      else
+        [[ "$2" =~ ^https?:// ]] || { echo 'invalid plugin feed URL' >&2; exit 2; }
+        NDIMON_PLUGIN_FEEDS+="${NDIMON_PLUGIN_FEEDS:+$'\n'}$2"
+      fi
+      shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
 done
+export NDIMON_WITH_PLUGINS NDIMON_PLUGIN_FEEDS
+if [[ "${NDIMON_INSTALL_DRY_RUN:-}" == 1 ]]; then
+  exec bash scripts/install.sh
+fi
 
 echo "=== NDIMon-R Installer ==="
 echo ""
@@ -43,7 +63,7 @@ fi
 # 3. Install binaries + services (requires root for system-wide)
 echo "[install] Installing binaries and services..."
 if [[ $EUID -ne 0 ]]; then
-    sudo bash scripts/install.sh
+    sudo env NDIMON_WITH_PLUGINS="$NDIMON_WITH_PLUGINS" NDIMON_PLUGIN_FEEDS="$NDIMON_PLUGIN_FEEDS" bash scripts/install.sh
 else
     bash scripts/install.sh
 fi

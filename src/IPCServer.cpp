@@ -1,4 +1,5 @@
 #include "IPCServer.h"
+#include "ResolutionControl.h"
 #include <iostream>
 #include <cstring>
 #include <algorithm>
@@ -138,6 +139,12 @@ bool IPCServer::handle_client(int client_fd) {
         cmd.res_height      = j.value("height",     0u);
         cmd.res_refresh     = j.value("refresh",    0u);
         cmd.res_refresh_hz  = j.value("refresh_hz", 0.0);
+        cmd.deadline_monotonic_ms   = j.value("deadline_monotonic_ms", int64_t{0});
+        if ((action == "set_resolution" || action == "auto_resolution") && resolution_expired(cmd.deadline_monotonic_ms)) {
+            const char* expired = "{\"ok\":false,\"error\":\"expired\"}\n";
+            write(client_fd, expired, strlen(expired));
+            return true;
+        }
         cmd.output_index     = j.value("output",  0);
         if (cmd.output_index < 0 || cmd.output_index > 7)
             cmd.output_index = 0;
@@ -152,15 +159,15 @@ bool IPCServer::handle_client(int client_fd) {
             return true;
         }
 
-        if ((action == "get_status_all" || action == "get_modes" ||
-             action == "set_resolution" || action == "health") && query_cb_) {
+        if ((action == "get_status_all" || action == "reload_audio" || action == "check_audio" || action == "get_modes" ||
+             action == "set_resolution" || action == "auto_resolution" || action == "set_rotation" || action == "health") && query_cb_) {
             auto resp = query_cb_(cmd).dump() + "\n";
             write(client_fd, resp.c_str(), resp.size());
             return true;
         }
 
         // Fire-and-forget commands
-        // set_scale_mode, set_output_source, auto_resolution, connect, disconnect, set_tally, reload_config
+        // set_scale_mode, set_output_source, connect, disconnect, set_tally, reload_config
         if (cmd_cb_) {
             cmd_cb_(cmd);
         }

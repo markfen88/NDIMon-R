@@ -12,10 +12,11 @@ RestartSec=5
 ExecStart=/usr/local/bin/ndimon-finder
 Environment=LD_LIBRARY_PATH=/usr/local/lib
 Environment=HOME=/var/lib/ndimon
+Environment=NDI_CONFIG_DIR=/var/lib/ndimon/.ndi
 StateDirectory=ndimon
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/etc /tmp /var/lib/ndimon
+ReadWritePaths=/tmp /var/lib/ndimon
 
 [Install]
 WantedBy=multi-user.target

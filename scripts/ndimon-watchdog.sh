@@ -100,11 +100,11 @@ restart_service() {
 check_health() {
     local mode=$1
     if [ "$mode" = "disabled" ]; then
-        return
+        return 0
     fi
 
     local health_json
-    health_json=$(curl -s --max-time 5 "$HEALTH_URL" 2>/dev/null) || return
+    health_json=$(curl -s --max-time 5 "$HEALTH_URL" 2>/dev/null) || return 0
 
     # Parse health data for each output
     local outputs
@@ -124,7 +124,7 @@ try:
         print(f'{idx}|{health}|{stall}|{recv}|{video}|{decoded}|{display}|{connected}')
 except:
     pass
-" 2>/dev/null) || return
+" 2>/dev/null) || return 0
 
     while IFS='|' read -r idx health stall recv video decoded display connected; do
         [ -z "$idx" ] && continue
@@ -178,35 +178,39 @@ PY
     done <<< "$outputs"
 }
 
-log "starting — monitoring ndimon-r, ndimon-api, ndimon-finder"
-log "watchdog mode: $(get_watchdog_mode)"
+main() {
+    log "starting — monitoring ndimon-r, ndimon-api, ndimon-finder"
+    log "watchdog mode: $(get_watchdog_mode)"
 
-log "service type=simple, no sd_notify needed"
+    log "service type=simple, no sd_notify needed"
 
-while true; do
-    # 1. Process liveness checks (always active)
-    for svc in ndimon-r ndimon-api ndimon-finder; do
-        if check_service "$svc" 2>/dev/null; then
-            if [ "${fail_count[$svc]}" -gt 0 ]; then
-                log "$svc: recovered (was at ${fail_count[$svc]} failures)"
+    while true; do
+        # 1. Process liveness checks (always active)
+        for svc in ndimon-r ndimon-api ndimon-finder; do
+            if check_service "$svc" 2>/dev/null; then
+                if [ "${fail_count[$svc]}" -gt 0 ]; then
+                    log "$svc: recovered (was at ${fail_count[$svc]} failures)"
+                fi
+                fail_count[$svc]=0
+            else
+                fail_count[$svc]=$((${fail_count[$svc]} + 1))
+                log "$svc: process check FAILED (${fail_count[$svc]}/$MAX_FAILURES)"
+
+                if [ "${fail_count[$svc]}" -ge "$MAX_FAILURES" ]; then
+                    restart_service "$svc"
+                fi
             fi
-            fail_count[$svc]=0
-        else
-            fail_count[$svc]=$((${fail_count[$svc]} + 1))
-            log "$svc: process check FAILED (${fail_count[$svc]}/$MAX_FAILURES)"
+        done
 
-            if [ "${fail_count[$svc]}" -ge "$MAX_FAILURES" ]; then
-                restart_service "$svc"
-            fi
-        fi
+        # 2. Health checks (mode-dependent)
+        mode=$(get_watchdog_mode)
+        check_health "$mode"
+
+        # 3. Write stats for the web UI
+        write_stats || log "could not publish watchdog statistics"
+
+        sleep "$INTERVAL"
     done
+}
 
-    # 2. Health checks (mode-dependent)
-    mode=$(get_watchdog_mode)
-    check_health "$mode"
-
-    # 3. Write stats for the web UI
-    write_stats
-
-    sleep "$INTERVAL"
-done
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

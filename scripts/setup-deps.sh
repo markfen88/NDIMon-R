@@ -43,21 +43,21 @@ export DEBIAN_FRONTEND=noninteractive
 info "Installing build tools..."
 apt-get install -yq --no-install-recommends \
     build-essential cmake pkg-config git wget curl ca-certificates \
-    gnupg python3 python3-yaml iputils-arping libcap2-bin \
+    gnupg python3 python3-yaml iputils-arping libcap2-bin nftables \
     libdrm-dev libasound2-dev \
     libavahi-client-dev libavahi-common-dev \
     nlohmann-json3-dev \
     libsystemd-dev \
-    libavcodec-dev libavformat-dev libswscale-dev libavutil-dev \
+    libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libswresample-dev \
     2>/dev/null || {
     # Fallback: some packages may differ by distro
     apt-get install -yq --no-install-recommends \
         build-essential cmake pkg-config git wget curl ca-certificates \
-        gnupg python3 python3-yaml iputils-arping libcap2-bin \
+        gnupg python3 python3-yaml iputils-arping libcap2-bin nftables \
         libdrm-dev libasound2-dev \
         libavahi-client-dev libavahi-common-dev \
         libsystemd-dev \
-        libavcodec-dev libavutil-dev libswscale-dev
+        libavcodec-dev libavutil-dev libswresample-dev libswscale-dev
     # nlohmann-json header-only, can be fetched by cmake if package not found
     apt-get install -yq --no-install-recommends nlohmann-json3-dev 2>/dev/null || true
 }
@@ -247,8 +247,7 @@ install_ndi_sdk() {
     ln -sf "$so_major" /usr/local/lib/libndi.so
     ldconfig
     # Record the exact installed SDK version for the About page and for support
-    # diagnostics. We pin to the v6 SDK line (see NDI_SDK_URL); HX passthrough
-    # behaviour is validated against this major version at runtime.
+    # diagnostics. We pin to the v6 SDK line (see NDI_SDK_URL).
     echo "${so_ver#libndi.so.}" > /etc/ndimon-ndi-version 2>/dev/null || true
     ok "NDI SDK installed: $so_ver"
 }
