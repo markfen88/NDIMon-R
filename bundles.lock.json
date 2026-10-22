@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "bundles": [
+    {
+      "name": "tessera",
+      "version": "0.2.1-1",
+      "arch": "amd64",
+      "commit": "a04f1e14535aba5c1ae47befd7d389343fb1affe",
+      "os": {
+        "id": "debian",
+        "codename": "trixie",
+        "version_id": "13",
+        "systemd_min": 253
+      },
+      "asset": "tessera-bundle_0.2.1-1_amd64.tar.gz",
+      "sha256": "5c544ed082c56f71b086655109ebffc2a78d0159767e27422862dccb83e77496"
+    },
+    {
+      "name": "tessera",
+      "version": "0.2.1-1",
+      "arch": "arm64",
+      "commit": "a04f1e14535aba5c1ae47befd7d389343fb1affe",
+      "os": {
+        "id": "ubuntu",
+        "codename": "noble",
+        "version_id": "24.04",
+        "systemd_min": 253
+      },
+      "asset": "tessera-bundle_0.2.1-1_arm64_ubuntu-noble-experimental.tar.gz",
+      "sha256": "5f75011b12ba8bd7d1f650f39356f6eb9809f95cab0d84a371a0a1af2c240ddf"
+    }
+  ]
+}

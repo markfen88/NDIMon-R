@@ -12,3 +12,6 @@ Makefile
 .deploy-env
 *.log
 __pycache__/
+
+# Locally assembled plugin archives and generated catalog entries
+dist/plugins/

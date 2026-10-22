@@ -11,11 +11,48 @@ primary graphs can refuse legacy edits rather than silently replace a mix.
 
 ## Bundle and ownership
 
-The optional plugin contains the host adapter, its settings UI and a precompiled
-Tessera runtime bundle. The current plugin is `0.1.0-63~experimental1` with an
-experimental Ubuntu 24.04 arm64 bundle, compatible with NDIMon `1.3.0`.
-Install the matching plugin archive through Plugins. A core update does not
-automatically download, compile or replace the Tessera runtime.
+This repository vendors the released [Tessera plugin 0.2.1](https://github.com/markfen88/NDIMon-Plugins/releases/tag/tessera-v0.2.1)
+in `plugins/tessera/`. It requires NDIMon 1.3.0 or later and embeds the pinned
+Tessera runtime 0.2.1-1. Available native bundles are Debian 13 amd64 and
+experimental Ubuntu 24.04 arm64; they are not interchangeable with other
+OS/architecture combinations. Runtime source lives in the
+[Tessera repository](https://github.com/markfen88/Tessera).
+
+The base NDIMon installer does not fetch or compile Tessera automatically.
+Install the matching plugin archive through Plugins. Updating NDIMon or Tessera
+source alone does not replace an installed plugin or its embedded runtime.
+Dante Controller interoperability is enabled by default for the first logical
+device, services appear in the Tessera portal by default, and the default portal
+password is `tessera`. Automatic Controller subscriptions and lipsync remain
+unsupported; flows are configured statically.
+
+**After upgrading from 0.2.0-beta or the older experimental plugin, reboot the
+appliance before using network audio.** This loads the clock overlay 2.0 runtime
+in both the daemon and local clients. Rebooting interrupts audio and video.
+Installation does not automatically restart active audio services.
+
+To assemble an archive from this checkout, download the matching runtime bundle
+from the [Tessera 0.2.1 release](https://github.com/markfen88/Tessera/releases/tag/v0.2.1)
+and keep its original filename, then run:
+
+```sh
+scripts/build-plugin.sh tessera --bundle /path/to/tessera-bundle_0.2.1-1_amd64.tar.gz
+# Or the experimental Ubuntu 24.04 ARM bundle:
+scripts/build-plugin.sh tessera --bundle /path/to/tessera-bundle_0.2.1-1_arm64_ubuntu-noble-experimental.tar.gz
+```
+
+The builder checks the bundle checksum, source commit, platform and integration
+contract against `bundles.lock.json` and `compatibility.json`. It writes the
+plugin archive, catalog-entry JSON and `SHA256SUMS` under `dist/plugins/`.
+Use a clean `dist/plugins/` directory for a release; `SHA256SUMS` includes all
+plugin archives present there. The original `--ubuntu-experimental-bundle`
+invocation remains supported. Output now uses names such as `tessera-plugin_0.2.1_arm64.tar.gz`, a shared `SHA256SUMS` and a printed path relative to the checkout.
+Per-archive `.sha256` files are no longer generated.
+Generated catalog entries use the canonical NDIMon-Plugins release URLs.
+This plugin update does not change the NDIMon host version.
+
+The host enforces `min_ndimon`, not an exact tested-build matrix. Compatibility
+metadata does not certify external hardware or every host build.
 
 ## Setup and routing
 
