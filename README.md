@@ -74,7 +74,7 @@ FFmpeg, but MPP/V4L2/VAAPI HX decoding is dormant on this SDK path.
 - **Build:** on the target. Do not cross-compile from Windows or macOS.
 
 These are NDIMon's host requirements. Tessera plugin bundles have their own
-OS/architecture requirements; the current Ubuntu ARM bundle is experimental.
+OS/architecture requirements: Debian 13 amd64 or experimental Ubuntu 24.04 arm64.
 See [Tessera setup](docs/plugins/tessera.md) before installing it.
 
 Installing accepts the [NDI SDK License Agreement](https://www.ndi.tv/license). The SDK tarball (~60 MB) is downloaded from NDI on the first `setup-deps`.

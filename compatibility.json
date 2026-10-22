@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "tessera": {
+    "plugin_version": "0.2.1",
+    "min_ndimon": "1.3.0",
+    "runtime_release": "0.2.1",
+    "runtime_package": "0.2.1-1",
+    "control_wire_version": 1,
+    "sample_rate": 48000,
+    "channels_per_direction": [
+      1,
+      16
+    ],
+    "static_flows": true,
+    "controller_subscriptions": false,
+    "automatic_lipsync": false,
+    "network_owner": "ndimon",
+    "experimental": true,
+    "tested_exact_ndimon_builds": [],
+    "controller_compatibility": true,
+    "controller_device_limit": 1,
+    "clock_overlay_layout": "2.0",
+    "portal_services_by_default": true
+  }
+}

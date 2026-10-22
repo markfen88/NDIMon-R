@@ -119,7 +119,12 @@ def bundle(action, option=None):
         manifest=json.loads((directory/'manifest.json').read_text())
         if any(manifest.get(k)!=lock[k] for k in ('name','version','arch','commit')) or any(manifest.get('os',{}).get(k)!=v for k,v in lock['os'].items()): fail('bundle manifest differs from reviewed lock')
         if action=='install':
-            args=['/bin/bash',str(directory/'install.sh'),'--profile','ndimon','--admin-user','ndimon','--yes','--allow-ubuntu-24.04']
+            args=['/bin/bash',str(directory/'install.sh'),'--profile','ndimon','--admin-user','ndimon','--yes']
+            platform=lock.get('os',{})
+            if platform.get('id')=='ubuntu' and platform.get('version_id')=='24.04' and lock['arch']=='arm64':
+                args+=['--allow-ubuntu-24.04']
+            elif not (platform.get('id')=='debian' and platform.get('version_id')=='13' and lock['arch'] in ('amd64','arm64')):
+                fail('unsupported runtime bundle platform')
             if option=='restart': args+=['--restart']
         else: args=['/bin/bash',str(directory/'uninstall.sh'),'--yes']+(['--purge'] if option=='purge' else [])
         run(args)
