@@ -4,6 +4,8 @@
 #include <Processing.NDI.Lib.h>
 #include <nlohmann/json.hpp>
 #include "../src/NdiSdkConfig.h"
+#include "../src/FollowerConfig.h"
+#include "../src/FollowerSocket.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -25,14 +27,15 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-static const char* PARAM_FILE    = "/var/lib/ndimon/ndi_src_find_param";
-static const char* SRC_LIST_FILE = "/var/lib/ndimon/ndimon-sources.json";
-static const char* WEBUI_LIST    = "/var/lib/ndimon/NDIFinderSrcList.json";
+static const char* PARAM_FILE    = "/run/ndimon/ndi_src_find_param";
+static const char* SRC_LIST_FILE = "/run/ndimon/finder/ndimon-sources.json";
+static const char* WEBUI_LIST    = "/run/ndimon/finder/NDIFinderSrcList.json";
 static const char* FIND_SETTINGS = "/etc/ndimon-find-settings.json";
 static const char* NDI_CONFIG    = "/etc/ndi-config.json";
 static const char* NDI_GROUP     = "/etc/ndi-group.json";
 
 static std::atomic<bool> g_running{true};
+static follower::NdiFollower g_follower;
 
 static void signal_handler(int) {
     g_running = false;
@@ -49,7 +52,14 @@ static std::string read_file(const std::string& path) {
 }
 
 static void write_file(const std::string& path, const std::string& content) {
-    // Atomic write: tmp + rename so readers (ndimon-api) never see a partial
+    // The fixed trigger is root-owned in the root-owned shared parent. Clear
+    // it in place: finder must never replace it with a symlink for control.
+    if (path == PARAM_FILE) {
+        std::ofstream trigger(path, std::ios::trunc);
+        if (trigger) trigger << content;
+        return;
+    }
+    // Atomic write: tmp + rename so readers (ndimon-control) never see a partial
     // file. rename(2) is atomic within a filesystem.
     try {
         std::string tmp = path + ".tmp";
@@ -118,42 +128,14 @@ static std::string json_escape(const std::string& s) {
     return out;
 }
 
-static std::string ndimon_ndi_home() {
-    if (access("/var/lib/ndimon", W_OK) == 0)
-        return "/var/lib/ndimon";
-    const char* home = getenv("HOME");
-    if (home && home[0]) return home;
-    return "/root";
-}
-
 static void pin_ndi_home() {
-    std::string h = ndimon_ndi_home();
-    setenv("HOME", h.c_str(), 1);
-    // The SDK reads the config of the *passwd* home of the running user (root's
-    // is /root), not $HOME. NDI_CONFIG_DIR is the documented override; without
-    // it the decoder never saw the file written here (groups, discovery and
-    // transport all fell back to SDK defaults).
-    setenv("NDI_CONFIG_DIR", (h + "/.ndi").c_str(), 1);
-}
-
-static void relax_ndi_config_perms(const std::string& dir, const std::string& file) {
-    chmod(dir.c_str(), 0770);
-    chmod(file.c_str(), 0664);
-    struct passwd* pw = getpwnam("ndimon");
-    struct group*  gr = getgrnam("ndimon");
-    uid_t uid = pw ? pw->pw_uid : static_cast<uid_t>(-1);
-    gid_t gid = gr ? gr->gr_gid : static_cast<gid_t>(-1);
-    if (gid != static_cast<gid_t>(-1)) {
-        chown(dir.c_str(), uid, gid);
-        chown(file.c_str(), uid, gid);
-    }
+    ndisdk::pin_config_dir("finder");
 }
 
 // Write ~/.ndi/ndi-config.v1.json before NDIlib_initialize() so NDI SDK 6.2+
 // picks up the discovery server address and groups at startup.
 static void write_ndi_sdk_config(const FindSettings& s) {
-    pin_ndi_home();
-    std::string ndi_dir = ndimon_ndi_home() + "/.ndi";
+    std::string ndi_dir = ndisdk::config_dir();
     mkdir(ndi_dir.c_str(), 0770);
     std::string path = ndi_dir + "/ndi-config.v1.json";
 
@@ -178,26 +160,46 @@ static void write_ndi_sdk_config(const FindSettings& s) {
         "  }\n"
         "}\n";
 
+    if (ndisdk::file_has_content(path, json)) return;
     if (ndisdk::write_file_atomic(path, json)) {
-        relax_ndi_config_perms(ndi_dir, path);
+        if (ndi_dir == "/var/lib/ndimon/.ndi") {
+            // The emergency legacy fallback is still shared by the two users.
+            if (auto* group = getgrnam("ndimon"))
+                chown(path.c_str(), static_cast<uid_t>(-1), group->gr_gid);
+            chmod(path.c_str(), 0664);
+        } else chmod(path.c_str(), 0600);
         std::cout << "[ NDIFinder ] NDI config written: " << path << "\n";
     } else {
         std::cerr << "[ NDIFinder ] WARNING: could not write " << path << "\n";
     }
 }
 
+static std::string boot_setting(const char* name, const char* fallback) {
+    const char* dir = std::getenv("CREDENTIALS_DIRECTORY");
+    return dir && *dir ? std::string(dir) + "/" + name : fallback;
+}
+
 static FindSettings load_settings() {
     FindSettings s;
-    auto find = read_json(FIND_SETTINGS);
+    if (g_follower.config) {
+        const auto& n = *g_follower.config;
+        s.use_discovery_server = n.finder.discovery_server_mode == "NDIDisServEn";
+        s.discovery_server_ip = n.finder.discovery_server_ip;
+        s.extra_ips = n.off_subnet_ips;
+        s.groups = n.group.groups;
+        s.rxpm = n.transport.rxpm;
+        return s;
+    }
+    auto find = read_json(boot_setting("find-settings", FIND_SETTINGS));
     if (!find.empty() && find.is_object()) {
         s.use_discovery_server = (find.value("NDIDisServ", "") == "NDIDisServEn");
         s.discovery_server_ip  = find.value("NDIDisServIP", "");
     }
-    auto cfg = read_json(NDI_CONFIG);
+    auto cfg = read_json(boot_setting("ndi-config", NDI_CONFIG));
     if (!cfg.empty() && cfg.is_string()) s.extra_ips = cfg.get<std::string>();
-    auto grp = read_json(NDI_GROUP);
+    auto grp = read_json(boot_setting("ndi-group", NDI_GROUP));
     if (!grp.empty() && grp.is_object()) s.groups = grp.value("ndi_groups", "public");
-    auto rx = read_json("/etc/ndimon-rx-settings.json");
+    auto rx = read_json(boot_setting("receive-settings", "/etc/ndimon-rx-settings.json"));
     if (!rx.empty() && rx.is_object()) s.rxpm = rx.value("Rxpm", std::string(ndisdk::kDefaultRxpm));
     return s;
 }
@@ -237,6 +239,8 @@ static void run_once() {
         std::cerr << "[ NDIFinder ] NDIlib_initialize failed\n";
         return;
     }
+
+    write_ndi_sdk_config(settings);
 
     NDIlib_find_create_t find_create = {};
     find_create.show_local_sources = true;
@@ -282,7 +286,18 @@ static void run_once() {
 }
 
 static void run_continuous() {
-    const auto selected_ndi_network = ndisdk::network_selection();
+    // The selected interface may still be waiting for its DHCP lease at boot:
+    // wait for it instead of exiting and being restarted (NI-18, W3).
+    const auto selected_ndi_network = ndisdk::wait_for_selection(
+        [] { return ndisdk::network_selection(); },
+        std::chrono::seconds(60), std::chrono::milliseconds(250),
+        [](std::chrono::milliseconds waited) {
+            if (!g_running) return false;
+            if (waited.count() == 0)
+                std::cout << "[NDIFinder] Waiting for the selected NDI network to get an address\n";
+            return true;
+        },
+        [](std::chrono::milliseconds interval) { std::this_thread::sleep_for(interval); });
     if (!selected_ndi_network.ready()) {
         std::cerr << "[NDIFinder] Selected NDI network unavailable; refusing automatic fallback\n";
         return;
@@ -297,23 +312,29 @@ static void run_continuous() {
         return;
     }
 
-    NDIlib_find_create_t find_create = {};
-    find_create.show_local_sources = true;
-    find_create.p_groups = settings.groups.empty() ? nullptr : settings.groups.c_str();
-    std::string extra_ips_combined;
-    if (settings.use_discovery_server && !settings.discovery_server_ip.empty()) {
-        extra_ips_combined = settings.discovery_server_ip;
-        if (!settings.extra_ips.empty())
-            extra_ips_combined += "," + settings.extra_ips;
-        find_create.p_extra_ips = extra_ips_combined.c_str();
-    } else if (!settings.extra_ips.empty())
-        find_create.p_extra_ips = settings.extra_ips.c_str();
+    write_ndi_sdk_config(settings);
 
-    NDIlib_find_instance_t finder = NDIlib_find_create_v2(&find_create);
-    if (!finder) {
-        NDIlib_destroy();
-        return;
-    }
+    NDIlib_find_instance_t finder = nullptr;
+    NDIlib_find_create_t create = {};
+    std::string extra_ips_combined;
+    auto recreate = [&]() {
+        if (finder) { NDIlib_find_destroy(finder); finder = nullptr; }
+        create = {};
+        create.show_local_sources = true;
+        create.p_groups = settings.groups.empty() ? nullptr : settings.groups.c_str();
+        extra_ips_combined = settings.extra_ips;
+        if (settings.use_discovery_server && !settings.discovery_server_ip.empty()) {
+            extra_ips_combined = settings.discovery_server_ip;
+            if (!settings.extra_ips.empty()) extra_ips_combined += "," + settings.extra_ips;
+        }
+        create.p_extra_ips = extra_ips_combined.empty() ? nullptr : extra_ips_combined.c_str();
+        finder = NDIlib_find_create_v2(&create);
+        return finder != nullptr;
+    };
+    if (!recreate()) { NDIlib_destroy(); return; }
+    follower::Listener control;
+    if (!control.start("/run/ndimon/finder/control.sock", "ndimon-finder"))
+        std::cerr << "[NDIFinder] WARNING: cannot listen on /run/ndimon/finder/control.sock\n";
 
     std::vector<SrcEntry> last_list;
 
@@ -321,40 +342,79 @@ static void run_continuous() {
     sd_notify(0, "READY=1");
 #endif
     std::cout << "[ NDIFinder ] continuous discovery running\n";
-    int wd_counter = 0;
+    // The loop serves the follower socket every slice and does the rest of its
+    // work once per tick. The SDK's wait cannot be woken by a request, so it runs
+    // in slices: a request waits for one slice, not for the whole tick (VV-2 N4).
+    using Clock = std::chrono::steady_clock;
+    constexpr auto kTick = std::chrono::milliseconds(500);
+    constexpr auto kSlice = std::chrono::milliseconds(50);
+    auto next_tick = Clock::now();
+    auto next_watchdog = Clock::now() + std::chrono::seconds(10);
     while (g_running) {
-        if (ndisdk::network_selection().signature() != selected_ndi_network.signature()) break;
-        // Check for command from param file
-        std::string param = read_file(PARAM_FILE);
-        if (param == "-run") {
-            write_file(PARAM_FILE, "");
-            // Re-read settings and recreate finder
-            settings = load_settings();
-            NDIlib_find_destroy(finder);
-            find_create.p_groups = settings.groups.empty() ? nullptr : settings.groups.c_str();
-            if (settings.use_discovery_server && !settings.discovery_server_ip.empty()) {
-                extra_ips_combined = settings.discovery_server_ip;
-                if (!settings.extra_ips.empty())
-                    extra_ips_combined += "," + settings.extra_ips;
-                find_create.p_extra_ips = extra_ips_combined.c_str();
-            } else if (!settings.extra_ips.empty())
-                find_create.p_extra_ips = settings.extra_ips.c_str();
-            finder = NDIlib_find_create_v2(&find_create);
-            if (!finder) break;
-            last_list.clear();
-        } else if (param == "-rs") {
-            write_file(PARAM_FILE, "");
-            write_source_list({});
-            last_list.clear();
+        control.poll_all([&](const nlohmann::json& request) -> nlohmann::json {
+            const auto action = request.value("action", "");
+            if (action == "status" || action == "health")
+                return {{"ok", true}, {"alive", finder != nullptr}, {"revision", g_follower.revision.status()}};
+            if (action != "apply_config") return follower::failure("unknown action");
+            auto result = g_follower.apply_config(request, [&](const follower::NdiConfig& n) {
+                const auto previous = settings;
+                NDIlib_find_destroy(finder);
+                finder = nullptr;
+                NDIlib_destroy();
+                settings = {n.finder.discovery_server_mode == "NDIDisServEn",
+                            n.finder.discovery_server_ip, n.off_subnet_ips,
+                            n.group.groups, n.transport.rxpm};
+                // Transport keys are read only at SDK init. Reuse the existing
+                // SDK lifetime here, without a new process restart path.
+                write_ndi_sdk_config(settings);
+                if (NDIlib_initialize()) {
+                    write_ndi_sdk_config(settings);
+                    if (recreate()) { last_list.clear(); return true; }
+                    NDIlib_destroy();
+                }
+                settings = previous;
+                write_ndi_sdk_config(settings);
+                if (NDIlib_initialize()) { write_ndi_sdk_config(settings); recreate(); }
+                return false;
+            });
+            if (result.value("ok", false)) {
+                if (!ndisdk::write_file_atomic(ndisdk::config_dir() + "/finder-config.json", request.dump()))
+                    std::cerr << "[NDIFinder] WARNING: cannot cache follower snapshot\n";
+                else chmod((ndisdk::config_dir() + "/finder-config.json").c_str(), 0600);
+            }
+            return result;
+        });
+        if (!finder) break;
+        const bool tick = Clock::now() >= next_tick;
+        if (tick) {
+            next_tick = Clock::now() + kTick;
+            if (ndisdk::network_selection().signature() != selected_ndi_network.signature()) break;
+            // Check for command from param file
+            std::string param = read_file(PARAM_FILE);
+            if (param == "-run") {
+                write_file(PARAM_FILE, "");
+                // Once followed, load_settings() returns memory, never /etc.
+                NDIlib_find_destroy(finder);
+                finder = nullptr;
+                settings = load_settings();
+                write_ndi_sdk_config(settings);
+                if (!recreate()) break;
+                last_list.clear();
+            } else if (param == "-rs") {
+                write_file(PARAM_FILE, "");
+                write_source_list({});
+                last_list.clear();
+            }
         }
 
-        NDIlib_find_wait_for_sources(finder, 500);
+        const bool sources_changed = NDIlib_find_wait_for_sources(finder, kSlice.count());
 #ifdef HAVE_SYSTEMD
-        if (++wd_counter >= 20) { // every ~10s
+        if (Clock::now() >= next_watchdog) { // every ~10s
             sd_notify(0, "WATCHDOG=1");
-            wd_counter = 0;
+            next_watchdog = Clock::now() + std::chrono::seconds(10);
         }
 #endif
+        if (!tick && !sources_changed) continue;
         uint32_t count = 0;
         const NDIlib_source_t* sources = NDIlib_find_get_current_sources(finder, &count);
 
@@ -381,11 +441,25 @@ static void run_continuous() {
         }
     }
 
-    NDIlib_find_destroy(finder);
+    if (finder) NDIlib_find_destroy(finder);
     NDIlib_destroy();
 }
 
 int main(int argc, char* argv[]) {
+    pin_ndi_home();
+    // Unbuffered output for journald: through a pipe stdout is block-buffered,
+    // and the log would appear only when the finder stops.
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+    {
+        std::ifstream cached(ndisdk::config_dir() + "/finder-config.json");
+        if (cached) {
+            try { g_follower.apply_config(nlohmann::json::parse(cached)); }
+            catch (const std::exception& e) {
+                std::cerr << "[NDIFinder] Cannot restore follower snapshot: " << e.what() << "\n";
+            }
+        }
+    }
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
 

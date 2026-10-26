@@ -1,13 +1,30 @@
 [Unit]
 Description=Roll back an unconfirmed NDIMon-R network change
+# Control, finder and the decoder Require= this unit and start after it on
+# purpose: the network guards must be in place before they run. systemd drops a
+# start job whose Requires= dependency failed ("Dependency failed") and does
+# not queue it again when the dependency succeeds later, so one failed boot job
+# used to leave the whole stack down. Hence two things, both needing systemd 244:
+# a failed boot job is retried (Restart=on-failure, for a oneshot unit), and
+# every successful start queues the stack again (ExecStartPost, --no-block: it
+# only creates start jobs, which wait for this one). Upholds= (systemd 249)
+# would also do it, but restarts a unit at once that someone stopped on purpose.
+# tesserad is queued too, where it is installed: the network drop-in for Tessera
+# Requires= this unit. `network-job queue` leaves the name out where there is no
+# such unit, which `systemctl start` would report at every boot.
+StartLimitIntervalSec=0
 After=network.target
-Before=ndimon-r.service ndimon-finder.service ndimon-api.service
+Requires=ndimon-state-import.service
+After=ndimon-state-import.service
+Before=ndimon-r.service ndimon-finder.service ndimon-control.service tesserad.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/ndimon-priv net-rollback
-ExecStart=/usr/local/sbin/ndimon-priv net-profiles-boot
+ExecStart=/usr/libexec/ndimon/ndimon-privd network-job boot
+ExecStartPost=-/usr/libexec/ndimon/ndimon-privd network-job queue
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

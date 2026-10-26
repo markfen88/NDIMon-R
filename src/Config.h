@@ -3,7 +3,11 @@
 #include <functional>
 #include <mutex>
 #include <unordered_map>
+#include <set>
 #include <nlohmann/json.hpp>
+#include "FollowerProtocol.h"
+#include "NdiSdkConfig.h"
+#include "audio/AudioSettings.h"
 
 struct DecoderConfig {
     int ch_num = 1;
@@ -46,6 +50,9 @@ struct OutputConfig {
     std::string source_ip;
     std::string output_alias;    // custom output label (empty = use connector name)
     uint32_t    rotation = 0;    // display rotation: 0, 90, 180, 270 degrees
+    double refresh_hz = 0;
+    std::string screensaver_mode = "BlackSS";
+    std::string source_selection = "NDI";
 };
 
 // Splash screen / screensaver appearance
@@ -90,9 +97,15 @@ public:
     static Config& instance();
 
     void load();
+    using AudioApply = std::function<std::string(const ndimon::audio::AudioSettings&)>;
+    nlohmann::json apply_config(const nlohmann::json& request, AudioApply apply_audio = {});
+    nlohmann::json applied_revision() const;
+    nlohmann::json follower_snapshot() const;
+    bool follows(const std::string& domain) const;
+    ndimon::audio::AudioSettings audio_settings(std::string* error) const;
 
     // Save only device-level settings (mode, video output, NDI alias).
-    // All other config files are owned by the Node.js API.
+    // All other config files are owned by ndimon-control.
     void save_device();
 
     // Per-output config (ch_num is 1-based: 1=HDMI-A-1, 2=HDMI-A-2, 3=DP-1)
@@ -141,4 +154,8 @@ private:
     // Per-output cache uses the same mutex.
     mutable std::mutex mutex_;
     mutable std::unordered_map<int, OutputConfig> output_cache_;
+    std::set<std::string> followed_;
+    follower::Revision revision_;
+    ndimon::audio::AudioSettings audio_settings_;
+    nlohmann::json followed_config_ = nlohmann::json::object();
 };

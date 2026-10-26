@@ -1,2 +1,0 @@
-Defaults:ndimon !requiretty
-ndimon ALL=(root) NOPASSWD: /usr/local/sbin/ndimon-priv

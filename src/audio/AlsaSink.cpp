@@ -1,12 +1,17 @@
 #include "AlsaSink.h"
 #include "../AlsaAudio.h"
 #include "PcmLease.h"
+#include "AudioTiming.h"
 namespace ndimon::audio {
 AlsaSink::AlsaSink(std::string id, std::string name, int ch, int p, bool master)
     : id_(std::move(id)),
       pcm_name_(name == "auto" ? AlsaAudio::find_hdmi_device() : std::move(name)), channels_(ch),
       period_(p), master_(master), lease_(PcmLease::acquire(pcm_name_, id_)),
-      pcm_(pcm_name_, ch, p, false, master), drift_({ch, kRate, 2 * p, 8 * p}),
+      // Target three periods: delay() of the Tessera plugin includes a lead of
+      // about one period, and the engine writes one period at a time, so a
+      // two-period target left under a period queued and underran between writes.
+      pcm_(pcm_name_, ch, p, false, master),
+      drift_({ch, kRate, playback_drift_target_frames(p, p), 8 * p}),
       storage_(ch * 4 * p) {
     block_.channels = ch;
     block_.frames = 4 * p;

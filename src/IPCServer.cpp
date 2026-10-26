@@ -1,5 +1,6 @@
 #include "IPCServer.h"
 #include "ResolutionControl.h"
+#include "FollowerProtocol.h"
 #include <iostream>
 #include <cstring>
 #include <algorithm>
@@ -91,27 +92,16 @@ void IPCServer::server_thread() {
 }
 
 bool IPCServer::handle_client(int client_fd) {
-    // Read until newline (commands are newline-terminated JSON).
-    // Single read() can return a partial command if the kernel splits the
-    // write — keep pulling until \n or we hit the size cap.
-    static constexpr size_t kMaxCommand = 64 * 1024;
-    std::string buf;
-    buf.reserve(1024);
-    char chunk[2048];
-    while (buf.size() < kMaxCommand) {
-        struct pollfd pfd = { client_fd, POLLIN, 0 };
-        int pr = poll(&pfd, 1, 1000);
-        if (pr <= 0) break;
-        ssize_t n = read(client_fd, chunk, sizeof(chunk));
-        if (n <= 0) break;
-        buf.append(chunk, chunk + n);
-        if (buf.find('\n') != std::string::npos) break;
-    }
-    if (buf.empty()) return true;
-
     try {
-        auto j = nlohmann::json::parse(buf);
+        auto j = follower::read_line(client_fd);
         std::string action = j.value("action", "");
+        if (action == "apply_config") {
+            IPCCommand cmd;
+            cmd.action = action;
+            cmd.config_request = j;
+            follower::reply(client_fd, query_cb_ ? query_cb_(cmd) : follower::failure("apply_config unavailable"));
+            return true;
+        }
 
         // Subscriber mode: keep fd open and push events to it
         if (action == "subscribe") {
@@ -176,6 +166,7 @@ bool IPCServer::handle_client(int client_fd) {
         write(client_fd, ok, strlen(ok));
     } catch (const std::exception& e) {
         std::cerr << "[IPC] parse error: " << e.what() << "\n";
+        follower::reply(client_fd, follower::failure(e.what()));
     }
     return true;
 }

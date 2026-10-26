@@ -1,4 +1,7 @@
 #pragma once
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <memory>
@@ -15,6 +18,10 @@ public:
 
     bool is_initialized() const { return pcm_ != nullptr; }
     std::string device_name() const { return device_name_; }
+
+    // Underruns since init (HW-1 H5). Each one stops the PCM and restarts it with
+    // snd_pcm_prepare(), a gap in the sound that nothing used to report.
+    uint64_t underruns() const { return underruns_.load(); }
 
     // Write planar float audio (NDI native format) to ALSA.
     // channel_data: array of float* for each channel
@@ -35,4 +42,10 @@ private:
     int channels_           = 2;
     std::string device_name_;
     std::vector<int16_t> pcm_buf_;  // reusable interleaved S16 buffer
+
+    // Written by the capture thread, read by the status thread.
+    std::atomic<uint64_t> underruns_{0};
+    uint64_t reported_underruns_ = 0;  // capture thread only
+    std::chrono::steady_clock::time_point last_write_{}, last_report_{};
+    void note_underrun(int num_samples, std::chrono::steady_clock::time_point now);
 };

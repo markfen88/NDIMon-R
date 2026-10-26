@@ -6,6 +6,7 @@
     "runtime_release": "0.2.1",
     "runtime_package": "0.2.1-1",
     "control_wire_version": 1,
+    "control_types": "0.2.2",
     "sample_rate": 48000,
     "channels_per_direction": [
       1,

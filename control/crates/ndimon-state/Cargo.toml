@@ -1,0 +1,54 @@
+[package]
+name = "ndimon-state"
+description = "Serialized desired-state actor and native audio reconciliation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+harness = ["ndimon-netengine/harness"]
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[[bin]]
+name = "ndimon-state-import"
+path = "src/bin/ndimon-state-import.rs"
+test = false
+bench = false
+
+[dependencies]
+ndimon-types.workspace = true
+ndimon-release.workspace = true
+ndimon-tessera.workspace = true
+ndimon-netengine.workspace = true
+ndimon-render = { path = "../ndimon-render" }
+ndimon-privd-proto = { workspace = true, features = ["client"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+toml = "0.8"
+sha2 = "0.10"
+getrandom.workspace = true
+base64 = "0.22"
+ryu-js = "1"
+rustix = { version = "1", features = ["fs"] }
+regex = "1"
+nix = { version = "0.29", features = ["user", "fs", "time"] }
+
+ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
+url = "2"
+tempfile = "3"
+

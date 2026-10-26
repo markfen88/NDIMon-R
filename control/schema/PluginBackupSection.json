@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PluginBackupSection",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "data"
+  ]
+}

@@ -122,6 +122,14 @@ public:
     // Reset stuck flip state (called by health monitor on display freeze)
     void reset_flip_pending() { flip_pending_ = false; }
 
+    // The CRTC runs the last mode set (false after a modeset whose commit failed).
+    bool mode_active() const { return crtc_active_; }
+
+    // One line for the journal when frames stop reaching the screen (HW-1 H6):
+    // whether the frame mutex is held, the CRTC/flip state and how the commits
+    // since the last modeset went, with the errno of the last failed one.
+    std::string stall_report() const;
+
     void set_hdmi_enabled(bool enable);
 
     // Enumerate all connectors on a device (static utility)
@@ -140,8 +148,11 @@ private:
 
     // Commit a framebuffer: SetCrtc on first call, PageFlip thereafter
     bool commit_fb(uint32_t fb_id);
-    // Atomic commit with plane SRC/CRTC rects for zero-copy DMA-BUF scaling
+    // Atomic commit with plane SRC/CRTC rects for zero-copy DMA-BUF scaling.
+    // The wrapper counts the result for stall_report() and logs a failure.
     CommitResult atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst);
+    CommitResult atomic_plane_commit_impl(uint32_t fb_id, const Rect& src, const Rect& dst);
+    std::string state_line(bool plain) const;
     void wait_for_flip();
     static void flip_handler(int fd, unsigned seq,
                              unsigned tv_sec, unsigned tv_usec, void* user);
@@ -185,6 +196,11 @@ private:
     bool        initialized_  = false;
     bool        crtc_active_  = false;
     std::atomic<bool> flip_pending_{false};
+
+    // Evidence for stall_report(); reset at every successful modeset.
+    std::atomic<uint64_t> commits_ok_{0}, commits_dropped_{0}, commits_failed_{0};
+    std::atomic<int>      last_commit_errno_{0};
+    std::atomic<int64_t>  modeset_ms_{0}, last_ok_ms_{0}, last_failure_log_ms_{0};
 
     uint32_t connector_id_ = 0;
     uint32_t crtc_id_      = 0;

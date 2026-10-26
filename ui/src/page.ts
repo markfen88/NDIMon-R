@@ -1,0 +1,20 @@
+// Keep section evaluation and DOMContentLoaded registration in page order.
+import './state';
+import './auth';
+import './toast';
+import './navigation';
+import './sse';
+import './initial-load';
+import './ui-update';
+import './unsaved-changes';
+import './settings';
+import './software-update';
+import './watchdog';
+import './presets';
+import './actions';
+import './services';
+import './scheduled-reboot';
+import './ndi-groups';
+import './backup-restore-network';
+import './helpers';
+import './plugins';

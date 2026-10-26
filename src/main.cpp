@@ -84,44 +84,14 @@ static std::string json_escape(const std::string& s) {
     return out;
 }
 
-static std::string ndimon_ndi_home() {
-    if (access("/var/lib/ndimon", W_OK) == 0)
-        return "/var/lib/ndimon";
-    const char* home = getenv("HOME");
-    if (home && home[0]) return home;
-    return "/root";
-}
-
-// Pin HOME so NDIlib_initialize() and our writer use the same ~/.ndi.
-// Finder runs as user ndimon (HOME=/var/lib/ndimon); decoder is root but
-// must share that directory or discovery/transport/DS settings desync.
 static void pin_ndi_home() {
-    std::string h = ndimon_ndi_home();
-    setenv("HOME", h.c_str(), 1);
-    // The SDK reads the config of the *passwd* home of the running user (root's
-    // is /root), not $HOME. NDI_CONFIG_DIR is the documented override; without
-    // it the decoder never saw the file written here (groups, discovery and
-    // transport all fell back to SDK defaults).
-    setenv("NDI_CONFIG_DIR", (h + "/.ndi").c_str(), 1);
-}
-
-static void relax_ndi_config_perms(const std::string& dir, const std::string& file) {
-    chmod(dir.c_str(), 0770);
-    chmod(file.c_str(), 0664);
-    struct passwd* pw = getpwnam("ndimon");
-    struct group*  gr = getgrnam("ndimon");
-    uid_t uid = pw ? pw->pw_uid : static_cast<uid_t>(-1);
-    gid_t gid = gr ? gr->gr_gid : static_cast<gid_t>(-1);
-    if (gid != static_cast<gid_t>(-1)) {
-        chown(dir.c_str(), uid, gid);
-        chown(file.c_str(), uid, gid);
-    }
+    ndisdk::pin_config_dir("decoder");
 }
 
 // pin_ndi_home() must already have run (once, at the top of main, before any
 // thread exists): setenv() here would race with SDK threads calling getenv().
 static void write_ndi_sdk_config(const Config& cfg) {
-    std::string ndi_dir = ndimon_ndi_home() + "/.ndi";
+    std::string ndi_dir = ndisdk::config_dir();
     mkdir(ndi_dir.c_str(), 0770);
     std::string path = ndi_dir + "/ndi-config.v1.json";
 
@@ -149,8 +119,15 @@ static void write_ndi_sdk_config(const Config& cfg) {
         "  }\n"
         "}\n";
 
+    // Every apply_config calls this; only a change is written and logged.
+    if (ndisdk::file_has_content(path, json)) return;
     if (ndisdk::write_file_atomic(path, json)) {
-        relax_ndi_config_perms(ndi_dir, path);
+        if (ndi_dir == "/var/lib/ndimon/.ndi") {
+            // The emergency legacy fallback is still shared by the two users.
+            if (auto* group = getgrnam("ndimon"))
+                chown(path.c_str(), static_cast<uid_t>(-1), group->gr_gid);
+            chmod(path.c_str(), 0664);
+        } else chmod(path.c_str(), 0600);
         std::cout << "[NDIMon-R] NDI config written (transport="
                   << cfg.transport.rxpm << "): " << path << "\n";
     } else {
@@ -288,9 +265,9 @@ public:
         }
     }
 
-    // Push current connection state to newly connected subscriber so Node.js
-    // can start a retry loop immediately if the saved source is unavailable.
-    // drm_ready is included so Node.js won't start a reconnect loop for an
+    // Push current connection state to newly connected subscriber so the control
+    // supervisor can start a retry loop immediately if the saved source is unavailable.
+    // drm_ready is included so the supervisor won't start a reconnect loop for an
     // output with no physical display (avoids fighting with workers that have
     // no display but have a saved source from a previous DS routing event).
     void push_connection_state() {
@@ -411,7 +388,7 @@ public:
             return std::string(buf);
         });
         recv_->set_routing_callback([this](const std::string& name, const std::string& url) {
-            // Discovery server assigned a new source — push event to Node.js,
+            // Discovery server assigned a new source — push event to the control plane,
             // which owns all routing decisions. Buffer for subscriber reconnect replay.
             if (!ipc_) return;
             nlohmann::json ev;
@@ -660,7 +637,7 @@ public:
         auto out_cfg = cfg.get_output(ch_num_);
         {
             std::string error;
-            auto audio = ndimon::audio::AudioSettings::load("/etc/ndimon-audio-settings.json",&error);
+            auto audio = cfg.audio_settings(&error);
             if (error.empty()) set_video_delay(audio.video_delay_ms);
         }
 
@@ -881,6 +858,7 @@ public:
         s["connected"]    = connected_.load();
         s["audio_enabled"] = recv_ && recv_->audio_enabled();
         s["audio_available"] = audio_ != nullptr || engine_ != nullptr;
+        s["audio_underruns"] = audio_ ? audio_->underruns() : 0;
         {
             std::lock_guard<std::mutex> lk(source_mutex_);
             s["source_name"] = source_name_;
@@ -1120,6 +1098,18 @@ private:
                 std::cerr << "[Worker" << ch_num_ << "] HEALTH: display freeze detected\n";
                 if (drm_) drm_->reset_flip_pending();
             }
+            // HW-1 H6: say what the display looked like, once the freeze is
+            // detected and again while it lasts, so a wedge leaves evidence.
+            if (drm_ && (stall_count_ == 6 || stall_count_ == 20 || stall_count_ == 60)) {
+                size_t queued;
+                {
+                    std::lock_guard<std::mutex> lk(frame_mtx_);
+                    queued = frame_queue_.size();
+                }
+                std::cerr << "[Worker" << ch_num_ << "] HEALTH: display state (stall "
+                          << stall_count_ << ", display_age=" << display_age
+                          << "ms, frame_queue=" << queued << "): " << drm_->stall_report() << "\n";
+            }
         }
 
         if (healthy) {
@@ -1176,7 +1166,8 @@ private:
             if (best) {
                 // Don't switch if we're already at this mode
                 if (best->width == drm_->width() && best->height == drm_->height() &&
-                    std::abs(best->refresh_hz - drm_->refresh_hz()) < 0.05) {
+                    std::abs(best->refresh_hz - drm_->refresh_hz()) < 0.05 &&
+                    drm_->mode_active()) {
                     return true;
                 }
                 std::cout << "[Worker" << ch_num_ << "] Auto-resolution: source "
@@ -1356,7 +1347,7 @@ private:
             }
         }
 
-        // Push connection event to Node.js — it owns reconnect scheduling
+        // Push connection event to the control plane — it owns reconnect scheduling
         if (ipc_) {
             nlohmann::json ev;
             ev["type"]      = "connection";
@@ -1367,14 +1358,14 @@ private:
             ipc_->push_event(ev);
         }
 
-        // Update status file for ch1 (atomic write — Node.js may be reading)
+        // Update status file for ch1 (atomic write — ndimon-control may be reading)
         if (ch_num_ == 1) {
             try {
                 nlohmann::json status;
                 status["SourceName"] = connected ? src : "";
                 status["Status"]     = connected ? "active" : "inactive";
                 status["ChNum"]      = ch_num_;
-                const char* path = "/etc/ndimon-dec1-status.json";
+                const char* path = "/run/ndimon/ndimon-dec1-status.json";
                 const std::string tmp = std::string(path) + ".tmp";
                 {
                     std::ofstream f(tmp);
@@ -1612,11 +1603,25 @@ int main(int argc, char* argv[]) {
     std::cout << "[NDIMon-R] Platform: " << PlatformDetect::name() << "\n";
 
     auto& cfg = Config::instance();
+    // Volatile cache only: preserve handed-over domains across the existing
+    // transport/engine service restart. A reboot still needs control-plane replay.
+    {
+        std::ifstream cached(ndisdk::config_dir() + "/decoder-config.json");
+        if (cached) {
+            try {
+                const auto restored = cfg.apply_config(nlohmann::json::parse(cached));
+                if (!restored.value("ok", false))
+                    std::cerr << "[Config] Cannot restore follower snapshot: " << restored.dump() << "\n";
+            } catch (const std::exception& e) {
+                std::cerr << "[Config] Cannot restore follower snapshot: " << e.what() << "\n";
+            }
+        }
+    }
     cfg.load();
     cfg.set_runtime_ip(get_primary_ip());
 
     // Set default NDI alias if not configured: "NDIMON-XXXX"
-    if (cfg.device.ndi_recv_name.empty()) {
+    if (cfg.device.ndi_recv_name.empty() && !cfg.follows("device")) {
         cfg.device.ndi_recv_name = "NDIMON-" + get_primary_mac_suffix();
         std::cout << "[NDIMon-R] NDI alias (default): " << cfg.device.ndi_recv_name << "\n";
         cfg.save_device();
@@ -1636,7 +1641,23 @@ int main(int argc, char* argv[]) {
         std::cout << "[NDIMon-R] Set hostname to: " << cfg.device.ndi_recv_name << "\n";
     }
 
-    const auto selected_ndi_network = ndisdk::network_selection();
+    // The selected interface may still be waiting for its DHCP lease at boot.
+    // Wait for it (the unit's start timeout is extended meanwhile) instead of
+    // failing and being restarted; only refuse when it never comes (NI-18, W3).
+    const auto selected_ndi_network = ndisdk::wait_for_selection(
+        [] { return ndisdk::network_selection(); },
+        std::chrono::seconds(60), std::chrono::milliseconds(250),
+        [](std::chrono::milliseconds waited) {
+            if (!g_running) return false;
+            if (waited.count() == 0)
+                std::cout << "[NDIMon-R] Waiting for the selected NDI network to get an address\n";
+#ifdef HAVE_SYSTEMD
+            if (waited.count() % 5000 == 0)
+                sd_notify(0, "EXTEND_TIMEOUT_USEC=15000000\nSTATUS=waiting for the selected NDI network");
+#endif
+            return true;
+        },
+        [](std::chrono::milliseconds interval) { std::this_thread::sleep_for(interval); });
     if (!selected_ndi_network.ready()) {
         std::cerr << "[NDIMon-R] Selected NDI network unavailable; refusing automatic fallback\n";
         return 1;
@@ -1844,7 +1865,8 @@ int main(int argc, char* argv[]) {
     auto reload_audio = [&]() -> nlohmann::json {
         int cap=5000;for(auto& w:workers)cap=std::min(cap,w->video_delay_cap_ms());
         if(!audio_engine)return {{"ok",true},{"applied",nlohmann::json::array()},{"restarted",false},{"restart_required",true}};
-        auto result=audio_engine->reload("/etc/ndimon-audio-settings.json",cap);
+        auto result = cfg.follows("audio") ? audio_engine->apply(cfg.audio_settings(nullptr), cap)
+            : audio_engine->reload("/etc/ndimon-audio-settings.json", cap);
         if (result.ok)
             audio_engine->start();
         for (auto &worker : workers)
@@ -1883,8 +1905,11 @@ int main(int argc, char* argv[]) {
     };
 
     ipc->set_command_callback([&](const IPCCommand& cmd) {
-        std::cout << "[NDIMon-R] IPC cmd: " << cmd.action
-                  << " output=" << cmd.output_index << "\n";
+        // The control plane re-asserts the settings with reload_config every 30 s;
+        // that one is logged below, and only when the reload changed something.
+        if (cmd.action != "reload_config")
+            std::cout << "[NDIMon-R] IPC cmd: " << cmd.action
+                      << " output=" << cmd.output_index << "\n";
 
         if (cmd.action == "connect") {
             auto* w = get_worker(cmd.output_index);
@@ -1903,7 +1928,11 @@ int main(int argc, char* argv[]) {
                 w->set_tally(cmd.tally_program, cmd.tally_preview);
 
         } else if (cmd.action == "reload_config") {
+            const std::string before = cfg.follower_snapshot().dump();
             cfg.load();
+            if (cfg.follower_snapshot().dump() != before)
+                std::cout << "[NDIMon-R] IPC cmd: reload_config output=" << cmd.output_index
+                          << " (configuration changed)\n";
             for (auto& w : workers) w->reload_config();
             reload_audio();
 
@@ -1929,6 +1958,48 @@ int main(int argc, char* argv[]) {
     });
 
     ipc->set_query_callback([&](const IPCCommand& cmd) -> nlohmann::json {
+        if (cmd.action == "apply_config") {
+            const auto& domains = cmd.config_request.at("config");
+            const bool engine_restart = domains.contains("audio") &&
+                domains.at("audio").at("engine") != (audio_engine ? "v2" : "v1");
+            std::map<int, OutputConfig> previous;
+            for (auto& w : workers) previous.emplace(w->ch_num(), cfg.get_output(w->ch_num()));
+            auto response = cfg.apply_config(cmd.config_request, [&](const ndimon::audio::AudioSettings& settings) {
+                if (!audio_engine || engine_restart) return std::string{};
+                int cap = 5000;
+                for (auto& w : workers) cap = std::min(cap, w->video_delay_cap_ms());
+                const auto result = audio_engine->apply(settings, cap);
+                return result.ok ? std::string{} : result.error;
+            });
+            if (!response.value("ok", false)) return response;
+            if (!ndisdk::write_file_atomic(ndisdk::config_dir() + "/decoder-config.json", cfg.follower_snapshot().dump()))
+                std::cerr << "[Config] WARNING: cannot cache follower snapshot for service restart\n";
+            else chmod((ndisdk::config_dir() + "/decoder-config.json").c_str(), 0600);
+            if (engine_restart) response["restart_required"] = true;
+            write_ndi_sdk_config(cfg);
+            for (auto& w : workers) {
+                w->reload_config();
+                if (domains.contains("outputs")) {
+                    const auto out = cfg.get_output(w->ch_num());
+                    const auto& old = previous.at(w->ch_num());
+                    if (out.preferred_mode != old.preferred_mode || out.refresh_hz != old.refresh_hz) {
+                        if (out.preferred_mode.empty()) w->set_auto_resolution(0);
+                        else {
+                            unsigned width = 0, height = 0;
+                            if (sscanf(out.preferred_mode.c_str(), "%ux%u", &width, &height) == 2)
+                                w->set_resolution(width, height, out.refresh_hz, 0);
+                        }
+                    }
+                    if (out.source_name != old.source_name || out.source_ip != old.source_ip) {
+                        if (out.source_name.empty()) w->forget_source();
+                        else w->connect_source(out.source_name, out.source_ip);
+                    }
+                }
+                if (!w->is_streaming()) w->show_splash(false);
+            }
+            if (audio_engine) audio_engine->start();
+            return response;
+        }
         if (cmd.action == "get_modes") {
             auto* w = get_worker(cmd.output_index);
             return w ? w->get_modes() : nlohmann::json{{"error", "no worker"}};
@@ -1972,6 +2043,7 @@ int main(int argc, char* argv[]) {
             static auto start_time = now_ms();
             nlohmann::json j;
             j["alive"] = true;
+            j["revision"] = cfg.applied_revision();
             j["uptime_s"] = (now_ms() - start_time) / 1000;
             j["outputs"] = nlohmann::json::array();
             for (auto& w : workers) {
@@ -1995,8 +2067,10 @@ int main(int argc, char* argv[]) {
     ipc->set_status_provider([&]() -> nlohmann::json {
         // Return first worker's status + array of all
         nlohmann::json s;
+        s["revision"] = cfg.applied_revision();
         if (!workers.empty()) {
             s = workers[0]->get_status();
+            s["revision"] = cfg.applied_revision();
             s["platform"] = PlatformDetect::name();
         }
         nlohmann::json all = nlohmann::json::array();
@@ -2027,17 +2101,17 @@ int main(int argc, char* argv[]) {
     // Wire IPC pointer into workers so they can push events
     for (auto& w : workers) w->set_ipc(ipc.get());
 
-    // When a subscriber (Node.js) connects, replay buffered routing events
-    // so it can recover current state (handles startup race and Node.js restarts)
+    // When a subscriber (ndimon-control) connects, replay buffered routing events
+    // so it can recover current state (handles startup race and control restarts)
     ipc->set_subscriber_connected_callback([&]() {
         for (auto& w : workers) {
             w->replay_routing_event();
-            w->push_connection_state();   // triggers Node.js retry loop if needed
+            w->push_connection_state();   // triggers the supervisor's retry loop if needed
         }
     });
 
     // Main loop: tick workers (hotplug, fps)
-    // Config reload is now driven by explicit reload_config IPC commands from Node.js
+    // Config reload is now driven by explicit reload_config IPC commands from ndimon-control
     std::cout << "[NDIMon-R] Running. Ctrl+C to exit.\n";
 
     std::string shown_ip = Config::instance().runtime_ip();

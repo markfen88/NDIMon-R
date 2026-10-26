@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommandReply",
+  "type": "object",
+  "properties": {
+    "revision": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "report": {
+      "$ref": "#/$defs/ApplyReport"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "revision",
+    "report"
+  ],
+  "$defs": {
+    "ApplyReport": {
+      "type": "object",
+      "properties": {
+        "impact": {
+          "$ref": "#/$defs/Impact"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApplyStep"
+          }
+        },
+        "pending_restart": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Domain"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "impact",
+        "steps",
+        "pending_restart"
+      ]
+    },
+    "Impact": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/ImpactScope"
+        },
+        "restarts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Service"
+          }
+        },
+        "interruptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Interruption"
+          }
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "token": {
+          "type": "string"
+        },
+        "counterpart": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "restarts",
+        "interruptions",
+        "lines",
+        "token"
+      ]
+    },
+    "ImpactScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "output",
+        "service",
+        "device",
+        "network",
+        "system"
+      ]
+    },
+    "Service": {
+      "type": "string",
+      "enum": [
+        "decoder",
+        "finder",
+        "control",
+        "watchdog",
+        "tessera"
+      ]
+    },
+    "Interruption": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/Domain"
+        },
+        "target": {
+          "type": "string"
+        },
+        "expected_duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "target"
+      ]
+    },
+    "Domain": {
+      "type": "string",
+      "enum": [
+        "device",
+        "outputs",
+        "ndi",
+        "audio",
+        "network",
+        "tessera",
+        "display",
+        "presets",
+        "plugins"
+      ]
+    },
+    "ApplyStep": {
+      "type": "object",
+      "properties": {
+        "step": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ApplyStatus"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "status"
+      ]
+    },
+    "ApplyStatus": {
+      "type": "string",
+      "enum": [
+        "started",
+        "done",
+        "failed"
+      ]
+    }
+  }
+}

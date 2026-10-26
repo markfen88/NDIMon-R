@@ -1,0 +1,39 @@
+[Unit]
+Description=NDIMon-R control-plane front door
+# Never stop restarting: the device must recover without an operator (the
+# former shell watchdog revived units that systemd had given up on).
+StartLimitIntervalSec=0
+Requires=ndimon-control.socket ndimon-state-import.service ndimon-privd.socket ndimon-net-boot.service
+After=ndimon-control.socket ndimon-state-import.service ndimon-privd.socket ndimon-net-boot.service
+Before=ndimon-r.service ndimon-finder.service
+Conflicts=ndimon-watchdog.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+Sockets=ndimon-control.socket
+User=ndimon-control
+Group=ndimon-control
+SupplementaryGroups=ndimon ndimon-priv-control ndimon-finder
+# Retire root-owned statistics left by the former standalone watchdog.
+ExecStartPre=+/usr/bin/rm -f /tmp/ndimon-watchdog-stats.json /tmp/ndimon-watchdog-stats.json.tmp
+ExecStart=/usr/bin/ndimon-control --public-dir /usr/share/ndimon/public
+Environment=NDIMON_PRIVD=1
+Restart=always
+RestartSec=3
+WatchdogSec=30
+TimeoutStopSec=10
+UMask=0027
+# tmpfiles owns the private transport directory. Traversal is public; the
+# socket restricts access to control and the ndimon group.
+ProtectHome=true
+ProtectSystem=strict
+# The actor owns durable state; auth and /etc artifacts still go through privd.
+ReadWritePaths=/run/ndimon-control /var/lib/ndimon/state /var/lib/ndimon/import /var/lib/ndimon/backups /var/lib/ndimon/assets
+ReadWritePaths=/tmp /run/ndimon/ndi_src_find_param
+NoNewPrivileges=yes
+# Keep the decoder's /tmp/ndi-decoder.sock visible; no private temp namespace.
+PrivateTmp=no
+
+[Install]
+WantedBy=multi-user.target
