@@ -1,0 +1,25 @@
+[package]
+name = "ndimon-render"
+description = "Pure legacy projections and ownership policy for NDIMon-R"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[dependencies]
+ndimon-types.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = "0.10"

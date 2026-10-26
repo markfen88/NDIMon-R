@@ -1,0 +1,17 @@
+[Unit]
+Description=NDIMon-R privileged socket for the control plane
+# One socket per caller. The group is granted only through the caller's own
+# SupplementaryGroups=, so the socket that accepts a connection says who is
+# calling on any kernel. ndimon-control is the only caller.
+
+[Socket]
+ListenStream=/run/ndimon-privd/control.sock
+FileDescriptorName=control
+SocketMode=0660
+SocketUser=root
+SocketGroup=ndimon-priv-control
+DirectoryMode=0755
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

@@ -1,6 +1,10 @@
 [Unit]
 Description=NDIMon-R (Hardware NDI Decoder)
-After=network-online.target
+# Never stop restarting: the device must recover without an operator (the
+# former shell watchdog revived units that systemd had given up on).
+StartLimitIntervalSec=0
+Requires=ndimon-control.service ndimon-net-boot.service
+After=network-online.target ndimon-control.service ndimon-net-boot.service
 Wants=network-online.target
 
 [Service]
@@ -10,23 +14,20 @@ WatchdogSec=30
 Restart=always
 RestartSec=3
 # Unbind all framebuffer consoles so DRM app can take display master
-ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon0/bind'
-ExecStartPre=-/bin/sh -c 'echo 0 > /sys/class/vtconsole/vtcon1/bind'
-ExecStartPre=-/bin/sh -c 'echo 1 > /sys/class/graphics/fb0/blank'
+ExecStartPre=-/usr/bin/ndimon-package console-acquire
 # RK3588 only: faster global ondemand response; original value restored at stop.
-ExecStartPre=-/usr/bin/python3 -I /usr/local/lib/ndimon/ndimon-cpu-sampling apply
-ExecStart=/usr/local/bin/ndimon-r
-ExecStopPost=-/usr/bin/python3 -I /usr/local/lib/ndimon/ndimon-cpu-sampling restore
-ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon0/bind'
-ExecStopPost=-/bin/sh -c 'echo 1 > /sys/class/vtconsole/vtcon1/bind'
+ExecStartPre=-/usr/libexec/ndimon/ndimon-privd --cpu apply
+ExecStart=/usr/bin/ndimon-r
+ExecStopPost=-/usr/libexec/ndimon/ndimon-privd --cpu restore
+ExecStopPost=-/usr/bin/ndimon-package console-release
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/aarch64-linux-gnu:/usr/lib/x86_64-linux-gnu
-# Share /var/lib/ndimon/.ndi with ndimon-finder. The SDK ignores $HOME (it uses the
-# passwd home, /root for this service); NDI_CONFIG_DIR is the documented override.
+# Private SDK copy: the SDK uses the passwd home unless NDI_CONFIG_DIR is set.
+Environment=NDIMON_FONT_DIR=/usr/share/ndimon/fonts
 Environment=HOME=/var/lib/ndimon
-Environment=NDI_CONFIG_DIR=/var/lib/ndimon/.ndi
+Environment=NDI_CONFIG_DIR=/run/ndimon/ndi/decoder/
 NoNewPrivileges=true
 # High priority for real-time video
 Nice=-10
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

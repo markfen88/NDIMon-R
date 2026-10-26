@@ -4,6 +4,7 @@
 #include "SplashPaint.h"
 #include "SplashStyle.h"
 #include <iostream>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
@@ -1023,7 +1024,7 @@ static uint32_t get_prop_id(int fd, uint32_t obj_id, uint32_t obj_type, const ch
     return id;
 }
 
-DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst) {
+DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit_impl(uint32_t fb_id, const Rect& src, const Rect& dst) {
     if (!plane_id_) return CommitResult::Failed;
 
     if (!prop_plane_fb_id_ || !prop_plane_crtc_id_ || !prop_plane_src_x_ ||
@@ -1087,6 +1088,7 @@ DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const R
     drmModeAtomicFree(req);
 
     if (ret != 0) {
+        last_commit_errno_ = commit_error;
         flip_pending_ = false;
         if (rotation_drm_ != 1 && (commit_error == EINVAL || commit_error == ERANGE)) {
             // Formats can change after TEST_ONLY; preserve output if the real
@@ -1096,7 +1098,7 @@ DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const R
             rotation_drm_=1;
             rotation_dirty_=true;
             invalidate_fill_cache();
-            return atomic_plane_commit(fb_id,src,dst);
+            return atomic_plane_commit_impl(fb_id,src,dst);
         }
         if (!crtc_active_) {
             // Can't use atomic — caller should fall back to legacy path
@@ -1109,6 +1111,66 @@ DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const R
     rotation_dirty_ = false;
     crtc_active_ = true;
     return CommitResult::Ok;
+}
+
+static int64_t drm_mono_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// HW-1 H6: a failed atomic commit was silent, and nothing recorded how the
+// commits went after a modeset. Count each result; log a failure with its errno,
+// the first one after a modeset and then at most once in five seconds.
+DRMDisplay::CommitResult DRMDisplay::atomic_plane_commit(uint32_t fb_id, const Rect& src, const Rect& dst) {
+    const CommitResult result = atomic_plane_commit_impl(fb_id, src, dst);
+    const int64_t now = drm_mono_ms();
+    switch (result) {
+        case CommitResult::Ok:
+            commits_ok_++;
+            last_ok_ms_ = now;
+            break;
+        case CommitResult::Dropped:
+            commits_dropped_++;
+            break;
+        case CommitResult::Failed: {
+            const uint64_t n = ++commits_failed_;
+            if (n == 1 || now - last_failure_log_ms_.load() >= 5000) {
+                last_failure_log_ms_ = now;
+                const int e = last_commit_errno_.load();
+                std::cerr << "[DRM] atomic plane commit failed (" << n
+                          << " since the last modeset): "
+                          << (e ? strerror(e) : "no errno") << ", crtc_active=" << crtc_active_
+                          << " flip_pending=" << flip_pending_.load() << "\n";
+            }
+            break;
+        }
+    }
+    return result;
+}
+
+// `plain`: the caller owns frame_mutex_, so the plain fields can be read.
+std::string DRMDisplay::state_line(bool plain) const {
+    const int64_t now = drm_mono_ms();
+    std::ostringstream o;
+    if (plain) {
+        o << "mode=" << width_ << "x" << height_ << "@" << vrefresh_hz_
+          << " crtc_active=" << crtc_active_ << " streaming=" << streaming_
+          << " atomic_plane_state=" << atomic_plane_state_ << " ";
+    }
+    o << "flip_pending=" << flip_pending_.load()
+      << " commits(ok/dropped/failed)=" << commits_ok_.load() << "/"
+      << commits_dropped_.load() << "/" << commits_failed_.load()
+      << " last_errno=" << last_commit_errno_.load();
+    if (modeset_ms_.load() > 0) o << " since_modeset_ms=" << now - modeset_ms_.load();
+    if (last_ok_ms_.load() > 0) o << " since_last_ok_commit_ms=" << now - last_ok_ms_.load();
+    return o.str();
+}
+
+std::string DRMDisplay::stall_report() const {
+    // try_lock: the report must not wait on the thread it is diagnosing.
+    std::unique_lock<std::mutex> lk(frame_mutex_, std::try_to_lock);
+    return std::string("frame_mutex=") + (lk.owns_lock() ? "free " : "HELD ") +
+           state_line(lk.owns_lock());
 }
 
 // ---------------------------------------------------------------------------
@@ -2066,7 +2128,8 @@ bool DRMDisplay::show_splash(bool source_available) {
         // Read source count from ndimon-sources.json, subtract 1 for "None"
         int src_count = 0;
         try {
-            std::ifstream f("/var/lib/ndimon/ndimon-sources.json");
+            std::ifstream f("/run/ndimon/ndimon-sources.json");
+            if (!f.is_open()) f.open("/var/lib/ndimon/ndimon-sources.json");
             if (f.is_open()) {
                 nlohmann::json j;
                 f >> j;
@@ -2134,7 +2197,7 @@ void DRMDisplay::ensure_text_renderer() {
     if (text_load_tried_) return;
     text_load_tried_ = true;
     const char* env = getenv("NDIMON_FONT_DIR");
-    std::string dir = (env && *env) ? env : "/usr/local/share/ndimon/fonts";
+    std::string dir = (env && *env) ? env : "/usr/share/ndimon/fonts";
     if (text_.load(dir + "/Inter-Regular.ttf", dir + "/Inter-SemiBold.ttf"))
         std::cerr << "[DRM] Text: Inter loaded from " << dir << "\n";
     else
@@ -2297,6 +2360,18 @@ ResolutionResult DRMDisplay::set_mode(uint32_t w, uint32_t h, double refresh_hz,
         std::cerr << "[DRM] set_mode: failed to activate new mode\n";
         return ResolutionResult::Failed;
     }
+    // show_black_impl() reports "rendered" even when its commit failed. A mode
+    // that never reached the CRTC is not a changed mode: report it (the policy
+    // retries once a second) instead of leaving the display dark behind a
+    // "Mode changed" line (HW-1 H6).
+    if (!crtc_active_) {
+        std::cerr << "[DRM] set_mode: " << w << "x" << h << "@" << vrefresh_hz_
+                  << " is not active after the commit; " << state_line(true) << "\n";
+        return ResolutionResult::Failed;
+    }
+    commits_ok_ = commits_dropped_ = commits_failed_ = 0;
+    last_commit_errno_ = 0;
+    modeset_ms_ = drm_mono_ms();
 
     std::cout << "[DRM] Mode changed to " << w << "x" << h << "@" << vrefresh_hz_ << "\n";
     return ResolutionResult::Applied;

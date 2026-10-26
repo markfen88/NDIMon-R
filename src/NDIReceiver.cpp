@@ -572,6 +572,16 @@ void NDIReceiver::recv_thread() {
     bool probe_active  = !src_snap.empty() && src_snap != "None";
     auto last_meta_send = std::chrono::steady_clock::now();
 
+    // A new thread is a new connection (connect() already destroyed any
+    // FrameSync). Its first video frame decides the stream type, even when the
+    // SDK delivers it before this loop has seen the connection count change; a
+    // flag left over from the previous connection skipped the FrameSync setup
+    // for exactly that frame (NI-18).
+    first_frame_logged_ = false;
+    stream_type_ = NDIStreamType::Unknown;
+    auto connected_at = std::chrono::steady_clock::now();
+    bool no_video_reported = false;
+
     try {
     while (running_) {
         recv_heartbeat_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -588,17 +598,10 @@ void NDIReceiver::recv_thread() {
         if (connections > 0 && !was_connected) {
             was_connected = true;
             probe_active  = false;
-            first_frame_logged_ = false;
-            stream_type_ = NDIStreamType::Unknown;
-            // Destroy old framesync — new source may be different type
-            {
-                std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
-                if (framesync_) {
-                    audio_connected_=false;
-                    NDIlib_framesync_destroy(framesync_);
-                    framesync_ = nullptr;
-                }
-            }
+            connected_at  = std::chrono::steady_clock::now();
+            // Stream detection is not re-armed here: the thread start and the
+            // disconnect below do that. A frame may already have been captured
+            // (and a FrameSync created) for this very connection.
             {
                 std::lock_guard<std::mutex> lk(state_mutex_);
                 src_snap = current_source_;
@@ -631,7 +634,10 @@ void NDIReceiver::recv_thread() {
                     framesync_ = nullptr;
                 }
             }
+            // The next connection may carry another stream type: detect again.
+            first_frame_logged_ = false;
             stream_type_ = NDIStreamType::Unknown;
+            no_video_reported = false;
             if (running_) {
                 std::cout << "[NDIRecv] Disconnected from " << src_snap << "\n";
                 if (conn_cb_) conn_cb_(false, src_snap);
@@ -789,8 +795,27 @@ void NDIReceiver::recv_thread() {
             NDIlib_audio_frame_v3_t* audio_ptr = audio_enabled_ ? &audio_frame_storage : nullptr;
             NDIlib_metadata_frame_t metadata{};
 
+            // Take a waiting video frame before any audio. A capture that asks
+            // for both returned audio first for as long as audio was queued
+            // (measured on the SDK, 6.3.2), and every audio frame ends in a
+            // blocking ALSA write that runs at real time: after a stalled
+            // callback (the mode change for the first frame) the backlog never
+            // drained and video was starved for good (NI-18).
             NDIlib_frame_type_e frame_type = NDIlib_recv_capture_v3(
-                recv_, &video_frame, audio_ptr, &metadata, 50);
+                recv_, &video_frame, nullptr, &metadata, 0);
+            if (frame_type == NDIlib_frame_type_none)
+                frame_type = NDIlib_recv_capture_v3(
+                    recv_, &video_frame, audio_ptr, &metadata, 50);
+
+            if (stream_type_ == NDIStreamType::Unknown && was_connected && !no_video_reported &&
+                std::chrono::steady_clock::now() - connected_at >= std::chrono::seconds(3)) {
+                NDIlib_recv_queue_t queue = {};
+                NDIlib_recv_get_queue(recv_, &queue);
+                std::cout << "[NDIRecv] No video frame 3 s after the connection (queued video="
+                          << queue.video_frames << " audio=" << queue.audio_frames
+                          << "); audio-only source?\n";
+                no_video_reported = true;
+            }
 
             switch (frame_type) {
                 case NDIlib_frame_type_video: {

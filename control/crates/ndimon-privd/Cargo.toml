@@ -1,0 +1,63 @@
+[package]
+name = "ndimon-privd"
+description = "NDIMon-R privileged daemon: typed root actions, no paths or shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+harness = ["ndimon-netengine/harness", "ndimon-state/harness"]
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[[bin]]
+name = "ndimon-privd"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ndimon-render = { path = "../ndimon-render" }
+ndimon-types.workspace = true
+ndimon-netengine.workspace = true
+ndimon-state = { path = "../ndimon-state" }
+ndimon-privd-proto = { workspace = true, features = ["client"] }
+ndimon-release.workspace = true
+ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
+url = "2"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+listenfd = "1"
+nix = { version = "0.29", features = ["user", "fs"] }
+rustix = { version = "1", features = ["fs", "event"] }
+fs2 = "0.4"
+tempfile = "3"
+flate2 = "1"
+tar = "0.4"
+sha2 = "0.10"
+base64 = "0.22"
+
+# Debian payloads and native maintainer hooks are assembled by cargo xtask build-deb.
+
+[[bin]]
+name = "ndimon-net-harness"
+path = "src/bin/net_harness.rs"
+required-features = ["harness"]
+test = false
+bench = false

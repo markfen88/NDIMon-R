@@ -1,22 +1,35 @@
 [Unit]
 Description=NDIMon-R Source Finder
-After=network-online.target
+# Never stop restarting: the device must recover without an operator (the
+# former shell watchdog revived units that systemd had given up on).
+StartLimitIntervalSec=0
+Requires=ndimon-control.service ndimon-net-boot.service
+After=network-online.target ndimon-control.service ndimon-net-boot.service
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=ndimon
-Group=ndimon
+User=ndimon-finder
+Group=ndimon-finder
 Restart=always
 RestartSec=5
-ExecStart=/usr/local/bin/ndimon-finder
+ExecStart=/usr/bin/ndimon-finder
 Environment=LD_LIBRARY_PATH=/usr/local/lib
-Environment=HOME=/var/lib/ndimon
-Environment=NDI_CONFIG_DIR=/var/lib/ndimon/.ndi
-StateDirectory=ndimon
+Environment=HOME=/run/ndimon/finder
+Environment=NDI_CONFIG_DIR=/run/ndimon/ndi/finder/
+# Root copies only the boot settings the isolated finder needs. Later native
+# changes arrive through apply_config, never by granting the shared ndimon group.
+LoadCredential=receive-settings:/etc/ndimon-rx-settings.json
+LoadCredential=find-settings:/etc/ndimon-find-settings.json
+LoadCredential=ndi-config:/etc/ndi-config.json
+LoadCredential=ndi-group:/etc/ndi-group.json
+UMask=0022
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/tmp /var/lib/ndimon
+ReadWritePaths=/run/ndimon/finder /run/ndimon/ndi/finder /run/ndimon/ndi_src_find_param
+PrivateTmp=yes
+ProtectHome=yes
+InaccessiblePaths=/var/lib/ndimon /run/ndimon-control /run/ndimon-privd
 
 [Install]
 WantedBy=multi-user.target

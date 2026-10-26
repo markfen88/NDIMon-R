@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "AudioTiming.h"
 #include "DelayLine.h"
 #include "MixMatrix.h"
 #include "TimerMaster.h"
@@ -728,7 +729,9 @@ void AudioEngine::run() {
         auto *master = g->master >= 0 ? g->sinks[g->master].device.get() : nullptr;
         bool real =
             g->settings.engine.enabled && hdmi_present_ && master &&
-            master->wait_period(std::max(1, g->settings.engine.period_frames * 1000 / kRate));
+            // Two periods, rounded up: 512 frames is 10.67 ms, and a truncated
+            // 10 ms timeout made the HDMI master fall back to the timer.
+            master->wait_period(std::max(1, master_wait_ms(g->settings.engine.period_frames, kRate)));
         timer_active_ = !real;
         if (!real) {
             if (master && g->settings.engine.enabled && hdmi_present_)

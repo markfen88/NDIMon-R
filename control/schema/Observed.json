@@ -1,0 +1,589 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Observed",
+  "type": "object",
+  "properties": {
+    "revision": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "domains": {
+      "type": "object",
+      "properties": {
+        "audio": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "device": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "display": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "ndi": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "network": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "outputs": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "plugins": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "presets": {
+          "$ref": "#/$defs/DomainObserved"
+        },
+        "tessera": {
+          "$ref": "#/$defs/DomainObserved"
+        }
+      },
+      "additionalProperties": false
+    },
+    "drift": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Drift"
+      }
+    },
+    "network_pending": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PendingNetwork"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "revision",
+    "domains",
+    "drift"
+  ],
+  "$defs": {
+    "DomainObserved": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/SyncStatus"
+        },
+        "applied_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ]
+    },
+    "SyncStatus": {
+      "type": "string",
+      "enum": [
+        "in_sync",
+        "applying",
+        "pending_restart",
+        "pending_confirmation",
+        "failed",
+        "drift"
+      ]
+    },
+    "Drift": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/Domain"
+        },
+        "path": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "foreign": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selector": {
+          "type": "string"
+        },
+        "interface": {
+          "type": "string"
+        },
+        "neutralized": {
+          "type": "boolean"
+        },
+        "blocking": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "path"
+      ]
+    },
+    "Domain": {
+      "type": "string",
+      "enum": [
+        "device",
+        "outputs",
+        "ndi",
+        "audio",
+        "network",
+        "tessera",
+        "display",
+        "presets",
+        "plugins"
+      ]
+    },
+    "PendingNetwork": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/NetworkPhase"
+        },
+        "job_id": {
+          "type": "string",
+          "default": ""
+        },
+        "remaining_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "default": 0
+        },
+        "management_address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "ipv4",
+          "default": null
+        },
+        "management_port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 0
+        },
+        "confirm_policy": {
+          "$ref": "#/$defs/ConfirmPolicy",
+          "default": "token_only"
+        },
+        "recovery_pending": {
+          "type": "boolean",
+          "default": false
+        },
+        "apply_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "recovery_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiError"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "expires_at",
+        "phase"
+      ]
+    },
+    "NetworkPhase": {
+      "type": "string",
+      "enum": [
+        "staged",
+        "applying",
+        "applied",
+        "confirmed",
+        "reverting",
+        "reverted",
+        "expired",
+        "failed"
+      ]
+    },
+    "ConfirmPolicy": {
+      "type": "string",
+      "enum": [
+        "require_management_address",
+        "token_only"
+      ]
+    },
+    "ApiError": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "permission_denied",
+            "rate_limited",
+            "unauthorized",
+            "not_pending",
+            "expired",
+            "still_applying",
+            "token_mismatch",
+            "wrong_address"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "invalid": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/FieldError"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "field",
+                "reason",
+                "errors"
+              ]
+            }
+          },
+          "required": [
+            "invalid"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "locked": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "required": [
+            "locked"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "confirmation_required": {
+              "type": "object",
+              "properties": {
+                "impact": {
+                  "$ref": "#/$defs/Impact"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "impact"
+              ]
+            }
+          },
+          "required": [
+            "confirmation_required"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "revision_conflict": {
+              "type": "object",
+              "properties": {
+                "current_revision": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "current_revision"
+              ]
+            }
+          },
+          "required": [
+            "revision_conflict"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "drift": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "path"
+              ]
+            }
+          },
+          "required": [
+            "drift"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "not_found": {
+              "type": "object",
+              "properties": {
+                "what": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "what"
+              ]
+            }
+          },
+          "required": [
+            "not_found"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "unsupported": {
+              "type": "object",
+              "properties": {
+                "what": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "what"
+              ]
+            }
+          },
+          "required": [
+            "unsupported"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "apply_failed": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "$ref": "#/$defs/Domain"
+                },
+                "step": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "domain",
+                "step",
+                "reason"
+              ]
+            }
+          },
+          "required": [
+            "apply_failed"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "internal": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "internal"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "FieldError": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "reason"
+      ]
+    },
+    "Impact": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/ImpactScope"
+        },
+        "restarts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Service"
+          }
+        },
+        "interruptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Interruption"
+          }
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "token": {
+          "type": "string"
+        },
+        "counterpart": true
+      },
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "restarts",
+        "interruptions",
+        "lines",
+        "token"
+      ]
+    },
+    "ImpactScope": {
+      "type": "string",
+      "enum": [
+        "none",
+        "output",
+        "service",
+        "device",
+        "network",
+        "system"
+      ]
+    },
+    "Service": {
+      "type": "string",
+      "enum": [
+        "decoder",
+        "finder",
+        "control",
+        "watchdog",
+        "tessera"
+      ]
+    },
+    "Interruption": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "$ref": "#/$defs/Domain"
+        },
+        "target": {
+          "type": "string"
+        },
+        "expected_duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "target"
+      ]
+    }
+  }
+}

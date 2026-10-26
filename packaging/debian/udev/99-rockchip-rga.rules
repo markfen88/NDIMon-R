@@ -1,0 +1,2 @@
+# Newer kernels expose Rockchip RGA through V4L2; librga still opens /dev/rga.
+KERNEL=="video*", ATTRS{name}=="rockchip-rga", SYMLINK+="rga"

@@ -9,6 +9,7 @@
 
 struct IPCCommand {
     std::string action;
+    nlohmann::json config_request; // complete apply_config envelope
     std::string source_name;
     std::string source_ip;
     bool tally_program = false;

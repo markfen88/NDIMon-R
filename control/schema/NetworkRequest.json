@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NetworkRequest",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "expect_revision": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "profiles": {
+      "$ref": "#/$defs/NetworkProfiles"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "expect_revision",
+    "profiles"
+  ],
+  "$defs": {
+    "NetworkProfiles": {
+      "description": "None backend + empty interface/networks/assignments means not adopted.\nImport the effective wired configuration before the first network mutation.",
+      "type": "object",
+      "properties": {
+        "interface": {
+          "type": "string"
+        },
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkBackend"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NetworkProfile"
+          }
+        },
+        "roles": {
+          "$ref": "#/$defs/NetworkRoles"
+        },
+        "confirm_policy": {
+          "$ref": "#/$defs/ConfirmPolicy"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "interface",
+        "networks",
+        "roles",
+        "confirm_policy"
+      ]
+    },
+    "NetworkBackend": {
+      "type": "string",
+      "enum": [
+        "networkmanager",
+        "networkd",
+        "netplan",
+        "ifupdown"
+      ]
+    },
+    "NetworkProfile": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vlan_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "mode": {
+          "$ref": "#/$defs/AddressMode"
+        },
+        "address": {
+          "type": "string"
+        },
+        "prefix": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "gateway": {
+          "type": "string"
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns_search": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "mode",
+        "address",
+        "prefix",
+        "gateway",
+        "dns"
+      ]
+    },
+    "AddressMode": {
+      "type": "string",
+      "enum": [
+        "dhcp",
+        "static"
+      ]
+    },
+    "NetworkRoles": {
+      "type": "object",
+      "properties": {
+        "management": {
+          "type": "string"
+        },
+        "ndi": {
+          "type": "string"
+        },
+        "audio": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "management",
+        "ndi",
+        "audio"
+      ]
+    },
+    "ConfirmPolicy": {
+      "type": "string",
+      "enum": [
+        "require_management_address",
+        "token_only"
+      ]
+    }
+  }
+}

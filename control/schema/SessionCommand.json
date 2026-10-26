@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SessionCommand",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "logout"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "login": {
+          "type": "object",
+          "properties": {
+            "password": {
+              "$ref": "#/$defs/Password"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "password"
+          ]
+        }
+      },
+      "required": [
+        "login"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "change_password": {
+          "type": "object",
+          "properties": {
+            "current_password": {
+              "$ref": "#/$defs/Password"
+            },
+            "new_password": {
+              "$ref": "#/$defs/Password"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "current_password",
+            "new_password"
+          ]
+        }
+      },
+      "required": [
+        "change_password"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "Password": {
+      "description": "Authentication has separate handlers; credentials never enter state/commands,\nbackups, impact digests or events. A Debug implementation always redacts.",
+      "type": "string"
+    }
+  }
+}

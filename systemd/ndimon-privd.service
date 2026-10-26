@@ -1,0 +1,33 @@
+[Unit]
+Description=NDIMon-R typed privileged action daemon
+Requires=ndimon-privd.socket
+After=ndimon-privd.socket
+
+[Service]
+Type=simple
+# One descriptor per caller. The daemon identifies each by its bound path.
+Sockets=ndimon-privd.socket
+User=root
+Group=root
+ExecStart=/usr/libexec/ndimon/ndimon-privd
+Environment=RUST_LOG=info
+Environment=NDIMON_PRIVD_IDLE_SECONDS=60
+StandardOutput=journal
+StandardError=journal
+UMask=0022
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc /run/ndimon /var/lib/ndimon /opt/ndimon-r/plugins /var/lib/ndimon-network /var/lib/ndimon-updates -/sys/devices/system/cpu/cpufreq
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Files and metadata; reboot fallback; native network probes and nft ownership.
+# System-manager jobs have independent privilege and mount namespaces.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SYS_BOOT CAP_NET_RAW CAP_NET_ADMIN
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
+TimeoutStopSec=15

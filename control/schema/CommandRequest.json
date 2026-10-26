@@ -1,0 +1,2703 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommandRequest",
+  "type": "object",
+  "properties": {
+    "command": {
+      "$ref": "#/$defs/Command"
+    },
+    "expect_revision": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0
+    },
+    "expect_impact": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "confirm": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "command"
+  ],
+  "$defs": {
+    "Command": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "refresh_ndi",
+            "reset_ndi_discovery",
+            "rollback_network",
+            "prepare_network_handoff",
+            "reset_plugin_state",
+            "reboot",
+            "restart_stack",
+            "reload_config"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_device": {
+              "$ref": "#/$defs/DevicePatch"
+            }
+          },
+          "required": [
+            "set_device"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "select_source": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "source": {
+                  "$ref": "#/$defs/NdiSourceRef"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output",
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "select_source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "forget_source": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output"
+              ]
+            }
+          },
+          "required": [
+            "forget_source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reconnect_source": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output"
+              ]
+            }
+          },
+          "required": [
+            "reconnect_source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Transient recovery endpoint; never replaces the saved source selection.",
+          "type": "object",
+          "properties": {
+            "retry_source": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "source": {
+                  "$ref": "#/$defs/NdiSourceRef"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output",
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "retry_source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Atomic legacy decode setup / restore across shared decoder-file fields.",
+          "type": "object",
+          "properties": {
+            "put_output_settings": {
+              "type": "object",
+              "properties": {
+                "outputs": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^\\d+$": {
+                      "$ref": "#/$defs/Output"
+                    }
+                  }
+                },
+                "ndi": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Ndi"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "audio_enabled": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "patternProperties": {
+                    "^\\d+$": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "outputs",
+                "audio_enabled"
+              ]
+            }
+          },
+          "required": [
+            "put_output_settings"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_output_alias": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "alias": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output",
+                "alias"
+              ]
+            }
+          },
+          "required": [
+            "set_output_alias"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_output_video": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "video": {
+                  "$ref": "#/$defs/OutputVideo"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output",
+                "video"
+              ]
+            }
+          },
+          "required": [
+            "set_output_video"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_screen_saver": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "screensaver": {
+                  "$ref": "#/$defs/ScreenSaver"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output",
+                "screensaver"
+              ]
+            }
+          },
+          "required": [
+            "set_screen_saver"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_ndi": {
+              "$ref": "#/$defs/Ndi"
+            }
+          },
+          "required": [
+            "set_ndi"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "capture_frame": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output"
+              ]
+            }
+          },
+          "required": [
+            "capture_frame"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_audio_engine": {
+              "type": "object",
+              "properties": {
+                "engine": {
+                  "$ref": "#/$defs/AudioEngine"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "engine"
+              ]
+            }
+          },
+          "required": [
+            "set_audio_engine"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "put_audio": {
+              "$ref": "#/$defs/Audio"
+            }
+          },
+          "required": [
+            "put_audio"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "put_output_audio": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "audio": {
+                  "$ref": "#/$defs/OutputAudio"
+                },
+                "normalize_matrix": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output",
+                "audio",
+                "normalize_matrix"
+              ]
+            }
+          },
+          "required": [
+            "put_output_audio"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "put_audio_source": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "source": {
+                  "$ref": "#/$defs/AudioSource"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "put_audio_source"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "put_audio_sink": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "sink": {
+                  "$ref": "#/$defs/AudioSink"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sink"
+              ]
+            }
+          },
+          "required": [
+            "put_audio_sink"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "remove_audio_endpoints": {
+              "type": "object",
+              "properties": {
+                "ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "ids"
+              ]
+            }
+          },
+          "required": [
+            "remove_audio_endpoints"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "stage_network": {
+              "type": "object",
+              "properties": {
+                "profiles": {
+                  "$ref": "#/$defs/NetworkProfiles"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "profiles"
+              ]
+            }
+          },
+          "required": [
+            "stage_network"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "confirm_network": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "token"
+              ]
+            }
+          },
+          "required": [
+            "confirm_network"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "revert_network": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "token"
+              ]
+            }
+          },
+          "required": [
+            "revert_network"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The way out of a network recovery that cannot finish: stop retrying and\nkeep the network as it is now (NI-17).",
+          "type": "string",
+          "const": "accept_network_recovery"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cancel_network_handoff": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "id"
+              ]
+            }
+          },
+          "required": [
+            "cancel_network_handoff"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "import_network_handoff": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/NetworkHandoff"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "import_network_handoff"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "commit_network_handoff": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/NetworkHandoff"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "commit_network_handoff"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_tessera": {
+              "$ref": "#/$defs/Tessera"
+            }
+          },
+          "required": [
+            "set_tessera"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "tessera_service": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "$ref": "#/$defs/TesseraServiceAction"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "action"
+              ]
+            }
+          },
+          "required": [
+            "tessera_service"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Atomic Tessera backup restore, including its legacy audio projection.",
+          "type": "object",
+          "properties": {
+            "restore_tessera": {
+              "type": "object",
+              "properties": {
+                "tessera": {
+                  "$ref": "#/$defs/Tessera"
+                },
+                "audio": {
+                  "$ref": "#/$defs/Audio"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "tessera",
+                "audio"
+              ]
+            }
+          },
+          "required": [
+            "restore_tessera"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "put_tessera_flows": {
+              "type": "object",
+              "properties": {
+                "flows": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/TesseraFlow"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "flows"
+              ]
+            }
+          },
+          "required": [
+            "put_tessera_flows"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_tessera_label": {
+              "type": "object",
+              "properties": {
+                "direction": {
+                  "$ref": "#/$defs/Direction"
+                },
+                "channel": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                },
+                "label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "direction",
+                "channel"
+              ]
+            }
+          },
+          "required": [
+            "set_tessera_label"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_display": {
+              "$ref": "#/$defs/Display"
+            }
+          },
+          "required": [
+            "set_display"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "preview_splash": {
+              "type": "object",
+              "properties": {
+                "source_available": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "source_available"
+              ]
+            }
+          },
+          "required": [
+            "preview_splash"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_logo": {
+              "type": "object",
+              "properties": {
+                "asset": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AssetRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "set_logo"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "save_preset": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "preset": {
+                  "$ref": "#/$defs/Preset"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "preset"
+              ]
+            }
+          },
+          "required": [
+            "save_preset"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "recall_preset": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "output"
+              ]
+            }
+          },
+          "required": [
+            "recall_preset"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "delete_preset": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "delete_preset"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "import_backup": {
+              "type": "object",
+              "properties": {
+                "document": {
+                  "$ref": "#/$defs/BackupDocument"
+                },
+                "scope": {
+                  "$ref": "#/$defs/RestoreScope"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "document",
+                "scope"
+              ]
+            }
+          },
+          "required": [
+            "import_backup"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "undo_restore": {
+              "type": "object",
+              "properties": {
+                "snapshot": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "snapshot"
+              ]
+            }
+          },
+          "required": [
+            "undo_restore"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "install_plugin": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "archive": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "enable": {
+                  "type": "boolean"
+                },
+                "force": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "archive",
+                "version",
+                "enable",
+                "force"
+              ]
+            }
+          },
+          "required": [
+            "install_plugin"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "update_plugin": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "archive": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "enable": {
+                  "type": "boolean"
+                },
+                "force": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "archive",
+                "version",
+                "enable",
+                "force"
+              ]
+            }
+          },
+          "required": [
+            "update_plugin"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "set_plugin_enabled": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "default": null
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "enabled"
+              ]
+            }
+          },
+          "required": [
+            "set_plugin_enabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "remove_plugin": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "purge": {
+                  "type": "boolean"
+                },
+                "force": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "purge",
+                "force"
+              ]
+            }
+          },
+          "required": [
+            "remove_plugin"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cancel_plugin_job": {
+              "type": "object",
+              "properties": {
+                "job": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "job"
+              ]
+            }
+          },
+          "required": [
+            "cancel_plugin_job"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A complete plugin-owned subtree, validated against its installed manifest.",
+          "type": "object",
+          "properties": {
+            "set_plugin_data": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "state"
+              ]
+            }
+          },
+          "required": [
+            "set_plugin_data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Typed out-of-process plugin action; no paths or executable arguments.",
+          "type": "object",
+          "properties": {
+            "plugin_action": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "action",
+                "fields"
+              ]
+            }
+          },
+          "required": [
+            "plugin_action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "service_control": {
+              "type": "object",
+              "properties": {
+                "service": {
+                  "$ref": "#/$defs/Service"
+                },
+                "action": {
+                  "$ref": "#/$defs/ServiceAction"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "service",
+                "action"
+              ]
+            }
+          },
+          "required": [
+            "service_control"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "install_update": {
+              "type": "object",
+              "properties": {
+                "package": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AssetRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "force": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "install_update"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "DevicePatch": {
+      "type": "object",
+      "properties": {
+        "hostname": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ndi_alias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decode_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecodeMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "watchdog_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchdogMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ntp_server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reboot_schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RebootSchedule"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "about": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/About"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "analog_audio_in_gain": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "analog_audio_out_gain": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "plugin_feeds": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_insecure_feeds": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "web_allowed_hosts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OperationMode": {
+      "type": "string",
+      "enum": [
+        "decode",
+        "encode"
+      ]
+    },
+    "DecodeMode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "hardware",
+        "software"
+      ]
+    },
+    "WatchdogMode": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "passive",
+        "active"
+      ]
+    },
+    "RebootSchedule": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "time": {
+          "type": "string"
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Weekday"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "time",
+        "days"
+      ]
+    },
+    "Weekday": {
+      "type": "string",
+      "enum": [
+        "sun",
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat"
+      ]
+    },
+    "About": {
+      "type": "object",
+      "properties": {
+        "group_name": {
+          "type": "string"
+        },
+        "mac_address": {
+          "type": "string"
+        },
+        "device_name": {
+          "type": "string"
+        },
+        "host_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "group_name",
+        "mac_address",
+        "device_name",
+        "host_name"
+      ]
+    },
+    "NdiSourceRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "endpoint"
+      ]
+    },
+    "Output": {
+      "type": "object",
+      "properties": {
+        "alias": {
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NdiSourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "video": {
+          "$ref": "#/$defs/OutputVideo"
+        },
+        "screensaver": {
+          "$ref": "#/$defs/ScreenSaver"
+        },
+        "source_selection": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "alias",
+        "video",
+        "screensaver",
+        "source_selection"
+      ]
+    },
+    "OutputVideo": {
+      "type": "object",
+      "properties": {
+        "resolution": {
+          "$ref": "#/$defs/Resolution"
+        },
+        "scale_mode": {
+          "$ref": "#/$defs/ScaleMode"
+        },
+        "rotation": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "resolution",
+        "scale_mode",
+        "rotation"
+      ]
+    },
+    "Resolution": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "height": {
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "refresh_hz": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "width",
+                "height",
+                "refresh_hz"
+              ]
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ScaleMode": {
+      "type": "string",
+      "enum": [
+        "letterbox",
+        "stretch",
+        "crop"
+      ]
+    },
+    "ScreenSaver": {
+      "type": "string",
+      "enum": [
+        "splash",
+        "black",
+        "capture"
+      ]
+    },
+    "Ndi": {
+      "type": "object",
+      "properties": {
+        "receive": {
+          "$ref": "#/$defs/Transport"
+        },
+        "discovery_servers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "off_subnet_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tally": {
+          "$ref": "#/$defs/TallyMode"
+        },
+        "color_space": {
+          "$ref": "#/$defs/ColorSpace"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "receive",
+        "discovery_servers",
+        "groups",
+        "off_subnet_sources",
+        "tally",
+        "color_space"
+      ]
+    },
+    "Transport": {
+      "type": "string",
+      "enum": [
+        "rudp",
+        "multicast",
+        "multi_tcp",
+        "udp",
+        "tcp"
+      ]
+    },
+    "TallyMode": {
+      "type": "string",
+      "enum": [
+        "on",
+        "off",
+        "video"
+      ]
+    },
+    "ColorSpace": {
+      "type": "string",
+      "enum": [
+        "yuv",
+        "rgb"
+      ]
+    },
+    "AudioEngine": {
+      "type": "string",
+      "enum": [
+        "v1",
+        "v2"
+      ]
+    },
+    "Audio": {
+      "description": "One graph for both engines. Node gain/delay/mix retain v1 factorization,\nincluding inactive settings; v2 routes are the concrete runtime authority.",
+      "type": "object",
+      "properties": {
+        "engine": {
+          "$ref": "#/$defs/AudioEngine"
+        },
+        "settings": {
+          "$ref": "#/$defs/AudioEngineSettings"
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AudioSource"
+          }
+        },
+        "sinks": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AudioSink"
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/OutputAudio"
+            }
+          }
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AudioRoute"
+          }
+        },
+        "video_delay_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "settings",
+        "sources",
+        "sinks",
+        "outputs",
+        "routes",
+        "video_delay_ms"
+      ]
+    },
+    "AudioEngineSettings": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "rate": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "period_frames": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "master": {
+          "type": "string"
+        },
+        "memory_budget_mib": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "rate",
+        "period_frames",
+        "master",
+        "memory_budget_mib"
+      ]
+    },
+    "AudioSource": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EndpointType"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "channels": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "output": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "alsa_pcm": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "channel_start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "channel_count": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "gain_db": {
+          "type": "number",
+          "format": "double"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "enabled",
+        "channels",
+        "endpoint",
+        "resource",
+        "channel_start",
+        "channel_count",
+        "gain_db",
+        "delay_ms"
+      ]
+    },
+    "EndpointType": {
+      "type": "string",
+      "enum": [
+        "ndi",
+        "alsa"
+      ]
+    },
+    "AudioSink": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "channels": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "alsa_pcm": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "channel_start": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "channel_count": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "delay_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "channels",
+        "alsa_pcm",
+        "endpoint",
+        "resource",
+        "channel_start",
+        "channel_count",
+        "delay_ms",
+        "mix"
+      ]
+    },
+    "OutputAudio": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "primary": {
+          "type": "boolean"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AudioInput"
+          }
+        },
+        "destinations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AudioDestination"
+          }
+        },
+        "legacy_matrix": {
+          "type": "boolean"
+        },
+        "definitions": {
+          "$ref": "#/$defs/AudioDefinitions"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "primary",
+        "inputs",
+        "destinations",
+        "legacy_matrix",
+        "definitions"
+      ]
+    },
+    "AudioInput": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "gain_db": {
+          "type": "number",
+          "format": "double"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "gain_db",
+        "delay_ms"
+      ]
+    },
+    "AudioDestination": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "delay_ms"
+      ]
+    },
+    "AudioDefinitions": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AudioSource"
+          }
+        },
+        "sinks": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/AudioSink"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sources",
+        "sinks"
+      ]
+    },
+    "AudioRoute": {
+      "type": "object",
+      "properties": {
+        "output": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "source": {
+          "type": "string"
+        },
+        "sink": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "gain_db": {
+          "type": "number",
+          "format": "double"
+        },
+        "delay_ms": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mapping": {
+          "$ref": "#/$defs/Mapping"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "output",
+        "source",
+        "sink",
+        "enabled",
+        "gain_db",
+        "delay_ms",
+        "mapping"
+      ]
+    },
+    "Mapping": {
+      "type": "string",
+      "enum": [
+        "default"
+      ]
+    },
+    "NetworkProfiles": {
+      "description": "None backend + empty interface/networks/assignments means not adopted.\nImport the effective wired configuration before the first network mutation.",
+      "type": "object",
+      "properties": {
+        "interface": {
+          "type": "string"
+        },
+        "backend": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NetworkBackend"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NetworkProfile"
+          }
+        },
+        "roles": {
+          "$ref": "#/$defs/NetworkRoles"
+        },
+        "confirm_policy": {
+          "$ref": "#/$defs/ConfirmPolicy"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "interface",
+        "networks",
+        "roles",
+        "confirm_policy"
+      ]
+    },
+    "NetworkBackend": {
+      "type": "string",
+      "enum": [
+        "networkmanager",
+        "networkd",
+        "netplan",
+        "ifupdown"
+      ]
+    },
+    "NetworkProfile": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "vlan_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "mode": {
+          "$ref": "#/$defs/AddressMode"
+        },
+        "address": {
+          "type": "string"
+        },
+        "prefix": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "gateway": {
+          "type": "string"
+        },
+        "dns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dns_search": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "mode",
+        "address",
+        "prefix",
+        "gateway",
+        "dns"
+      ]
+    },
+    "AddressMode": {
+      "type": "string",
+      "enum": [
+        "dhcp",
+        "static"
+      ]
+    },
+    "NetworkRoles": {
+      "type": "object",
+      "properties": {
+        "management": {
+          "type": "string"
+        },
+        "ndi": {
+          "type": "string"
+        },
+        "audio": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "management",
+        "ndi",
+        "audio"
+      ]
+    },
+    "ConfirmPolicy": {
+      "type": "string",
+      "enum": [
+        "require_management_address",
+        "token_only"
+      ]
+    },
+    "NetworkHandoff": {
+      "type": "object",
+      "properties": {
+        "product": {
+          "$ref": "#/$defs/NetworkProduct"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "id"
+      ]
+    },
+    "NetworkProduct": {
+      "description": "NE-9: peer locations are fixed by product, never supplied filesystem paths.",
+      "type": "string",
+      "enum": [
+        "ndimon",
+        "tessera"
+      ]
+    },
+    "Tessera": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "device": {
+          "$ref": "#/$defs/TesseraDevice"
+        },
+        "clock": {
+          "$ref": "#/$defs/TesseraClock"
+        },
+        "flows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TesseraFlow"
+          }
+        },
+        "locks": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "network_binding": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "protocol_flow_lock": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "device",
+        "clock",
+        "flows",
+        "locks"
+      ]
+    },
+    "TesseraDevice": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "encoding": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "latency_us": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rx_channels": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "tx_channels": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "rx_labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "string"
+            }
+          }
+        },
+        "tx_labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "string"
+            }
+          }
+        },
+        "advertise_devices": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sample_rate",
+        "encoding",
+        "latency_us",
+        "rx_channels",
+        "tx_channels",
+        "rx_labels",
+        "tx_labels",
+        "advertise_devices"
+      ]
+    },
+    "TesseraClock": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ClockRole"
+        },
+        "priority": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "priority"
+      ]
+    },
+    "ClockRole": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "follower",
+        "leader"
+      ]
+    },
+    "TesseraFlow": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "peer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "any_source": {
+          "type": "boolean"
+        },
+        "frames_per_packet": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "direction",
+        "port",
+        "any_source"
+      ]
+    },
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "rx",
+        "tx"
+      ]
+    },
+    "TesseraServiceAction": {
+      "type": "string",
+      "enum": [
+        "start",
+        "stop",
+        "restart",
+        "reload"
+      ]
+    },
+    "Display": {
+      "type": "object",
+      "properties": {
+        "splash": {
+          "$ref": "#/$defs/Splash"
+        },
+        "osd": {
+          "$ref": "#/$defs/Osd"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "splash",
+        "osd"
+      ]
+    },
+    "Splash": {
+      "type": "object",
+      "properties": {
+        "bg_idle": {
+          "type": "string"
+        },
+        "bg_live": {
+          "type": "string"
+        },
+        "accent_idle": {
+          "type": "string"
+        },
+        "accent_live": {
+          "type": "string"
+        },
+        "logo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AssetRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logo_x_pct": {
+          "type": "number",
+          "format": "double"
+        },
+        "logo_y_pct": {
+          "type": "number",
+          "format": "double"
+        },
+        "logo_w_pct": {
+          "type": "number",
+          "format": "double"
+        },
+        "text_idle": {
+          "type": "string"
+        },
+        "text_live": {
+          "type": "string"
+        },
+        "text_height_pct": {
+          "type": "number",
+          "format": "double"
+        },
+        "backdrop": {
+          "$ref": "#/$defs/Backdrop"
+        },
+        "show_signal_text": {
+          "type": "boolean"
+        },
+        "show_device_name": {
+          "type": "boolean"
+        },
+        "show_device_url": {
+          "type": "boolean"
+        },
+        "show_sources_available": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "bg_idle",
+        "bg_live",
+        "accent_idle",
+        "accent_live",
+        "logo_x_pct",
+        "logo_y_pct",
+        "logo_w_pct",
+        "text_idle",
+        "text_live",
+        "text_height_pct",
+        "backdrop",
+        "show_signal_text",
+        "show_device_name",
+        "show_device_url",
+        "show_sources_available"
+      ]
+    },
+    "AssetRef": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "media_type"
+      ]
+    },
+    "Backdrop": {
+      "type": "string",
+      "enum": [
+        "gradient",
+        "flat"
+      ]
+    },
+    "Osd": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "text"
+      ]
+    },
+    "Preset": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/NdiSourceRef"
+        },
+        "position": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ]
+    },
+    "BackupDocument": {
+      "type": "object",
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/DesiredState"
+        },
+        "assets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AssetRef"
+          }
+        },
+        "legacy_sections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "legacy_fingerprint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "document",
+        "assets"
+      ]
+    },
+    "DesiredState": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "device": {
+          "$ref": "#/$defs/Device"
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/Output"
+            }
+          }
+        },
+        "ndi": {
+          "$ref": "#/$defs/Ndi"
+        },
+        "audio": {
+          "$ref": "#/$defs/Audio"
+        },
+        "network": {
+          "$ref": "#/$defs/NetworkProfiles"
+        },
+        "tessera": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tessera"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "display": {
+          "$ref": "#/$defs/Display"
+        },
+        "presets": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Preset"
+          }
+        },
+        "plugins": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/PluginState"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "revision",
+        "device",
+        "outputs",
+        "ndi",
+        "audio",
+        "network",
+        "display",
+        "presets",
+        "plugins"
+      ]
+    },
+    "Device": {
+      "type": "object",
+      "properties": {
+        "hostname": {
+          "type": "string"
+        },
+        "ndi_alias": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/OperationMode"
+        },
+        "decode_mode": {
+          "$ref": "#/$defs/DecodeMode"
+        },
+        "watchdog_mode": {
+          "$ref": "#/$defs/WatchdogMode"
+        },
+        "ntp_server": {
+          "type": "string"
+        },
+        "reboot_schedule": {
+          "$ref": "#/$defs/RebootSchedule"
+        },
+        "about": {
+          "$ref": "#/$defs/About"
+        },
+        "analog_audio_in_gain": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "analog_audio_out_gain": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "plugin_feeds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_insecure_feeds": {
+          "type": "boolean"
+        },
+        "web_allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "hostname",
+        "ndi_alias",
+        "mode",
+        "decode_mode",
+        "watchdog_mode",
+        "ntp_server",
+        "reboot_schedule",
+        "about",
+        "analog_audio_in_gain",
+        "analog_audio_out_gain",
+        "plugin_feeds",
+        "allow_insecure_feeds"
+      ]
+    },
+    "PluginState": {
+      "type": "object",
+      "properties": {
+        "installed": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        },
+        "state": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "installed",
+        "enabled",
+        "version"
+      ]
+    },
+    "RestoreScope": {
+      "type": "string",
+      "enum": [
+        "all",
+        "settings",
+        "sources",
+        "audio",
+        "network",
+        "display",
+        "plugins"
+      ]
+    },
+    "Service": {
+      "type": "string",
+      "enum": [
+        "decoder",
+        "finder",
+        "control",
+        "watchdog",
+        "tessera"
+      ]
+    },
+    "ServiceAction": {
+      "type": "string",
+      "enum": [
+        "start",
+        "stop",
+        "restart",
+        "reload"
+      ]
+    }
+  }
+}

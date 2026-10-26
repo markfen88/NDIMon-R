@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PluginBackupExport",
+  "type": "object",
+  "properties": {
+    "plugins": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/PluginBackupSection"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "plugins",
+    "warnings"
+  ],
+  "$defs": {
+    "PluginBackupSection": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "data"
+      ]
+    }
+  }
+}

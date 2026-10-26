@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(NDIMon-R VERSION 1.3.0 LANGUAGES CXX C)
+project(NDIMon-R VERSION 1.4.0 LANGUAGES CXX C)
+
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "Installation prefix" FORCE)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,8 +51,9 @@ endif()
 # NEON software color conversion is used instead.
 
 # NDI SDK (manually specified)
-set(NDI_INCLUDE_DIR "/usr/local/include")
-set(NDI_LIB_DIR     "/usr/local/lib")
+set(NDI_INCLUDE_DIR "/usr/local/include" CACHE PATH "NDI SDK headers")
+set(NDI_LIB_DIR     "/usr/local/lib" CACHE PATH "NDI SDK libraries")
+set(CMAKE_SKIP_BUILD_RPATH TRUE)
 find_library(NDI_LIBRARY NAMES ndi PATHS ${NDI_LIB_DIR} REQUIRED)
 
 # Rockchip MPP (optional)
@@ -185,7 +190,7 @@ endif()
 message(STATUS "Color conversion: NEON software (RGA removed — mainline kernel incompatible)")
 
 # --- Decoder executable ---
-add_executable(ndimon-r ${DECODER_SOURCES})
+add_executable(ndimon-r ${DECODER_SOURCES} src/FollowerConfig.cpp)
 
 target_include_directories(ndimon-r PRIVATE ${DECODER_INCLUDES})
 target_link_libraries(ndimon-r PRIVATE ${DECODER_LIBS} nlohmann_json::nlohmann_json)
@@ -195,7 +200,7 @@ foreach(def ${DECODER_DEFINES})
 endforeach()
 
 # --- Finder executable ---
-add_executable(ndimon-finder finder/main.cpp)
+add_executable(ndimon-finder finder/main.cpp src/FollowerConfig.cpp src/audio/AudioSettings.cpp)
 
 target_include_directories(ndimon-finder PRIVATE
     ${NDI_INCLUDE_DIR}
@@ -215,15 +220,15 @@ endif()
 
 # --- Install ---
 install(TARGETS ndimon-r ndimon-finder
-    RUNTIME DESTINATION /usr/local/bin
+    RUNTIME DESTINATION bin
 )
 # Splash / OSD typeface (Inter, SIL OFL). The decoder falls back to its embedded
 # bitmap font when these are missing, so an old install still draws a splash.
 install(FILES fonts/Inter-Regular.ttf fonts/Inter-SemiBold.ttf fonts/LICENSE-Inter.txt
-    DESTINATION /usr/local/share/ndimon/fonts
+    DESTINATION share/ndimon/fonts
 )
 # Config files are intentionally NOT installed by cmake.
-# install.sh handles first-time config installation with "skip if exists"
+# Native package lifecycle hooks fill missing defaults and preserve saved config.
 # semantics so user settings are never overwritten on update.
 
 message(STATUS "")

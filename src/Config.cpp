@@ -1,4 +1,6 @@
 #include "Config.h"
+#include "FollowerConfig.h"
+#include <optional>
 #include <fstream>
 #include <iostream>
 #include <cstdio>
@@ -13,7 +15,6 @@ static const char* DEC1_SETTINGS    = "/etc/ndimon-dec1-settings.json";
 static const char* SPLASH_SETTINGS  = "/etc/ndimon-splash-settings.json";
 static const char* RX_SETTINGS      = "/etc/ndimon-rx-settings.json";
 static const char* FIND_SETTINGS    = "/etc/ndimon-find-settings.json";
-static const char* NDI_SRC          = "/var/lib/ndimon/ndimon-sources.json";
 static const char* DEVICE_SETTINGS  = "/etc/ndimon-device-settings.json";
 static const char* NDI_CONFIG       = "/etc/ndi-config.json";
 static const char* NDI_GROUP        = "/etc/ndi-group.json";
@@ -64,62 +65,68 @@ void Config::load() {
     std::lock_guard<std::mutex> lk(mutex_);
     // Disk source-of-truth changed — drop per-output cache so next get_output
     // re-reads from disk.
-    output_cache_.clear();
+    if (!followed_.count("outputs")) output_cache_.clear();
 
     // Decoder settings (ch1 / legacy)
-    auto dec = read_json(DEC1_SETTINGS);
+    auto dec = followed_.count("outputs") && followed_.count("ndi") && followed_.count("audio")
+        ? nlohmann::json{} : read_json(DEC1_SETTINGS);
     if (!dec.empty() && dec.is_object()) {
-        decoder.ch_num           = dec.value("ChNum", 1);
-        decoder.ndi_audio        = dec.value("NDIAudio", "NDIAudioEn");
-        decoder.screensaver_mode = dec.value("ScreenSaverMode", "BlackSS");
-        decoder.tally_mode       = dec.value("TallyMode", "TallyOff");
-        decoder.color_space      = dec.value("ColorSpace", "YUV");
-        decoder.source_selection = dec.value("SourceSelection", "NDI");
-        connected_source_name    = dec.value("SourceName", "");
-        connected_source_ip      = dec.value("SourceIP", "");
+        if (!followed_.count("audio")) decoder.ndi_audio = dec.value("NDIAudio", "NDIAudioEn");
+        if (!followed_.count("outputs")) {
+            decoder.ch_num           = dec.value("ChNum", 1);
+            decoder.screensaver_mode = dec.value("ScreenSaverMode", "BlackSS");
+            decoder.source_selection = dec.value("SourceSelection", "NDI");
+            connected_source_name    = dec.value("SourceName", "");
+            connected_source_ip      = dec.value("SourceIP", "");
+        }
+        if (!followed_.count("ndi")) {
+            decoder.tally_mode = dec.value("TallyMode", "TallyOff");
+            decoder.color_space = dec.value("ColorSpace", "YUV");
+        }
     }
 
     // Transport
-    auto rx = read_json(RX_SETTINGS);
+    auto rx = followed_.count("ndi") ? nlohmann::json{} : read_json(RX_SETTINGS);
     if (!rx.empty() && rx.is_object()) {
         transport.rxpm = rx.value("Rxpm", std::string("RUDP"));
     }
 
     // Finder / discovery server
-    auto find = read_json(FIND_SETTINGS);
+    auto find = followed_.count("ndi") ? nlohmann::json{} : read_json(FIND_SETTINGS);
     if (!find.empty() && find.is_object()) {
         finder.discovery_server_mode = find.value("NDIDisServ", "NDIDisServDis");
         finder.discovery_server_ip   = find.value("NDIDisServIP", "");
     }
 
     // Device
-    auto dev = read_json(DEVICE_SETTINGS);
+    auto dev = followed_.count("device") && followed_.count("audio") ? nlohmann::json{} : read_json(DEVICE_SETTINGS);
     if (!dev.empty() && dev.is_object()) {
-        device.mode          = dev.value("mode", "decode");
-        device.video_output  = dev.value("videooutput", "hdmi");
-        device.ndi_recv_name = dev.value("ndi_recv_name", "");
-        device.audio_engine = dev.value("audio_engine", "v1");
-        if (device.audio_engine != "v2") device.audio_engine = "v1";
-        device.decode_mode   = dev.value("decode_mode", "auto");
+        if (!followed_.count("device")) {
+            device.mode          = dev.value("mode", "decode");
+            device.video_output  = dev.value("videooutput", "hdmi");
+            device.ndi_recv_name = dev.value("ndi_recv_name", "");
+            device.decode_mode   = dev.value("decode_mode", "auto");
+        }
+        if (!followed_.count("audio")) {
+            device.audio_engine = dev.value("audio_engine", "v1");
+            if (device.audio_engine != "v2") device.audio_engine = "v1";
+        }
     }
 
     // NDI groups
-    auto grp = read_json(NDI_GROUP);
+    auto grp = followed_.count("ndi") ? nlohmann::json{} : read_json(NDI_GROUP);
     if (!grp.empty() && grp.is_object()) {
         ndi_group.groups = grp.value("ndi_groups", "public");
     }
 
     // Off-subnet IPs
-    auto cfg = read_json(NDI_CONFIG);
+    auto cfg = followed_.count("ndi") ? nlohmann::json{} : read_json(NDI_CONFIG);
     if (!cfg.empty() && cfg.is_string()) {
         off_subnet_ips = cfg.get<std::string>();
     }
 
-    // Current source (from src json) — informational only
-    (void)read_json(NDI_SRC);
-
     // Splash screen config
-    auto sp = read_json(SPLASH_SETTINGS);
+    auto sp = followed_.count("display") ? nlohmann::json{} : read_json(SPLASH_SETTINGS);
     if (!sp.empty() && sp.is_object()) {
         splash.bg_idle    = sp.value("bg_idle",    "#0D1B2A");
         splash.bg_live    = sp.value("bg_live",    "#0D2B1A");
@@ -141,7 +148,7 @@ void Config::load() {
     }
 
     // OSD config
-    auto od = read_json(OSD_SETTINGS);
+    auto od = followed_.count("display") ? nlohmann::json{} : read_json(OSD_SETTINGS);
     if (!od.empty() && od.is_object()) {
         osd.enabled = od.value("enabled", false);
         osd.text    = od.value("text",    "");
@@ -150,8 +157,9 @@ void Config::load() {
 
 void Config::save_device() {
     std::lock_guard<std::mutex> lk(mutex_);
+    if (followed_.count("device")) return;
     // Only persist device-level settings that the C++ side owns.
-    // All other config files are owned by the Node.js API.
+    // All other config files are owned by ndimon-control.
     auto j = read_json(DEVICE_SETTINGS);
     if (j.empty()) j = nlohmann::json::object();
     j["mode"]          = device.mode;
@@ -170,6 +178,7 @@ OutputConfig Config::get_output(int ch_num) const {
     if (it != output_cache_.end()) return it->second;
 
     OutputConfig out;
+    if (followed_.count("outputs")) return out;
     auto j = read_json(settings_path(ch_num));
     if (!j.empty() && j.is_object()) {
         out.preferred_mode = j.value("videooutput", "");
@@ -201,6 +210,9 @@ std::string Config::runtime_ip() const {
 
 void Config::set_output(int ch_num, const OutputConfig& out) {
     std::lock_guard<std::mutex> lk(mutex_);
+    // The control plane owns desired selections/modes after handover. Runtime
+    // observations (DS routing, unsupported rotation) must not rewrite them.
+    if (followed_.count("outputs")) return;
 
     // Read existing JSON to preserve other fields
     std::string path = settings_path(ch_num);
@@ -222,5 +234,102 @@ void Config::set_output(int ch_num, const OutputConfig& out) {
         connected_source_name = out.source_name;
         connected_source_ip   = out.source_ip;
         device.video_output   = out.preferred_mode;
+    }
+}
+
+nlohmann::json Config::applied_revision() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return revision_.status();
+}
+
+nlohmann::json Config::follower_snapshot() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return {{"action", "apply_config"}, {"revision", revision_.value}, {"config", followed_config_}};
+}
+
+bool Config::follows(const std::string& domain) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return followed_.count(domain) != 0;
+}
+
+ndimon::audio::AudioSettings Config::audio_settings(std::string* error) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (followed_.count("audio")) {
+        if (error) error->clear();
+        return audio_settings_;
+    }
+    return ndimon::audio::AudioSettings::load("/etc/ndimon-audio-settings.json", error);
+}
+
+nlohmann::json Config::apply_config(const nlohmann::json& request, AudioApply apply_audio) {
+    using nlohmann::json;
+    std::lock_guard<std::mutex> lk(mutex_);
+    try {
+        const uint64_t next = revision_.check(request);
+        const auto& config = request.at("config");
+        if (!config.is_object() || config.empty())
+            return follower::failure("config: expected non-empty domain object");
+        std::optional<DeviceConfig> dev;
+        std::optional<std::unordered_map<int, OutputConfig>> outputs;
+        std::optional<follower::NdiConfig> ndi;
+        std::optional<follower::AudioConfig> audio;
+        std::optional<follower::DisplayConfig> display;
+        std::optional<ndisdk::NetworkBinding> network;
+        json errors = json::array();
+        for (auto it = config.begin(); it != config.end(); ++it) {
+            try {
+                if (it.key() == "device") dev = follower::parse_device(it.value());
+                else if (it.key() == "outputs") outputs = follower::parse_outputs(it.value());
+                else if (it.key() == "ndi") ndi = follower::parse_ndi(it.value());
+                else if (it.key() == "audio") audio = follower::parse_audio(it.value(), next);
+                else if (it.key() == "display") display = follower::parse_display(it.value());
+                else if (it.key() == "network") network = follower::parse_network(it.value());
+                else throw std::runtime_error("unknown follower domain");
+            } catch (const std::exception& e) {
+                errors.push_back(it.key() + ": " + e.what());
+            }
+        }
+        if (!errors.empty()) return {{"ok", false}, {"errors", errors}};
+        if (audio && apply_audio) {
+            const auto error = apply_audio(audio->settings);
+            if (!error.empty()) return follower::failure("audio: " + error);
+        }
+        if (dev) {
+            // Audio and observed address have independent owners.
+            dev->audio_engine = device.audio_engine;
+            dev->device_ip = device.device_ip;
+            device = *dev;
+        }
+        if (outputs) {
+            output_cache_ = *outputs;
+            const auto first = output_cache_.find(1);
+            connected_source_name = first == output_cache_.end() ? "" : first->second.source_name;
+            connected_source_ip = first == output_cache_.end() ? "" : first->second.source_ip;
+            decoder.screensaver_mode = first == output_cache_.end() ? "BlackSS" : first->second.screensaver_mode;
+            decoder.source_selection = first == output_cache_.end() ? "NDI" : first->second.source_selection;
+        }
+        if (ndi) {
+            transport = ndi->transport;
+            finder = ndi->finder;
+            ndi_group = ndi->group;
+            off_subnet_ips = ndi->off_subnet_ips;
+            decoder.tally_mode = ndi->tally_mode;
+            decoder.color_space = ndi->color_space;
+        }
+        if (audio) {
+            device.audio_engine = audio->engine;
+            audio_settings_ = audio->settings;
+            decoder.ndi_audio = audio->primary_enabled ? "NDIAudioEn" : "NDIAudioDis";
+        }
+        if (display) { splash = display->splash; osd = display->osd; }
+        if (network) ndisdk::set_network_binding(*network);
+        for (auto it = config.begin(); it != config.end(); ++it) {
+            followed_.insert(it.key());
+            followed_config_[it.key()] = it.value();
+        }
+        revision_.commit(next);
+        return {{"ok", true}, {"revision", next}};
+    } catch (const std::exception& e) {
+        return follower::failure(e.what());
     }
 }

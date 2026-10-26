@@ -1,0 +1,32 @@
+[package]
+name = "ndimon-privd-proto"
+description = "Validated privileged requests and bounded Unix socket frames"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+client = ["dep:tokio"]
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[dependencies]
+ndimon-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+

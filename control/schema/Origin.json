@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Origin",
+  "oneOf": [
+    {
+      "type": "string",
+      "enum": [
+        "boot",
+        "migration"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "ui": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "session"
+          ]
+        }
+      },
+      "required": [
+        "ui"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "object",
+          "properties": {
+            "uid": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "uid"
+          ]
+        }
+      },
+      "required": [
+        "cli"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "plugin": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ]
+        }
+      },
+      "required": [
+        "plugin"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "tessera": {
+          "type": "object",
+          "properties": {
+            "peer": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "peer"
+          ]
+        }
+      },
+      "required": [
+        "tessera"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

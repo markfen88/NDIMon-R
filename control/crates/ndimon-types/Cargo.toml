@@ -1,0 +1,33 @@
+[package]
+name = "ndimon-types"
+description = "NDIMon-R public contract: desired state, commands, events, queries and errors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+bench = false
+doctest = false
+
+[dependencies]
+serde = { workspace = true, optional = true }
+serde_json.workspace = true
+ts-rs = { workspace = true, optional = true, features = ["no-serde-warnings"] }
+schemars = { workspace = true, optional = true }
+sha2 = "0.10"
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+ts = ["serde", "dep:ts-rs"]
+schema = ["serde", "dep:schemars"]

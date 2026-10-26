@@ -1,0 +1,28 @@
+[package]
+name = "ndimonctl"
+description = "NDIMon-R command-line client over the control-plane API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ndimonctl"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+csv = "1"
+serde_json.workspace = true
+socket2 = { version = "0.6", features = ["all"] }
+nix = { version = "0.29", features = ["feature"] }
+

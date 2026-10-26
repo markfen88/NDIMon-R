@@ -4,11 +4,8 @@
   "title": "Network audio (Tessera)",
   "icon": "bi-soundwave",
   "min_ndimon": "1.3.0",
-  "routes": "routes.js",
   "ui": "ui.html",
-  "backup": "backup.js",
-  "install": "install.sh",
-  "uninstall": "uninstall.sh",
+  "backup": null,
   "priv_commands": [
     "bundle-install",
     "bundle-uninstall",
@@ -30,6 +27,8 @@
     "/run/tessera"
   ],
   "config_files": [
+    "/etc/tessera/config.d/60-ndimon.toml",
+    "/etc/tessera/config.d/90-probe-flows.toml",
     "/etc/tessera/config.d/61-ndimon-flows.toml",
     "/etc/alsa/conf.d/60-ndimon-tessera.conf",
     "/etc/alsa/conf.d/61-ndimon-tessera-ranges.conf"

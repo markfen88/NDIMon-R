@@ -270,11 +270,13 @@ bool AlsaAudio::write_audio(const float** channel_data, int num_channels,
         }
     }
 
+    const auto before_write = std::chrono::steady_clock::now();
     snd_pcm_sframes_t written = snd_pcm_writei(pcm_, pcm_buf_.data(), num_samples);
     if (written < 0) {
         if (written == -EPIPE) {
             // Underrun: ALSA ran out of data. Common during source switches
             // or when the NDI sender's clock drifts from our playback clock.
+            note_underrun(num_samples, before_write);
             snd_pcm_prepare(pcm_);
         } else if (written == -ESTRPIPE) {
             // Suspended (e.g., power management)
@@ -285,9 +287,28 @@ bool AlsaAudio::write_audio(const float** channel_data, int num_channels,
             std::cerr << "[AlsaAudioSink] write error: "
                       << snd_strerror((int)written) << "\n";
         }
+        last_write_ = before_write;
         return false;
     }
+    last_write_ = before_write;
     return true;
+}
+
+// HW-1 H5: the board re-prepared its HDMI PCM 17 times in 143 s right after an
+// upgrade and nothing said so. Count every underrun; log the first and then at
+// most one line in ten seconds, with the time since the previous write (a long
+// gap means the capture thread was starved, a short one a clock difference).
+void AlsaAudio::note_underrun(int num_samples, std::chrono::steady_clock::time_point now) {
+    const uint64_t total = ++underruns_;
+    if (total != 1 && now - last_report_ < std::chrono::seconds(10)) return;
+    const long gap_ms = last_write_.time_since_epoch().count() == 0 ? -1
+        : (long)std::chrono::duration_cast<std::chrono::milliseconds>(now - last_write_).count();
+    std::cerr << "[AlsaAudioSink] underrun #" << total << " (+"
+              << (total - reported_underruns_) << " since the last report) on " << device_name_
+              << ": " << num_samples << " samples written, "
+              << gap_ms << " ms since the previous write\n";
+    reported_underruns_ = total;
+    last_report_ = now;
 }
 
 bool AlsaAudio::write_audio_i16(const int16_t* interleaved, int num_samples, int channels) {

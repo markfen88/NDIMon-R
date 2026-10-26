@@ -1,0 +1,13 @@
+[Unit]
+Description=NDIMon-R HTTP front door
+
+[Socket]
+# Separate IPv4/IPv6 listeners retain Node's dual-stack reachability without
+# depending on the host's bindv6only default.
+ListenStream=0.0.0.0:80
+ListenStream=[::]:80
+BindIPv6Only=ipv6-only
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target

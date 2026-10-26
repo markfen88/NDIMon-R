@@ -1,0 +1,1142 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "created_at",
+    "sections",
+    "checksum"
+  ],
+  "properties": {
+    "format": {
+      "const": "ndimon-backup"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "created_at": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "app": {
+      "type": "object"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_device": {
+      "type": "object"
+    },
+    "sections": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "plugins": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9-]{1,31}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "version",
+              "data"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "type": "string"
+              },
+              "data": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[1-8]$": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "SourceName": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "SourceIP": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "output_alias": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "ScaleMode": {
+                  "enum": [
+                    "letterbox",
+                    "stretch",
+                    "crop"
+                  ]
+                },
+                "rotation": {
+                  "enum": [
+                    0,
+                    90,
+                    180,
+                    270
+                  ]
+                },
+                "videooutput": {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "NDIAudio": {
+                  "enum": [
+                    "NDIAudioEn",
+                    "NDIAudioDis"
+                  ]
+                },
+                "TallyMode": {
+                  "enum": [
+                    "TallyOn",
+                    "TallyOff",
+                    "VideoMode"
+                  ]
+                },
+                "ScreenSaverMode": {
+                  "enum": [
+                    "SplashSS",
+                    "BlackSS",
+                    "CaptureSS"
+                  ]
+                },
+                "ColorSpace": {
+                  "enum": [
+                    "RGB",
+                    "YUV"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "presets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "presets"
+          ],
+          "properties": {
+            "presets": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "source"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "ip": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
+        "discovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "NDIDisServIP": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "ndi_groups": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "off_subnet_ips": {
+              "type": "string",
+              "maxLength": 1024
+            }
+          }
+        },
+        "transport": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "Rxpm": {
+              "enum": [
+                "TCP",
+                "UDP",
+                "Multicast",
+                "M-TCP",
+                "RUDP"
+              ]
+            }
+          }
+        },
+        "display": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "splash": {
+              "type": "object"
+            },
+            "osd": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              }
+            },
+            "logo_base64": {
+              "type": "string",
+              "maxLength": 6000000
+            },
+            "logo_ext": {
+              "enum": [
+                "png",
+                "jpg",
+                "jpeg",
+                ""
+              ]
+            }
+          }
+        },
+        "audio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "settings"
+          ],
+          "properties": {
+            "settings": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "version",
+                    "engine",
+                    "sources",
+                    "sinks",
+                    "video_delay_ms"
+                  ],
+                  "properties": {
+                    "version": {
+                      "const": 1
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "engine": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "enabled",
+                        "rate",
+                        "period_frames",
+                        "master"
+                      ],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "rate": {
+                          "const": 48000
+                        },
+                        "period_frames": {
+                          "enum": [
+                            128,
+                            256,
+                            512,
+                            1024,
+                            2048
+                          ]
+                        },
+                        "master": {
+                          "type": "string",
+                          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                        },
+                        "memory_budget_mib": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 512
+                        }
+                      }
+                    },
+                    "sources": {
+                      "type": "object",
+                      "required": [
+                        "ndi"
+                      ],
+                      "maxProperties": 32,
+                      "propertyNames": {
+                        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "type",
+                          "enabled",
+                          "channels",
+                          "delay_ms",
+                          "gain_db"
+                        ],
+                        "properties": {
+                          "type": {
+                            "enum": [
+                              "ndi",
+                              "alsa"
+                            ]
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "channels": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          },
+                          "delay_ms": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 5000
+                          },
+                          "alsa_pcm": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9:_=,.+-]{1,512}$",
+                            "not": {
+                              "pattern": "[^A-Za-z0-9:_=,.+-]"
+                            }
+                          },
+                          "gain_db": {
+                            "type": "number",
+                            "minimum": -60,
+                            "maximum": 12
+                          }
+                        },
+                        "allOf": [
+                          {
+                            "if": {
+                              "properties": {
+                                "type": {
+                                  "const": "alsa"
+                                }
+                              }
+                            },
+                            "then": {
+                              "required": [
+                                "alsa_pcm"
+                              ]
+                            },
+                            "else": {
+                              "not": {
+                                "required": [
+                                  "alsa_pcm"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "sinks": {
+                      "type": "object",
+                      "required": [
+                        "hdmi"
+                      ],
+                      "maxProperties": 32,
+                      "propertyNames": {
+                        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "type",
+                          "enabled",
+                          "channels",
+                          "delay_ms",
+                          "alsa_pcm",
+                          "mix"
+                        ],
+                        "properties": {
+                          "type": {
+                            "const": "alsa"
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "channels": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          },
+                          "delay_ms": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 5000
+                          },
+                          "alsa_pcm": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9:_=,.+-]{1,512}$",
+                            "not": {
+                              "pattern": "[^A-Za-z0-9:_=,.+-]"
+                            }
+                          },
+                          "mix": {
+                            "type": "object",
+                            "propertyNames": {
+                              "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                            },
+                            "additionalProperties": {
+                              "type": "number",
+                              "minimum": -60,
+                              "maximum": 12
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "video_delay_ms": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 5000
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "version",
+                    "engine",
+                    "sources",
+                    "sinks",
+                    "outputs",
+                    "routes",
+                    "video_delay_ms"
+                  ],
+                  "properties": {
+                    "version": {
+                      "const": 2
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "engine": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "enabled",
+                        "rate",
+                        "period_frames",
+                        "master"
+                      ],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "rate": {
+                          "const": 48000
+                        },
+                        "period_frames": {
+                          "enum": [
+                            128,
+                            256,
+                            512,
+                            1024,
+                            2048
+                          ]
+                        },
+                        "master": {
+                          "type": "string",
+                          "anyOf": [
+                            {
+                              "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                            },
+                            {
+                              "const": ""
+                            }
+                          ]
+                        },
+                        "memory_budget_mib": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 512
+                        }
+                      }
+                    },
+                    "sources": {
+                      "type": "object",
+                      "maxProperties": 32,
+                      "propertyNames": {
+                        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "type",
+                          "enabled",
+                          "channels"
+                        ],
+                        "properties": {
+                          "type": {
+                            "enum": [
+                              "ndi",
+                              "alsa"
+                            ]
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "channels": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          },
+                          "output": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8
+                          },
+                          "alsa_pcm": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9:_=,.+-]{1,512}$",
+                            "not": {
+                              "pattern": "[^A-Za-z0-9:_=,.+-]"
+                            }
+                          },
+                          "endpoint": {
+                            "type": "string",
+                            "maxLength": 160
+                          },
+                          "resource": {
+                            "type": "string",
+                            "maxLength": 160
+                          },
+                          "channel_start": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          },
+                          "channel_count": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          }
+                        },
+                        "allOf": [
+                          {
+                            "if": {
+                              "properties": {
+                                "type": {
+                                  "const": "ndi"
+                                }
+                              }
+                            },
+                            "then": {
+                              "required": [
+                                "output"
+                              ],
+                              "not": {
+                                "required": [
+                                  "alsa_pcm"
+                                ]
+                              }
+                            },
+                            "else": {
+                              "required": [
+                                "alsa_pcm"
+                              ],
+                              "not": {
+                                "required": [
+                                  "output"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "sinks": {
+                      "type": "object",
+                      "maxProperties": 32,
+                      "propertyNames": {
+                        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "type",
+                          "enabled",
+                          "channels",
+                          "alsa_pcm"
+                        ],
+                        "properties": {
+                          "type": {
+                            "const": "alsa"
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "channels": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          },
+                          "output": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8
+                          },
+                          "alsa_pcm": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9:_=,.+-]{1,512}$",
+                            "not": {
+                              "pattern": "[^A-Za-z0-9:_=,.+-]"
+                            }
+                          },
+                          "endpoint": {
+                            "type": "string",
+                            "maxLength": 160
+                          },
+                          "resource": {
+                            "type": "string",
+                            "maxLength": 160
+                          },
+                          "channel_start": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65535
+                          },
+                          "channel_count": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 16
+                          }
+                        },
+                        "not": {
+                          "required": [
+                            "output"
+                          ]
+                        }
+                      }
+                    },
+                    "outputs": {
+                      "type": "object",
+                      "maxProperties": 8,
+                      "propertyNames": {
+                        "pattern": "^[1-8]$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": [
+                          "enabled"
+                        ],
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "inputs": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "endpoint",
+                                "gain_db",
+                                "delay_ms"
+                              ],
+                              "properties": {
+                                "endpoint": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 160
+                                },
+                                "gain_db": {
+                                  "type": "number",
+                                  "minimum": -60,
+                                  "maximum": 12
+                                },
+                                "delay_ms": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5000
+                                }
+                              }
+                            }
+                          },
+                          "destinations": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "endpoint",
+                                "delay_ms"
+                              ],
+                              "properties": {
+                                "endpoint": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 160
+                                },
+                                "delay_ms": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 5000
+                                }
+                              }
+                            }
+                          },
+                          "legacy": {
+                            "type": "object"
+                          },
+                          "legacy_matrix": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    },
+                    "routes": {
+                      "type": "object",
+                      "propertyNames": {
+                        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "output",
+                          "source",
+                          "sink",
+                          "enabled",
+                          "gain_db",
+                          "delay_ms"
+                        ],
+                        "properties": {
+                          "output": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8
+                          },
+                          "source": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                          },
+                          "sink": {
+                            "type": "string",
+                            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                          },
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "gain_db": {
+                            "type": "number",
+                            "minimum": -60,
+                            "maximum": 12
+                          },
+                          "delay_ms": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 5000
+                          },
+                          "mapping": {
+                            "const": "default"
+                          }
+                        }
+                      }
+                    },
+                    "video_delay_ms": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 5000
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "device": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "watchdog_mode": {
+              "enum": [
+                "disabled",
+                "passive",
+                "active"
+              ]
+            },
+            "decode_mode": {
+              "enum": [
+                "auto",
+                "hardware",
+                "software"
+              ]
+            },
+            "audio_engine": {
+              "enum": [
+                "v1",
+                "v2"
+              ]
+            },
+            "ntp_server": {
+              "type": "string",
+              "maxLength": 253
+            },
+            "reboot_schedule_enabled": {
+              "type": "boolean"
+            },
+            "reboot_schedule_time": {
+              "type": "string",
+              "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"
+            },
+            "reboot_schedule_days": {
+              "type": "array",
+              "maxItems": 7,
+              "items": {
+                "enum": [
+                  "sun",
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat"
+                ]
+              }
+            },
+            "web_allowed_hosts": {
+              "type": "array",
+              "maxItems": 16,
+              "items": {
+                "type": "string",
+                "maxLength": 253
+              }
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ndi_recv_name": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "hostname": {
+              "type": "string",
+              "maxLength": 63
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "vlans": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "mode"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4094
+                  },
+                  "mode": {
+                    "enum": [
+                      "dhcp",
+                      "static"
+                    ]
+                  },
+                  "address": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "prefix": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30
+                  },
+                  "gateway": {
+                    "type": "string",
+                    "maxLength": 32
+                  },
+                  "allow_gateway": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "mode": {
+              "enum": [
+                "dhcp",
+                "static",
+                "unknown"
+              ]
+            },
+            "address": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "prefix": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
+            "gateway": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "dns": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "string",
+                "maxLength": 32
+              }
+            },
+            "profiles": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "revision",
+                "interface",
+                "backend",
+                "networks",
+                "management",
+                "ndi",
+                "tessera"
+              ],
+              "properties": {
+                "version": {
+                  "const": 1
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "interface": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{1,15}$"
+                },
+                "backend": {
+                  "enum": [
+                    "networkmanager",
+                    "networkd",
+                    "netplan",
+                    "ifupdown"
+                  ]
+                },
+                "management": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "ndi": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "tessera": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                },
+                "networks": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 9,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "id",
+                      "name",
+                      "vlan_id",
+                      "mode",
+                      "address",
+                      "prefix",
+                      "gateway",
+                      "dns"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "vlan_id": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 4094
+                          }
+                        ]
+                      },
+                      "mode": {
+                        "enum": [
+                          "dhcp",
+                          "static"
+                        ]
+                      },
+                      "address": {
+                        "type": "string",
+                        "maxLength": 15
+                      },
+                      "prefix": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 30
+                      },
+                      "gateway": {
+                        "type": "string",
+                        "maxLength": 15
+                      },
+                      "dns": {
+                        "type": "array",
+                        "maxItems": 3,
+                        "items": {
+                          "type": "string",
+                          "maxLength": 15
+                        }
+                      },
+                      "dns_search": {
+                        "type": "array",
+                        "maxItems": 6,
+                        "items": {
+                          "type": "string",
+                          "maxLength": 253
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "manager": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "interface": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "applicable": {
+              "type": "boolean"
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "salt",
+            "hash"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "algo"
+                ],
+                "properties": {
+                  "algo": {
+                    "const": "argon2id"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "phc"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "salt": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "algo": {
+              "enum": [
+                "scrypt",
+                "argon2id"
+              ]
+            },
+            "phc": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "^\\$argon2id\\$v=19\\$m=[0-9]+,t=[0-9]+,p=[0-9]+\\$[A-Za-z0-9+/]{8,128}\\$[A-Za-z0-9+/]{16,128}$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

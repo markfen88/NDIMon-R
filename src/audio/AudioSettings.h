@@ -46,6 +46,7 @@ struct AudioSettings {
     std::map<int, nlohmann::json> outputs;
     std::vector<RouteSettings> routes;
     static AudioSettings load(const std::string &path, std::string *error);
+    static AudioSettings parse(const nlohmann::json &j, std::string *error);
     bool needs_restart(const AudioSettings &other) const;
     nlohmann::json to_json() const;
 };

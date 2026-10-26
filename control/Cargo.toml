@@ -1,0 +1,45 @@
+# NDIMon-R control plane.
+# Rust for every on-device program except the C++ decoder and finder.
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "1.4.0"
+edition = "2024"
+rust-version = "1.87"
+license = "MIT"
+repository = "https://github.com/markfen88/NDIMon-R"
+
+[workspace.dependencies]
+ndimon-types = { path = "crates/ndimon-types" }
+ndimon-tessera = { path = "crates/ndimon-tessera" }
+ndimon-privd-proto = { path = "crates/ndimon-privd-proto" }
+ndimon-netengine = { path = "crates/ndimon-netengine" }
+ndimon-release = { path = "crates/ndimon-release" }
+
+# Versions follow the Tessera workspace where both use a crate (tessera-web: axum 0.8, argon2 0.5).
+anyhow = "1"
+argon2 = "0.5"
+axum = "0.8"
+getrandom = "0.3"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "signal", "fs", "io-util", "process"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ts-rs = "11"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

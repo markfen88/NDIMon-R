@@ -1,0 +1,17 @@
+{
+  "name": "ndimon-browser-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "build": "esbuild src/api.ts src/store.ts --outdir=../api/public/ui --format=esm --platform=browser --target=es2022 && esbuild src/network-settings.ts --tsconfig=tsconfig.network.json --outfile=../api/public/network-settings.js --format=iife --platform=browser --target=es2022 && esbuild src/csrf.ts --tsconfig=tsconfig.network.json --outfile=../api/public/ui/csrf.js --format=iife --platform=browser --target=es2022 && esbuild src/page.ts --bundle --outfile=../api/public/ui/page.js --format=iife --platform=browser --target=es2022",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3"
+  }
+}

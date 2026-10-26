@@ -2,6 +2,11 @@
 namespace ndimon::audio {
 AlsaSource::AlsaSource(std::string id, std::string name, int ch, int p)
     : id_(std::move(id)), channels_(ch), capacity_(8 * p), pcm_(name, ch, p, true, false),
+      // Capture's Tessera lag controls when samples become available; it is
+      // not included in this FIFO's fill. pull() reads available samples once
+      // per engine period, and the PI target is measured AFTER consumption.
+      // Two periods here are real queued audio, unlike AlsaSink's delay()
+      // measurement, which includes the plugin's playback lead.
       drift_({ch, kRate, 2 * p, 8 * p}), storage_(ch * capacity_) {
     scratch_.channels = ch;
     scratch_.frames = capacity_;

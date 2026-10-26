@@ -28,12 +28,20 @@ static float gain(const json &j) {
     return v;
 }
 AudioSettings AudioSettings::load(const std::string &path, std::string *error) {
-    if (error)
-        error->clear();
     try {
         std::ifstream file(path);
         json j;
         file >> j;
+        return parse(j, error);
+    } catch (const std::exception &e) {
+        if (error) *error = e.what();
+        return {};
+    }
+}
+AudioSettings AudioSettings::parse(const json &j, std::string *error) {
+    if (error)
+        error->clear();
+    try {
         require(j.at("version") == 1 || j.at("version") == 2, "unsupported audio settings version");
         AudioSettings s;
         s.version = j.at("version").get<int>();
@@ -110,7 +118,7 @@ AudioSettings AudioSettings::load(const std::string &path, std::string *error) {
             require(x.channel_count == x.channels, "sink channel_count must equal channels");
             if (s.version == 1)
                 require(v.at("mix").is_object(), "mix must be object");
-            for (auto m = v["mix"].begin(); s.version == 1 && m != v["mix"].end(); ++m) {
+            if (s.version == 1) for (auto m = v.at("mix").begin(); m != v.at("mix").end(); ++m) {
                 require(std::regex_match(m.key(), ids), "invalid mix id");
                 float g = gain(m.value());
                 if (names.count(m.key()))
