@@ -125,6 +125,8 @@ NdiConfig parse_ndi(const json& j) {
     for (const auto& server : j.at("discovery_servers"))
         require(host(server.get<std::string>()), "invalid discovery server IP or hostname");
     n.finder.discovery_server_mode = n.finder.discovery_server_ip.empty() ? "NDIDisServDis" : "NDIDisServEn";
+    n.finder.receiver_advertising = j.value("receiver_advertising", true);
+    n.finder.remote_control = j.value("remote_control", true);
     n.group.groups = list(j.at("groups"), false);
     require(!n.group.groups.empty(), "at least one NDI group is required");
     n.off_subnet_ips = list(j.at("off_subnet_sources"), true);

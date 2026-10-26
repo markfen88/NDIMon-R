@@ -433,6 +433,10 @@
     setVal("disc-ip", state.ndi.discovery_servers.join(","));
     setNdiGroupsFromString(state.ndi.groups.join(","));
     setVal("off-ips", state.ndi.off_subnet_sources.join(","));
+    const advertise = document.getElementById("ds-advertise");
+    const control = document.getElementById("ds-control");
+    if (advertise) advertise.checked = state.ndi.receiver_advertising;
+    if (control) control.checked = state.ndi.remote_control;
     setVal("ndi-alias", state.device.ndi_alias);
     acceptNativeRevision("decoder", state.revision);
     acceptNativeRevision("discovery", state.revision);
@@ -447,7 +451,7 @@
       const target = event.target;
       const card = target.closest?.("[data-card-idx]");
       const id = target.id;
-      const key = card && /^(output-alias-|res-|scale-sel-|rotation-sel-)/.test(id) ? (id.startsWith("output-alias-") ? "alias:" : "video:") + (liveView().outputs[Number(card.dataset.cardIdx)]?.output_index ?? card.dataset.cardIdx) : ["tp-sel", "decode-mode-sel"].includes(id) ? "decoder" : ["disc-ip", "off-ips", "ndi-alias", "ndi-grp-input"].includes(id) || target.closest?.("#ndi-grp-tags") ? "discovery" : "";
+      const key = card && /^(output-alias-|res-|scale-sel-|rotation-sel-)/.test(id) ? (id.startsWith("output-alias-") ? "alias:" : "video:") + (liveView().outputs[Number(card.dataset.cardIdx)]?.output_index ?? card.dataset.cardIdx) : ["tp-sel", "decode-mode-sel"].includes(id) ? "decoder" : ["disc-ip", "off-ips", "ndi-alias", "ndi-grp-input", "ds-advertise", "ds-control"].includes(id) || target.closest?.("#ndi-grp-tags") ? "discovery" : "";
       if (key && store.state && !editRevisions.has(key)) editRevisions.set(key, store.state.revision);
     };
     document.addEventListener("input", remember);
@@ -480,7 +484,7 @@
     if (domains.length) void refreshAudioFromServer();
     if (domains.includes("presets")) void loadPresets();
     if (domains.includes("ndi") || domains.includes("device")) {
-      const ids = ["tp-sel", "decode-mode-sel", "disc-ip", "off-ips", "ndi-alias"];
+      const ids = ["tp-sel", "decode-mode-sel", "disc-ip", "off-ips", "ndi-alias", "ds-advertise", "ds-control"];
       if (cardClean(...ids)) {
         editRevisions.delete("decoder");
         editRevisions.delete("discovery");
@@ -867,6 +871,7 @@
     return Math.round(hz * 100) / 100 + " Hz";
   };
   var outputModes = {};
+  var sourceLabel = (out) => (out.source_name || "None") + (out.source_name && out.source_origin === "discovery_server" ? " \xB7 set by Discovery Server" : "");
   var loadOutputModes = async function(cardIdx, outputIndex) {
     try {
       const catalog = await apiClient.get(`/api/v1/catalog/display_modes?output=${outputIndex + 1}`);
@@ -1337,7 +1342,7 @@
         </div>
 
         <div class="row g-0 mb-3" style="background:var(--bg-card2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 12px">
-          <div class="col-12"><div class="stat-row"><span class="stat-label">Now showing</span><span class="stat-val" id="out-src-${idx}">${esc(out.source_name || "None")}</span></div></div>
+          <div class="col-12"><div class="stat-row"><span class="stat-label">Now showing</span><span class="stat-val" id="out-src-${idx}">${esc(sourceLabel(out))}</span></div></div>
           <div class="col-12"><div class="stat-row"><span class="stat-label">Input \u2192 Output</span><span class="stat-val" id="out-res-${idx}">\u2014</span></div></div>
           <div class="col-12"><div class="stat-row"><span class="stat-label">Frame rate \xB7 Codec</span><span class="stat-val" id="out-fps-${idx}">\u2014</span></div></div>
         </div>
@@ -1429,7 +1434,7 @@
       if (chips) chips.innerHTML = decodeChips(out);
       const disc = document.getElementById(`out-disc-${idx}`);
       if (disc) disc.disabled = !out.connected && !out.source_name;
-      setText(`out-src-${idx}`, out.source_name || "None");
+      setText(`out-src-${idx}`, sourceLabel(out));
       const inStr = out.input_width ? `${out.input_width}\xD7${out.input_height}` : "\u2014";
       const outStr = out.width ? `${out.width}\xD7${out.height} @ ${fmtHz2(out.refresh_hz || out.refresh)}` : "\u2014";
       setText(`out-res-${idx}`, `${inStr} \u2192 ${outStr}`);
@@ -2554,6 +2559,10 @@
     await save({ set_ndi: { ...ndi, discovery_servers: split(ip) } });
     await save({ set_ndi: { ...ndi, groups } });
     await save({ set_ndi: { ...ndi, off_subnet_sources: split(ips) } });
+    const advertise = document.getElementById("ds-advertise");
+    const control = document.getElementById("ds-control");
+    if (advertise && control && (advertise.checked !== ndi.receiver_advertising || control.checked !== ndi.remote_control))
+      await save({ set_ndi: { ...ndi, receiver_advertising: advertise.checked, remote_control: control.checked } });
     await save({ set_device: devicePatch({ ndi_alias: alias }) });
     const bad = results.find((r) => r && r.ok === false);
     if (!done(bad || {}, "Discovery settings saved")) return;

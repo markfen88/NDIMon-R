@@ -487,7 +487,7 @@ async fn events(State(app): State<Shared>) -> Response {
                     event = state.receiver.recv() => match event {
                         Ok(HubMessage::Event(event)) => {
                             if let Event::Status { source, data } = event.as_ref() {
-                                state.pending_status = *source == StatusSource::Decoder && matches!(data["type"].as_str(), Some("connection" | "routing"));
+                                state.pending_status = *source == StatusSource::Decoder && matches!(data["type"].as_str(), Some("connection" | "remote_source"));
                                 if state.pending_status { *state.app.legacy_status.snapshot.lock().await = None; }
                                 if (*source == StatusSource::Decoder || data["type"] == "plugin_progress") && data.get("type").is_some() {
                                     break frame(data);

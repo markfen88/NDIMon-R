@@ -1,5 +1,35 @@
 # NDIMon-R changelog
 
+## Unreleased
+
+### NDI Discovery Server monitoring and control
+
+- **A Discovery Server controller can route the outputs, and the route sticks.**
+  When a controller (for example NDI Tools Discovery 6.2+) picks a source for an
+  output, the SDK switches the receiver and NDIMon-R now saves that source as the
+  output's source, the same way a pick on the Outputs page or the API does. Status,
+  the web UI and reconnects follow it, it survives a sender dropout, a decoder
+  restart and a reboot, and the output shows "set by Discovery Server". A
+  controller disconnect clears the source. Whichever change comes last wins.
+  1.4.0 had made routes observe-only, and its reconnect logic put the previous
+  source back.
+- **New NDI page switches**, *Allow Receiver Advertising* (on) and *Allow
+  Receiver Control*. Control is off on new installs, as NDI recommends, and stays
+  on after an upgrade (1.3.x behaviour). NDI control has no authentication.
+- **Monitoring is what the SDK reports.** Each output registers as its own
+  receiver input (named after the output alias) and the Discovery Server shows
+  connection state, source, video and audio format, transport and tally.
+  NDIMon-R no longer sends `<ndi_routing>` or `<ndi_device_status>` XML upstream;
+  those went to the sender, never to the Discovery Server.
+- **Changing the Discovery Server address restarts the decoder**, after a
+  confirmation, like a transport change. The SDK reads the address only when the
+  decoder starts, so routes by name could not be resolved after a change until
+  the next restart.
+- Fixes: the receiver now registers once a Discovery Server that was unreachable
+  at start answers (it used to stay absent until a restart); a lost link no longer
+  disconnects the receiver, which threw a route away; after a route the old
+  source address is no longer reused on the next reconnect.
+
 ## 1.4.0
 
 1.4.0 is the control-plane release. The Node.js REST API, the shell and Python
@@ -60,9 +90,12 @@ use the [README](README.md) and the [documentation index](docs/README.md).
    plugin support is available". Install a manifest v2 release of the same name or
    remove them. See [the plugin guide](docs/plugins.md).
 3. **Tessera needs 0.3.0 or later.** Install the matching plugin archive after
-   upgrading the core. The 0.2.x bundles cannot be installed any more (they lack
-   the `tessera-bundle` installer), and a 0.2.x runtime that is already installed
-   runs without flow locks: NDIMon-R reports an ownership conflict.
+   upgrading the core. This release pins the Tessera 0.3.0 runtime (`0.3.0-1`, source
+   commit `4b747c1`) for Debian 13 amd64 and arm64 and for the experimental Ubuntu
+   24.04 arm64; the 0.3.0 plugin archive carries one of them. The 0.2.x bundles
+   cannot be installed any more (they lack the `tessera-bundle` installer), and a
+   0.2.x runtime that is already installed runs without flow locks: NDIMon-R reports
+   an ownership conflict.
 4. **Node.js is no longer used.** The upgrade does not remove the `nodejs`/`npm`
    packages; remove them if nothing else needs them.
 5. **Other host names need to be added.** The web UI answers only to the device's
@@ -196,6 +229,20 @@ use the [README](README.md) and the [documentation index](docs/README.md).
   `tesseractl` exists, the accepted install had already rewritten
   `/etc/tessera/config.d` and created `/etc/alsa/conf.d/60-ndimon-tessera*` when the
   refusal came.
+- **The Tessera plugin installs on a stock Debian 13 or Ubuntu device.** privd
+  unpacked the runtime bundle below `/run` and ran `tessera-bundle` from there, but
+  `/run` is mounted `noexec` on both, so the install failed with "Permission denied"
+  and marked the plugin `broken`. The bundle is now unpacked under
+  `/var/lib/ndimon-privd/bundles` (root-only, created by `tmpfiles.d`, listed in the
+  unit's `ReadWritePaths`); the checksum, lock, layout and ownership checks are
+  unchanged. Every unpacked bundle (41 MB) was also left behind and never removed,
+  and after a few installs and uninstalls the 384 MB `/run` of a ROCK 5B was full:
+  every plugin job then failed with "No space left on device" or could not leave a
+  result (an uninstall that had run answered HTTP 400 "job ended without a durable
+  result"). Each unpacked bundle is now removed when its job ends.
+  A normal (non-purge) uninstall leaves the plugin's packages removed but configured
+  (`rc`) and the dependencies the install added (`polkitd`) installed, as
+  `tessera-bundle` documents; "remove and delete data" purges.
 - **Keep no longer loses to the page's own status poll.** Keep, Revert, Accept
   current network and the preview wait up to three seconds for a concurrent network
   request instead of answering 409 `network_operation`; the 60-second window is

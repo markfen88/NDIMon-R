@@ -120,6 +120,10 @@ export let loadNativeSettings = async function() {
   setVal('disc-ip', state.ndi.discovery_servers.join(','));
   setNdiGroupsFromString(state.ndi.groups.join(','));
   setVal('off-ips', state.ndi.off_subnet_sources.join(','));
+  const advertise = document.getElementById('ds-advertise') as HTMLInputElement | null;
+  const control = document.getElementById('ds-control') as HTMLInputElement | null;
+  if (advertise) advertise.checked = state.ndi.receiver_advertising;
+  if (control) control.checked = state.ndi.remote_control;
   setVal('ndi-alias', state.device.ndi_alias);
   acceptNativeRevision('decoder',state.revision);
   acceptNativeRevision('discovery',state.revision);
@@ -139,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const id = target.id;
     const key = card && /^(output-alias-|res-|scale-sel-|rotation-sel-)/.test(id) ? (id.startsWith('output-alias-') ? 'alias:' : 'video:') + (liveView().outputs[Number(card.dataset.cardIdx)]?.output_index ?? card.dataset.cardIdx) :
       ['tp-sel', 'decode-mode-sel'].includes(id) ? 'decoder' :
-      ['disc-ip', 'off-ips', 'ndi-alias', 'ndi-grp-input'].includes(id) || target.closest?.('#ndi-grp-tags') ? 'discovery' : '';
+      ['disc-ip', 'off-ips', 'ndi-alias', 'ndi-grp-input', 'ds-advertise', 'ds-control'].includes(id) || target.closest?.('#ndi-grp-tags') ? 'discovery' : '';
     if (key && store.state && !editRevisions.has(key)) editRevisions.set(key, store.state.revision);
   };
   document.addEventListener('input', remember);
@@ -181,7 +185,7 @@ export let renderFromStore = function(domains: readonly Domain[]) {
   if (domains.length) void refreshAudioFromServer();
   if (domains.includes('presets')) void loadPresets();
   if (domains.includes('ndi') || domains.includes('device')) {
-    const ids = ['tp-sel', 'decode-mode-sel', 'disc-ip', 'off-ips', 'ndi-alias'];
+    const ids = ['tp-sel', 'decode-mode-sel', 'disc-ip', 'off-ips', 'ndi-alias', 'ds-advertise', 'ds-control'];
     if (cardClean(...ids)) { editRevisions.delete('decoder'); editRevisions.delete('discovery'); void loadNativeSettings(); }
   }
   if (domains.includes('display')) {

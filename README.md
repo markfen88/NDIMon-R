@@ -259,7 +259,7 @@ snapshots. If the upgrade fails, see [Rollback](#rollback).
 1. Browse to `http://<device-ip>/`.
 2. Log in. The default password is **`ndimon`**. Change it under **Settings → Security** before the box is on a real network. The UI keeps a warning up until you do.
 3. Open **NDI** and pick a source. That choice is saved in the device configuration and survives reboot.
-4. Optional, on **NDI**: Discovery Server IP, groups, extra IPs, transport, and HX decode mode. Optional, on **System**: NTP host.
+4. Optional, on **NDI**: Discovery Server IP, receiver advertising and control, groups, extra IPs, transport, and HX decode mode. Optional, on **System**: NTP host.
 5. Optional, on **Settings → Network**: define named untagged/tagged networks,
    choose management, and review/apply the draft. Select the shared NDI network
    on **NDI** and the audio network inside **Plugins → Tessera**. Keep the change
@@ -315,8 +315,9 @@ Factory watchdog mode is **active** (reconnect after about 30 s of stall). An ex
 
 ### Discovery and control
 
-- mDNS via Avahi, plus an optional NDI Discovery Server. A blank IP turns it off. There is no separate enable flag.
-- Receiver advertiser so the box shows up as a destination. `allow_controlling` lets the SDK switch sources. The app does **not** call `connect()` from a routing callback.
+- mDNS via Avahi, plus an optional NDI Discovery Server. A blank IP turns it off. There is no separate enable flag. Changing the address restarts the decoder (video and audio pause briefly; the page asks first): the NDI SDK only reads it when the decoder starts.
+- With a Discovery Server set, **Allow Receiver Advertising** (on by default) lists each output as a receiver, with its connection state, source and stream details. **Allow Receiver Control** lets a Discovery Server controller (for example NDI Tools Discovery 6.2 or later) choose an output's source. It is off on new installs and stays on after an upgrade from 1.3.x. A routed source is saved like a local pick; whichever comes last wins, and the output page shows "set by Discovery Server". NDI control has no authentication: anyone who can reach the Discovery Server can route the outputs.
+- Receiver advertiser so the box shows up as a destination, retried until the Discovery Server answers. With control allowed the SDK switches the source itself; the app saves the new source and does **not** call `connect()` for it.
 - NDI groups are case-sensitive (`Production` and `production` are different). Empty becomes `public`.
 - Extra IPv4 addresses for senders off the local subnet.
 - Transport: RUDP by default (the NDI SDK’s own default and the one the NDI docs recommend). TCP, Multi-TCP, UDP and Multicast are selectable; each enables exactly one of the SDK's `rudp`/`tcp`/`unicast`/`multicast` receive keys (Multicast also keeps RUDP as its fallback, and needs a multicasting sender). A change rewrites the SDK configuration and restarts the decoder service, because the SDK only reads transport settings at startup (a few seconds of outage; the saved source reconnects). A saved `TCP` that was never chosen in the UI is migrated to RUDP once, when the 1.3.x settings are imported.
@@ -842,7 +843,7 @@ script no longer works).
 
 **Tessera** is a first-party plugin whose settings are part of the NDIMon-R
 document. Use a plugin archive built from a **Tessera 0.3.0 or later** runtime
-bundle. Installing/enabling the plugin exposes its page; selecting experimental
+bundle; this release pins the Tessera 0.3.0 runtime (`0.3.0-1`). Installing/enabling the plugin exposes its page; selecting experimental
 network audio is separate. Configure device/clock settings, static flows,
 reusable channel names and the Tessera network there. Configure each output's
 audio mix under **Outputs → Advanced → Audio**. [Tessera setup](docs/plugins/tessera.md)
@@ -1116,7 +1117,7 @@ thin translation to a command or query. Prefer `/api/v1` for new scripts.
 | POST | `/decodesetup` | `NDIAudio`, `ScreenSaverMode`, `TallyMode`, `ColorSpace`, `ChNum` | Saves the allowed fields |
 | GET | `/decodeTransport` | — | `{ Rxpm }` |
 | POST | `/decodeTransport` | `{ "Rxpm" }` | `TCP`, `UDP`, `Multicast`, `M-TCP`, or `RUDP`. Restarts the decoder service so the SDK rereads transport |
-| POST | `/connectTo` | `{ "SourceName", "SourceIP", "Output" }` | `Output` is 1–8. Empty or `None` forgets the source. Otherwise saves it and connects. Starts a 30 s grace so a Discovery Server route does not immediately undo a local pick |
+| POST | `/connectTo` | `{ "SourceName", "SourceIP", "Output" }` | `Output` is 1–8. Empty or `None` forgets the source. Otherwise saves it and connects. A later Discovery Server route replaces it (last writer wins) |
 | GET | `/connectTo` | — | 405 |
 | GET | `/capture` | — | Touches a capture flag and returns text. Not a freeze-frame |
 
@@ -1295,7 +1296,7 @@ The Tessera adapter routes are under `/v1/plugins/tessera`
 | Output audio | `PUT /v1/Audio/outputs/:ch` | Validate revision, compile and apply graph; retain selected engine |
 | Audio engine | `POST /v1/Audio/engine` | Confirm and restart decoder |
 | HX decode mode | `POST /v1/DeviceSettings/decode-mode` | `apply_config` |
-| Discovery Server | `POST /v1/NDIFinder/NDIDisServer` | `apply_config` to decoder and finder |
+| Discovery Server | `POST /v1/NDIFinder/NDIDisServer` | `apply_config` to decoder and finder, then a decoder restart (confirmed) |
 | Groups | `POST /v1/NDIFinder/NdiGrpName` | `apply_config` |
 | Device name | `POST /v1/DeviceSettings/ndi-alias` | `apply_config` and `hostnamectl` |
 | NTP | `POST /v1/DeviceSettings/ntp` | privd `SetTimeSync` |
@@ -1317,7 +1318,7 @@ Do not expose these sockets. Use the HTTP API.
 
 | Action (decoder) | Effect |
 |--------|--------|
-| `subscribe` | Keeps the connection. Replays the last routing and connection state. Pushes `connection` and `routing` events |
+| `subscribe` | Keeps the connection. Replays a Discovery Server route still in effect and the connection state. Pushes `connection` and `remote_source` events |
 | `status` / `get_status_all` / `health` / `get_modes` | Queries |
 | `apply_config` | `revision` and a `config` object holding whole domains (`device`, `outputs`, `ndi`, `audio`, `display`, `network`). The decoder validates every domain before installing any, refuses a revision older than the last accepted one and replies `{ok, revision}` or `{ok:false, errors}` |
 | `reload_audio`, `check_audio` | Apply or pre-check the audio graph |
@@ -1329,7 +1330,7 @@ Do not expose these sockets. Use the HTTP API.
 | `set_tally` | `tally_program`, `tally_preview` |
 | `show_splash` | `source_available`. Idle outputs only |
 
-The finder accepts `apply_config` with the complete `ndi` domain only. `connection` events carry `output` (0-based), `connected`, `source`, and `drm_ready`. `routing` events carry `output`, `source`, and `url`. The control plane persists a Discovery Server route. It does not send `connect` for it.
+The finder accepts `apply_config` with the complete `ndi` domain only. `connection` events carry `output` (0-based), `connected`, `source`, and `drm_ready`. `remote_source` events carry `output` and `source` (empty when the controller disconnected the output). With remote control on, the control plane saves the route as the output's source by name. It never sends `connect` for it: the SDK has already switched the receiver.
 
 Worker status includes `ch_num`, `connector`, `output_alias`, `connected`, `source_name`, input size, `fps`, `codec`, `decode_backend`, `hw_decode`, `decode_fps`, `decode_saturated`, `scale_mode`, `rotation`, and `stream_type` (`Standard`, `HX`, or `unknown`).
 
@@ -1382,7 +1383,7 @@ The splash IP is a runtime value. The decoder does not write it back to disk.
 
 **NDI library missing.** `ldconfig -p | grep libndi`, then `cargo xtask setup-deps` (from `control/`). The decoder and finder also need `libavahi-client3` and `libavahi-common3`, which `ndimon-runtime` depends on.
 
-**Source jumps.** The saved source is in the output's settings. A Discovery Server with controlling enabled can change it. That is the SDK, not a reconnect bug. A local connect is protected for 30 seconds.
+**Source jumps.** The saved source is in the output's settings. With **Allow Receiver Control** on, a Discovery Server controller can change it, and the output then shows "set by Discovery Server". Turn control off on the NDI page to stop that.
 
 **Network change did not stick.** Click **Keep changes** within the 60-second ready-state window. Opening the page alone, a proxy header or a status poll does not confirm. An unconfirmed reboot or failed apply restores the old settings. Check
 [supported backends and adoption limits](docs/network-vlans.md#operating-system-integration).

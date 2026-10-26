@@ -323,6 +323,7 @@ pub const COMMAND_ROUTES: &[CommandRoute] = &[
             command,
             Command::SelectSource { .. }
                 | Command::ForgetSource { .. }
+                | Command::AdoptRemoteSource { .. }
                 | Command::ReconnectSource { .. }
                 | Command::RetrySource { .. }
                 | Command::PutOutputSettings { .. }

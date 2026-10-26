@@ -20,6 +20,12 @@ use std::{
 };
 /// The installer shipped at the root of every Tessera runtime bundle.
 const INSTALLER: &str = "tessera-bundle";
+/// Where a runtime bundle is unpacked, because its installer is executed from
+/// there. Not below `/run`: Debian 13 and Ubuntu mount it `noexec`, so the
+/// installer failed with "Permission denied" on a stock device. Root-private
+/// (tmpfiles.d, 0700) on the persistent root filesystem; every extraction is
+/// removed when its job ends and tmpfiles ages out what a killed job left.
+pub const BUNDLE_STAGE: &str = "/var/lib/ndimon-privd/bundles";
 pub const FLOW: &str = "/etc/tessera/config.d/61-ndimon-flows.toml";
 pub const ALSA: &str = "/etc/alsa/conf.d/60-ndimon-tessera.conf";
 pub const RANGES: &str = "/etc/alsa/conf.d/61-ndimon-tessera-ranges.conf";
@@ -272,7 +278,12 @@ pub fn uninstall(host: &Host, purge: bool) -> Result<ActionOutput, Error> {
 /// A runtime bundle that passed every check the installer relies on. The
 /// extraction directory lives as long as this value.
 struct Verified {
+    // The extraction is addressed through `/proc/self/fd/<stage>`, so the pinned
+    // staging directory must outlive it. Closed first, the extraction could not
+    // be removed and every job left 41 MB behind, until a 384 MB /run was full
+    // and a job could no longer write its result (NI-21). Fields drop in order.
     _work: tempfile::TempDir,
+    _stage: Directory,
     directory: PathBuf,
     lock: Value,
 }
@@ -318,11 +329,10 @@ fn verify(host: &Host, plugin: &Directory) -> Result<Verified, Error> {
         return Err(Error::invalid("bundle", "bundle checksum mismatch"));
     }
     // Snapshot the reviewed, root-owned archive; hash and extract the same bytes.
-    let work = host
-        .root
-        .directory("/run/ndimon/privd-bundles", true, true)?;
+    let work = host.root.directory(BUNDLE_STAGE, true, true)?;
     let temp = tempfile::Builder::new()
         .prefix("bundle-")
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir_in(work.path())
         .map_err(io_error)?;
     let path = temp.path().canonicalize().map_err(io_error)?;
@@ -376,6 +386,7 @@ fn verify(host: &Host, plugin: &Directory) -> Result<Verified, Error> {
     }
     Ok(Verified {
         _work: temp,
+        _stage: work,
         directory,
         lock,
     })

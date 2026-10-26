@@ -94,6 +94,20 @@ impl super::DomainModule for Module {
                 out.source_selection = "NDI".into();
             }
             Command::ForgetSource { output: id } => output(state, *id)?.source = None,
+            Command::AdoptRemoteSource { output: id, source } => {
+                if source
+                    .as_ref()
+                    .is_some_and(|s| s.name.is_empty() || s.name == "None")
+                {
+                    return Err(invalid("invalid source name"));
+                }
+                let out = output(state, *id)?;
+                // Routed by name: the Discovery Server resolves the sender.
+                out.source = source.as_ref().map(|s| NdiSourceRef::new(&s.name, ""));
+                if out.source.is_some() {
+                    out.source_selection = "NDI".into();
+                }
+            }
             Command::SetOutputAlias { output: id, alias } => {
                 output(state, *id)?.alias = alias.trim().into()
             }
@@ -155,7 +169,13 @@ impl super::DomainModule for Module {
                     Action::OutputsForget { output: *id }
                 });
                 // Source switching is brief and needs no disruptive confirmation.
-                impact.lines.push(format!("Switch source on output {id}"));
+                impact
+                    .lines
+                    .push(if matches!(command, Command::AdoptRemoteSource { .. }) {
+                        format!("Save the Discovery Server's source for output {id}")
+                    } else {
+                        format!("Switch source on output {id}")
+                    });
             }
             if old.video.resolution != out.video.resolution {
                 actions.push(Action::OutputsResolution { output: *id });

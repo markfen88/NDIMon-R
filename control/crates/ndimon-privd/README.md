@@ -141,7 +141,9 @@ stack sends them:
 - `TesseraBundle`, `TesseraEnable`, `TesseraDisable`: the plugin install, uninstall
   and `PluginExec` paths call the same handlers directly (bundle checksum, lock
   and platform check, then the bundle's own `tessera-bundle install` or
-  `uninstall` with fixed flags; enable synchronizes the network binding and starts
+  `uninstall` with fixed flags, run from a root-private unpacking under
+  `/var/lib/ndimon-privd/bundles` (not `/run`, which is `noexec`) that is removed
+  when the job ends; enable synchronizes the network binding and starts
   `tesserad`); they are not sent on their own.
 - The legacy-shape `Network*` variants (`NetworkStatus`, `NetworkCheckAddress`,
   `NetworkApply`, `NetworkConfirm`, `NetworkRollback`, `NetworkVlan*`,

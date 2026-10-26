@@ -311,6 +311,11 @@
             "tessera"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "A Discovery Server controller routed an output (the SDK already switched it).",
+          "type": "string",
+          "const": "discovery_server"
         }
       ]
     },

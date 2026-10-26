@@ -23,7 +23,10 @@ experimental.
 - **NDIMon-R 1.4.0 and Tessera 0.3.0 or later.** The runtime release a plugin
   archive embeds is recorded in `bundles.lock.json` and `compatibility.json`, which
   `cargo xtask build-plugin` checks against the bundle; use an archive built from a
-  Tessera 0.3.0 (or later) runtime bundle.
+  Tessera 0.3.0 (or later) runtime bundle. This NDIMon-R release pins the public
+  Tessera **0.3.0** release (package version `0.3.0-1`, source commit
+  `4b747c135d4879769cd83b6ff960bda025d9f72f`) and builds plugin archive 0.3.0 from
+  it.
 - The device installs a runtime bundle only on Debian 13 (amd64 or arm64) and on
   Ubuntu 24.04 arm64, which is experimental. The bundle is not interchangeable
   across OS and architecture combinations.
@@ -299,6 +302,8 @@ through DOM properties and text nodes, never HTML interpolation.
 - Software PTP was tested; hardware timestamping through VLAN interfaces has not been
   validated.
 - Runtime behaviour such as the Tessera portal and its default login belongs to the
-  runtime release. The 0.2.1 runtime enabled the portal by default with the
-  password `tessera`; read the notes of the release you install and change the
-  portal password before connecting the device to a shared network.
+  runtime release. The 0.3.0 runtime starts its portal with the password `tessera`
+  on a fresh install (an upgrade keeps an existing password) and answers on
+  loopback only until `listen` is changed in its `web.toml`; read the notes of the
+  release you install and change the portal password before connecting the device
+  to a shared network.

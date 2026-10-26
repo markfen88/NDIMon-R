@@ -25,6 +25,10 @@ struct TransportConfig {
 struct FinderConfig {
     std::string discovery_server_mode = "NDIDisServDis"; // NDIDisServEn | NDIDisServDis
     std::string discovery_server_ip = "";
+    // Register outputs with the Discovery Server, and let it route them.
+    // Legacy files had no switch: both were on.
+    bool receiver_advertising = true;
+    bool remote_control = true;
 };
 
 struct DeviceConfig {
