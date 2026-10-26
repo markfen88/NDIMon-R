@@ -530,6 +530,9 @@
                 <label class="form-label" for="off-ips">Off-Subnet Sources <small>(comma separated IPs)</small></label>
                 <input type="text" class="form-control" id="off-ips" placeholder="192.168.1.100, 10.0.0.200">
               </div>
+              <div class="col-md-6 d-flex align-items-center gap-2"><div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" id="ds-advertise"></div><label class="form-label mb-0" for="ds-advertise">Allow Receiver Advertising</label></div>
+              <div class="col-md-6 d-flex align-items-center gap-2"><div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" id="ds-control"></div><label class="form-label mb-0" for="ds-control">Allow Receiver Control</label></div>
+              <div class="col-12"><div class="form-text">With a Discovery Server set, advertising lists each output as a receiver with its state. Control lets anyone with Discovery Server access choose an output's source; NDI has no authentication.</div></div>
             </div>
             <div class="save-row mt-3">
               <button class="btn btn-primary btn-sm" onclick="saveNetSettings()"><i class="bi bi-check-lg me-1"></i>Save Discovery Settings</button>

@@ -9,34 +9,6 @@
 #include <cstring>
 #include <atomic>
 #include <algorithm>
-#include <regex>
-
-static std::string xml_escape(const std::string& s) {
-    std::string o;
-    o.reserve(s.size());
-    for (char c : s) {
-        switch (c) {
-            case '&':  o += "&amp;";  break;
-            case '<':  o += "&lt;";   break;
-            case '>':  o += "&gt;";   break;
-            case '"':  o += "&quot;"; break;
-            case '\'': o += "&apos;"; break;
-            default:   o += c;
-        }
-    }
-    return o;
-}
-
-// Extract a named XML attribute value from a simple single-element XML string.
-// e.g. xml_attr("<source name=\"foo\" url=\"bar\"/>", "name") -> "foo"
-static std::string xml_attr(const std::string& xml, const std::string& attr) {
-    // Match: attr="value" or attr='value'. The leading (^|[\s<]) boundary stops
-    // a request for "name" from matching "ndi_name=..." or "long_name=..." first.
-    std::regex re(R"((?:^|[\s<]))" + attr + R"(\s*=\s*[\"']([^\"']*)[\"'])");
-    std::smatch m;
-    if (std::regex_search(xml, m, re)) return m[1].str();
-    return {};
-}
 
 bool NDIReceiver::ndi_initialized_ = false;
 
@@ -58,11 +30,96 @@ void NDIReceiver::ndi_destroy() {
     }
 }
 
+RemoteSourceChange classify_source_change(const std::string& reported, const std::string& current) {
+    // connect()/disconnect() record the source before the SDK reports it, so
+    // only a name this receiver did not ask for came from a controller.
+    if (reported == current) return {};
+    return {true, reported};
+}
+
 NDIReceiver::NDIReceiver() = default;
 
 NDIReceiver::~NDIReceiver() {
     stop_thread();
     destroy_recv();
+}
+
+void NDIReceiver::register_receiver() {
+    if (!advertiser_ || !recv_ || registered_ || !advertise_) return;
+    NDIlib_recv_advertiser_add_receiver(advertiser_, recv_, allow_control_.load(),
+                                        /*allow_monitoring=*/true,
+                                        input_name_.empty() ? nullptr : input_name_.c_str());
+    registered_ = true;
+    std::cout << "[NDIRecv] Registered as receiver with discovery server: " << discovery_server_
+              << " (input='" << input_name_ << "', control="
+              << (allow_control_ ? "allowed" : "off") << ")\n";
+}
+
+void NDIReceiver::unregister_receiver() {
+    if (advertiser_ && recv_ && registered_)
+        NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
+    registered_ = false;
+}
+
+void NDIReceiver::destroy_advertiser() {
+    unregister_receiver();
+    if (advertiser_) {
+        NDIlib_recv_advertiser_destroy(advertiser_);
+        advertiser_ = nullptr;
+    }
+}
+
+void NDIReceiver::advertiser_thread() {
+    bool failing = false;
+    for (;;) {
+        std::string url;
+        {
+            std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
+            if (advertise_ && !discovery_server_.empty() && !advertiser_) url = discovery_server_;
+        }
+        if (!url.empty()) {
+            // Outside the lock: create waits for the Discovery Server.
+            NDIlib_recv_advertiser_create_t adv = {};
+            adv.p_url_address = url.c_str();
+            NDIlib_recv_advertiser_instance_t created = NDIlib_recv_advertiser_create(&adv);
+            std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
+            if (created && advertise_ && !advertiser_ && url == discovery_server_) {
+                advertiser_ = created;
+                register_receiver();
+                failing = false;
+            } else if (created) {
+                NDIlib_recv_advertiser_destroy(created);
+            } else if (!failing) {
+                failing = true;
+                std::cerr << "[NDIRecv] WARNING: recv_advertiser_create failed for " << url
+                          << " (no Discovery Server answers); retrying\n";
+            }
+        }
+        std::unique_lock<std::mutex> lk(advertiser_wait_mutex_);
+        advertiser_wait_.wait_for(lk, advertiser_retry_, [&] { return advertiser_stop_ || advertiser_wake_; });
+        if (advertiser_stop_) return;
+        advertiser_wake_ = false;
+    }
+}
+
+void NDIReceiver::wake_advertiser() {
+    {
+        std::lock_guard<std::mutex> lk(advertiser_wait_mutex_);
+        advertiser_wake_ = true;
+    }
+    advertiser_wait_.notify_all();
+}
+
+void NDIReceiver::set_advertising(bool advertise, bool allow_control, const std::string& input_name) {
+    std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
+    if (advertise == advertise_ && allow_control == allow_control_ && input_name == input_name_) return;
+    unregister_receiver();
+    advertise_ = advertise;
+    allow_control_ = allow_control;
+    input_name_ = input_name;
+    if (!advertise_) destroy_advertiser();
+    else register_receiver();
+    wake_advertiser();
 }
 
 std::string NDIReceiver::find_source_url(const std::string& name, SourceLookupTiming& timing) {
@@ -157,8 +214,7 @@ void NDIReceiver::recreate_recv_preserving_source() {
     }
 
     // Remove old recv from advertiser (keep advertiser alive)
-    if (advertiser_ && recv_)
-        NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
+    unregister_receiver();
 
     // Destroy old recv instance
     {
@@ -173,14 +229,10 @@ void NDIReceiver::recreate_recv_preserving_source() {
     create_recv();
 
     // Re-register new recv with the existing advertiser
-    if (advertiser_ && recv_)
-        NDIlib_recv_advertiser_add_receiver(advertiser_, recv_,
-                                            /*allow_controlling=*/true,
-                                            /*allow_monitoring=*/true,
-                                            /*group=*/nullptr);
+    register_receiver();
 
     // Reconnect to previous source if there was one; otherwise restart the
-    // recv thread idle so discovery/routing still works.
+    // recv thread idle so the Discovery Server can still route it.
     if (!src.empty() && src != "None") {
         connect(src, ip);
     } else if (recv_) {
@@ -202,30 +254,14 @@ bool NDIReceiver::init_recv() {
     if (!create_recv()) return false;
 
     // Register with the NDI discovery server as a receiver so this device
-    // appears under "receivers" in NDI discovery tools.
-    // Only possible if a discovery server is configured.
-    if (!discovery_server_.empty() && !advertiser_) {
-        NDIlib_recv_advertiser_create_t adv = {};
-        adv.p_url_address = discovery_server_.c_str();
-        advertiser_ = NDIlib_recv_advertiser_create(&adv);
-        if (advertiser_) {
-            NDIlib_recv_advertiser_add_receiver(advertiser_, recv_,
-                                                /*allow_controlling=*/true,
-                                                /*allow_monitoring=*/true,
-                                                /*group=*/nullptr);
-            std::cout << "[NDIRecv] Registered as receiver with discovery server: "
-                      << discovery_server_ << "\n";
-        } else {
-            std::cerr << "[NDIRecv] WARNING: recv_advertiser_create failed "
-                         "(device won't appear as receiver in discovery)\n";
-        }
-    }
+    // appears under "receivers" in NDI discovery tools. The advertiser thread
+    // creates the advertiser once a configured Discovery Server answers.
+    if (!advertiser_thread_.joinable())
+        advertiser_thread_ = std::thread(&NDIReceiver::advertiser_thread, this);
 
-    // Start recv + audio threads immediately so DS can send routing metadata at
-    // any time, even before a source is selected (idle/fresh-start scenario).
-    std::cout << "[NDIRecv] init_recv complete (advertiser="
-              << (advertiser_ ? "active" : "none")
-              << ", ds='" << discovery_server_ << "')\n";
+    // Start recv + audio threads immediately so the DS can route the receiver
+    // at any time, even before a source is selected (idle/fresh-start scenario).
+    std::cout << "[NDIRecv] init_recv complete (ds='" << discovery_server_ << "')\n";
     running_ = true;
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
     return true;
@@ -243,6 +279,12 @@ void NDIReceiver::stop_thread() {
 }
 
 void NDIReceiver::destroy_recv() {
+    {
+        std::lock_guard<std::mutex> lk(advertiser_wait_mutex_);
+        advertiser_stop_ = true;
+    }
+    advertiser_wait_.notify_all();
+    if (advertiser_thread_.joinable()) advertiser_thread_.join();
     // FrameSync must be destroyed before recv
     {
         std::lock_guard<std::mutex> fs_lock(framesync_mutex_);
@@ -252,10 +294,9 @@ void NDIReceiver::destroy_recv() {
             framesync_ = nullptr;
         }
     }
-    if (advertiser_) {
-        if (recv_) NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
-        NDIlib_recv_advertiser_destroy(advertiser_);
-        advertiser_ = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
+        destroy_advertiser();
     }
     {
         std::lock_guard<std::mutex> handle_lock(handle_mutex_);
@@ -269,16 +310,6 @@ void NDIReceiver::destroy_recv() {
 bool NDIReceiver::connect(const std::string& source_name, const std::string& source_ip) {
     const auto command_started = std::chrono::steady_clock::now();
     std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
-    // If currently connected and switching to None, inform the source/DS before disconnect
-    if ((source_name.empty() || source_name == "None") && recv_ &&
-        NDIlib_recv_get_no_connections(recv_) > 0) {
-        static const char none_routing[] =
-            "<ndi_routing><source name=\"\" url=\"\"/></ndi_routing>";
-        NDIlib_metadata_frame_t none_meta = {};
-        none_meta.p_data = const_cast<char*>(none_routing);
-        NDIlib_recv_send_metadata(recv_, &none_meta);
-        std::cout << "[NDIRecv] Sent routing-to-None to DS\n";
-    }
     const auto stop_started = std::chrono::steady_clock::now();
     stop_thread();  // stop polling thread; keep recv_ alive for discovery
     const auto stop_finished = std::chrono::steady_clock::now();
@@ -292,7 +323,7 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
         // Stay connected to nothing — device remains visible as a receiver
         if (recv_) NDIlib_recv_connect(recv_, nullptr);
         if (conn_cb_) conn_cb_(false, "");
-        // Keep threads running so DS can still send routing metadata
+        // Keep threads running so the DS can still route the receiver
         running_ = true;
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
         return true;
@@ -345,18 +376,10 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
 
     // Register connection metadata BEFORE connecting so the SDK sends it in
     // the initial handshake rather than racing with async connection setup.
-    // Send routing as a standalone frame (single XML root element) so the
-    // source/DS can parse it unambiguously — the full connect_metadata_ may
-    // contain multiple concatenated XML roots which many parsers reject.
+    // The Discovery Server learns the source from the SDK's own monitoring;
+    // <ndi_routing> is the SDK's routing vocabulary and is never sent upstream.
     const auto metadata_started = std::chrono::steady_clock::now();
     NDIlib_recv_clear_connection_metadata(recv_);
-    std::string routing_xml = "<ndi_routing><source name=\"" + xml_escape(source_name)
-                            + "\" url=\"" + xml_escape(source_ip) + "\"/></ndi_routing>";
-    {
-        NDIlib_metadata_frame_t meta = {};
-        meta.p_data = const_cast<char*>(routing_xml.c_str());
-        NDIlib_recv_add_connection_metadata(recv_, &meta);
-    }
     if (!connect_metadata_.empty()) {
         NDIlib_metadata_frame_t meta = {};
         meta.p_data = const_cast<char*>(connect_metadata_.c_str());
@@ -387,15 +410,6 @@ bool NDIReceiver::connect(const std::string& source_name, const std::string& sou
 
 void NDIReceiver::disconnect() {
     std::lock_guard<std::recursive_mutex> control_lock(control_mutex_);
-    // Inform source/DS that this receiver is no longer routing to any source
-    if (recv_ && NDIlib_recv_get_no_connections(recv_) > 0) {
-        static const char none_routing[] =
-            "<ndi_routing><source name=\"\" url=\"\"/></ndi_routing>";
-        NDIlib_metadata_frame_t none_meta = {};
-        none_meta.p_data = const_cast<char*>(none_routing);
-        NDIlib_recv_send_metadata(recv_, &none_meta);
-        std::cout << "[NDIRecv] Sent routing-to-None to DS\n";
-    }
     stop_thread();
     // Destroy FrameSync so the restarted recv_thread doesn't keep pulling
     // frames from the old session (which blocks frame_mutex_ and prevents splash).
@@ -414,7 +428,7 @@ void NDIReceiver::disconnect() {
         current_source_.clear();
         current_ip_.clear();
     }
-    // Keep threads running so DS can still send routing metadata at any time
+    // Keep threads running so the DS can still route the receiver at any time
     running_ = true;
     recv_thread_ = std::thread(&NDIReceiver::recv_thread, this);
 }
@@ -425,28 +439,10 @@ void NDIReceiver::reload_discovery(const std::string& new_ds) {
     discovery_server_ = new_ds;
     std::cout << "[NDIRecv] Reloading discovery server: '" << new_ds << "'\n";
 
-    // Tear down old advertiser
-    if (advertiser_) {
-        if (recv_) NDIlib_recv_advertiser_del_receiver(advertiser_, recv_);
-        NDIlib_recv_advertiser_destroy(advertiser_);
-        advertiser_ = nullptr;
-    }
-
-    // Create new advertiser with updated DS address (video connection is unaffected)
-    if (!new_ds.empty() && recv_) {
-        NDIlib_recv_advertiser_create_t adv = {};
-        adv.p_url_address = new_ds.c_str();
-        advertiser_ = NDIlib_recv_advertiser_create(&adv);
-        if (advertiser_) {
-            NDIlib_recv_advertiser_add_receiver(advertiser_, recv_,
-                                                /*allow_controlling=*/true,
-                                                /*allow_monitoring=*/true,
-                                                /*group=*/nullptr);
-            std::cout << "[NDIRecv] Re-registered with new discovery server: " << new_ds << "\n";
-        } else {
-            std::cerr << "[NDIRecv] WARNING: recv_advertiser_create failed for " << new_ds << "\n";
-        }
-    }
+    // Tear down the old advertiser; the advertiser thread creates one for the
+    // new address (video connection is unaffected).
+    destroy_advertiser();
+    wake_advertiser();
 }
 
 bool NDIReceiver::is_connected() const {
@@ -563,14 +559,12 @@ void NDIReceiver::recv_thread() {
 
     bool was_connected = false;
     auto probe_start   = std::chrono::steady_clock::now();
-    std::string src_snap, ip_snap;
+    std::string src_snap;
     {
         std::lock_guard<std::mutex> lk(state_mutex_);
         src_snap = current_source_;
-        ip_snap  = current_ip_;
     }
     bool probe_active  = !src_snap.empty() && src_snap != "None";
-    auto last_meta_send = std::chrono::steady_clock::now();
 
     // A new thread is a new connection (connect() already destroyed any
     // FrameSync). Its first video frame decides the stream type, even when the
@@ -581,6 +575,11 @@ void NDIReceiver::recv_thread() {
     stream_type_ = NDIStreamType::Unknown;
     auto connected_at = std::chrono::steady_clock::now();
     bool no_video_reported = false;
+    // A source change frame that was missed is caught by comparing the SDK's
+    // source every half second. Not at the start of a thread: connect() has
+    // just switched the source and the SDK may still name the previous one.
+    const auto thread_started = std::chrono::steady_clock::now();
+    auto last_source_check = thread_started;
 
     try {
     while (running_) {
@@ -605,19 +604,9 @@ void NDIReceiver::recv_thread() {
             {
                 std::lock_guard<std::mutex> lk(state_mutex_);
                 src_snap = current_source_;
-                ip_snap  = current_ip_;
             }
             std::cout << "[NDIRecv] Connected to " << src_snap << "\n";
             if (conn_cb_) conn_cb_(true, src_snap);
-            if (!src_snap.empty() && src_snap != "None") {
-                std::string routing = "<ndi_routing><source name=\"" + xml_escape(src_snap)
-                                    + "\" url=\"" + xml_escape(ip_snap) + "\"/></ndi_routing>";
-                NDIlib_metadata_frame_t meta = {};
-                meta.p_data = const_cast<char*>(routing.c_str());
-                NDIlib_recv_send_metadata(recv_, &meta);
-                std::cout << "[NDIRecv] Routing ACK sent on connect\n";
-            }
-            last_meta_send = std::chrono::steady_clock::now();
         } else if (connections == 0 && was_connected) {
             was_connected = false;
             {
@@ -638,10 +627,11 @@ void NDIReceiver::recv_thread() {
             first_frame_logged_ = false;
             stream_type_ = NDIStreamType::Unknown;
             no_video_reported = false;
+            // The receiver stays on its source: the SDK reconnects by itself when
+            // it returns. Dropping it here threw away a Discovery Server route.
             if (running_) {
                 std::cout << "[NDIRecv] Disconnected from " << src_snap << "\n";
                 if (conn_cb_) conn_cb_(false, src_snap);
-                if (recv_) NDIlib_recv_connect(recv_, nullptr);
             }
         } else if (!was_connected && probe_active && running_) {
             using clock = std::chrono::steady_clock;
@@ -654,36 +644,12 @@ void NDIReceiver::recv_thread() {
             }
         }
 
-        // ---- Periodic routing ACK ----
         {
-            std::lock_guard<std::mutex> lk(state_mutex_);
-            src_snap = current_source_;
-            ip_snap  = current_ip_;
-        }
-        if (was_connected && running_ &&
-            !src_snap.empty() && src_snap != "None") {
-            using clock = std::chrono::steady_clock;
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                clock::now() - last_meta_send).count();
-            if (elapsed >= 30) {
-                // Routing ACK
-                std::string routing = "<ndi_routing><source name=\"" + xml_escape(src_snap)
-                                    + "\" url=\"" + xml_escape(ip_snap) + "\"/></ndi_routing>";
-                NDIlib_metadata_frame_t meta = {};
-                meta.p_data = const_cast<char*>(routing.c_str());
-                NDIlib_recv_send_metadata(recv_, &meta);
-
-                // Device status telemetry for DS
-                if (status_meta_cb_) {
-                    std::string status_xml = status_meta_cb_();
-                    if (!status_xml.empty()) {
-                        NDIlib_metadata_frame_t smeta = {};
-                        smeta.p_data = const_cast<char*>(status_xml.c_str());
-                        NDIlib_recv_send_metadata(recv_, &smeta);
-                    }
-                }
-
-                last_meta_send = clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            if (now - thread_started >= std::chrono::seconds(2) &&
+                now - last_source_check >= std::chrono::milliseconds(500)) {
+                last_source_check = now;
+                on_source_change(false);
             }
         }
 
@@ -758,31 +724,10 @@ void NDIReceiver::recv_thread() {
             NDIlib_frame_type_e mt = NDIlib_recv_capture_v3(
                 recv_, nullptr, nullptr, &metadata, 0);
             if (mt == NDIlib_frame_type_metadata && metadata.p_data) {
-                std::string xml(metadata.p_data);
-                if (xml.find("ndi_routing") != std::string::npos) {
-                    std::string name = xml_attr(xml, "name");
-                    std::string url  = xml_attr(xml, "url");
-                    std::cout << "[NDIRecv] DS routing: source='"
-                              << name << "' url='" << url << "'\n";
-                    {
-                        std::lock_guard<std::mutex> lk(state_mutex_);
-                        current_source_ = (name.empty() || name == "None") ? "" : name;
-                        current_ip_     = url;
-                    }
-                    if (routing_cb_) routing_cb_(name, url);
-                } else {
-                    std::cout << "[NDIRecv] Metadata: " << xml.substr(0, 120) << "\n";
-                }
+                std::cout << "[NDIRecv] Metadata: " << std::string(metadata.p_data).substr(0, 120) << "\n";
                 NDIlib_recv_free_metadata(recv_, &metadata);
             } else if (mt == NDIlib_frame_type_source_change) {
-                const char* p_src = nullptr;
-                NDIlib_recv_get_source_name(recv_, &p_src, 0);
-                std::string new_src = p_src ? p_src : "";
-                if (p_src) NDIlib_recv_free_string(recv_, p_src);
-                if (!new_src.empty()) {
-                    std::lock_guard<std::mutex> lk(state_mutex_);
-                    current_source_ = new_src;
-                }
+                on_source_change();
             }
 
             // Small sleep to pace the pull loop (~60Hz)
@@ -901,23 +846,8 @@ void NDIReceiver::recv_thread() {
                 }
 
                 case NDIlib_frame_type_metadata: {
-                    if (metadata.p_data) {
-                        std::string xml(metadata.p_data);
-                        if (xml.find("ndi_routing") != std::string::npos) {
-                            std::string name = xml_attr(xml, "name");
-                            std::string url  = xml_attr(xml, "url");
-                            std::cout << "[NDIRecv] DS routing: source='"
-                                      << name << "' url='" << url << "'\n";
-                            {
-                                std::lock_guard<std::mutex> lk(state_mutex_);
-                                current_source_ = (name.empty() || name == "None") ? "" : name;
-                                current_ip_     = url;
-                            }
-                            if (routing_cb_) routing_cb_(name, url);
-                        } else {
-                            std::cout << "[NDIRecv] Metadata: " << xml.substr(0, 120) << "\n";
-                        }
-                    }
+                    if (metadata.p_data)
+                        std::cout << "[NDIRecv] Metadata: " << std::string(metadata.p_data).substr(0, 120) << "\n";
                     NDIlib_recv_free_metadata(recv_, &metadata);
                     break;
                 }
@@ -925,18 +855,9 @@ void NDIReceiver::recv_thread() {
                 case NDIlib_frame_type_status_change:
                     break;
 
-                case NDIlib_frame_type_source_change: {
-                    const char* p_src = nullptr;
-                    NDIlib_recv_get_source_name(recv_, &p_src, 0);
-                    std::string new_src = p_src ? p_src : "";
-                    if (p_src) NDIlib_recv_free_string(recv_, p_src);
-                    std::cout << "[NDIRecv] Source change: '" << new_src << "'\n";
-                    if (!new_src.empty()) {
-                        std::lock_guard<std::mutex> lk(state_mutex_);
-                        current_source_ = new_src;
-                    }
+                case NDIlib_frame_type_source_change:
+                    on_source_change();
                     break;
-                }
 
                 case NDIlib_frame_type_error:
                     std::cerr << "[NDIRecv] Frame error\n";
@@ -956,6 +877,35 @@ void NDIReceiver::recv_thread() {
     }
 
     std::cout << "[NDIRecv] STOPPED recv thread\n";
+}
+
+// The SDK switched the receive instance itself: on a Discovery Server connect
+// command (allow_controlling) or after our own connect(). Never answer with a
+// connect; the control plane records the new source.
+void NDIReceiver::on_source_change(bool event) {
+    // The name is the source the SDK is assigned to, NULL only after a
+    // controller disconnect (a lost sender keeps its name). The return value
+    // only says whether it changed since the last call, so it is not used:
+    // the RK3588 once delivered a disconnect frame whose change was missed.
+    const char* p_src = nullptr;
+    NDIlib_recv_get_source_name(recv_, &p_src, 0);
+    const std::string reported = p_src ? p_src : "";
+    if (p_src) NDIlib_recv_free_string(recv_, p_src);
+    RemoteSourceChange change;
+    {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        change = classify_source_change(reported, current_source_);
+        if (change.remote) {
+            // A routed source is known by name only; an old endpoint would
+            // send the next reconnect back to the previous source.
+            current_source_ = change.source;
+            current_ip_.clear();
+        }
+    }
+    if (event || change.remote)
+        std::cout << "[NDIRecv] Source change: '" << reported << "'"
+                  << (change.remote ? " (Discovery Server)" : "") << "\n";
+    if (change.remote && remote_cb_) remote_cb_(change.source);
 }
 
 int NDIReceiver::pull_audio(int frames, int channels, float* const* planes, int* captured_channels) {

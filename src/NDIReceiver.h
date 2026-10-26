@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <Processing.NDI.Lib.h>
@@ -45,9 +46,19 @@ struct NDIAudioFrame {
 using NDIVideoCallback      = std::function<void(NDIVideoFrame&)>;
 using NDIAudioCallback      = std::function<void(NDIAudioFrame&)>;
 using NDIConnectionCallback = std::function<void(bool connected, const std::string& source_name)>;
-// Routing callback: fired when the discovery server assigns a new source.
-// source_name is empty string to disconnect.
-using NDIRoutingCallback    = std::function<void(const std::string& source_name, const std::string& source_url)>;
+// Remote source callback: fired from the recv thread when the SDK switched the
+// receiver to another source on a Discovery Server command (allow_controlling).
+// source_name is empty when the controller disconnected the receiver.
+using NDIRemoteSourceCallback = std::function<void(const std::string& source_name)>;
+
+// What the recv thread does with an SDK source_change, given the name the SDK
+// reports and the source this receiver was last told to use. A change this
+// receiver made itself is not a remote one.
+struct RemoteSourceChange {
+    bool remote = false;
+    std::string source;   // "" = disconnected
+};
+RemoteSourceChange classify_source_change(const std::string& reported, const std::string& current);
 
 class NDIReceiver {
 public:
@@ -80,6 +91,14 @@ public:
     // Recreate the NDI advertiser with a new discovery server address.
     // Call when DS settings change at runtime. Does not interrupt video connection.
     void reload_discovery(const std::string& new_ds);
+
+    // Whether to register with the Discovery Server, whether it may route this
+    // receiver, and the receiver input name it shows. A change re-registers the
+    // receiver with the advertiser only; the video connection is unaffected.
+    void set_advertising(bool advertise, bool allow_control, const std::string& input_name);
+    bool remote_control_allowed() const { return allow_control_.load(); }
+    // How often a Discovery Server that did not answer is tried again (tests).
+    void set_advertiser_retry(std::chrono::milliseconds interval) { advertiser_retry_ = interval; }
 
     // Set the NDI receiver name visible in discovery tools.
     // Call rename() instead if the recv instance is already running.
@@ -118,7 +137,7 @@ public:
     int video_queue_depth();
     void set_audio_callback(NDIAudioCallback cb)         { audio_cb_   = std::move(cb); }
     void set_connection_callback(NDIConnectionCallback cb) { conn_cb_  = std::move(cb); }
-    void set_routing_callback(NDIRoutingCallback cb)     { routing_cb_ = std::move(cb); }
+    void set_remote_source_callback(NDIRemoteSourceCallback cb) { remote_cb_ = std::move(cb); }
 
     void free_video(NDIVideoFrame& f);
     void free_video(NDIlib_video_frame_v2_t* frame);   // free raw SDK frame (cross-thread safe)
@@ -130,13 +149,19 @@ public:
     // Recv thread heartbeat (monotonic ms, for health monitoring)
     int64_t recv_heartbeat_ms() const { return recv_heartbeat_ms_.load(); }
 
-    // Status metadata callback — called every 30s from recv thread to build
-    // device telemetry XML for Discovery Server
-    using NDIStatusMetadataCallback = std::function<std::string()>;
-    void set_status_metadata_callback(NDIStatusMetadataCallback cb) { status_meta_cb_ = std::move(cb); }
-
 private:
     void recv_thread();
+    // Compare the SDK's source with the one this receiver was told to use;
+    // `event` is true for an SDK source_change frame (logged even when equal).
+    void on_source_change(bool event = true);
+    // Registration with the Discovery Server. Callers hold control_mutex_.
+    void register_receiver();
+    void unregister_receiver();
+    void destroy_advertiser();
+    // advertiser_create returns NULL while no Discovery Server answers (e.g. at
+    // boot before the network is up). This thread keeps trying until it does.
+    void advertiser_thread();
+    void wake_advertiser();
     // Destroy the current recv instance and create a fresh one (new name),
     // re-register with the advertiser, and reconnect to whatever source was
     // active. Used by rename().
@@ -171,12 +196,21 @@ private:
     std::string recv_name_{"NDI Decoder"};
     std::string connect_metadata_;   // sent to source/DS on every connection (SDK-managed)
 
+    // Advertiser registration settings (guarded by control_mutex_ except the atomics).
+    std::atomic<bool> advertise_{true}, allow_control_{true};
+    std::string input_name_;
+    bool registered_ = false;
+    std::thread advertiser_thread_;
+    std::mutex advertiser_wait_mutex_;
+    std::condition_variable advertiser_wait_;
+    bool advertiser_stop_ = false, advertiser_wake_ = false;
+    std::chrono::milliseconds advertiser_retry_{10000};
+
     NDIVideoCallback      video_cb_;
     std::function<void(int64_t)> pull_cb_;
     NDIAudioCallback      audio_cb_;
     NDIConnectionCallback conn_cb_;
-    NDIRoutingCallback    routing_cb_;
-    NDIStatusMetadataCallback status_meta_cb_;
+    NDIRemoteSourceCallback remote_cb_;
 
     std::atomic<int64_t> recv_heartbeat_ms_{0};
 

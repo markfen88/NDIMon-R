@@ -26,6 +26,8 @@ export interface OutputStatus {
   output_index: number;
   connected: boolean;
   source_name: string;
+  // "discovery_server" while the Discovery Server's route is shown.
+  source_origin?: string;
   output_alias: string;
   connector: string;
   fps: number;

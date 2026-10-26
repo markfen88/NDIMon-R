@@ -3,4 +3,4 @@ import type { ColorSpace } from "./ColorSpace";
 import type { TallyMode } from "./TallyMode";
 import type { Transport } from "./Transport";
 
-export type Ndi = { receive: Transport, discovery_servers: Array<string>, groups: Array<string>, off_subnet_sources: Array<string>, tally: TallyMode, color_space: ColorSpace, };
+export type Ndi = { receive: Transport, discovery_servers: Array<string>, groups: Array<string>, off_subnet_sources: Array<string>, tally: TallyMode, color_space: ColorSpace, receiver_advertising: boolean, remote_control: boolean, };

@@ -514,6 +514,13 @@ pub struct Ndi {
     pub off_subnet_sources: Vec<String>,
     pub tally: TallyMode,
     pub color_space: ColorSpace,
+    // Register the outputs as receivers with the Discovery Server (monitoring).
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    pub receiver_advertising: bool,
+    // Let a Discovery Server controller choose the outputs' sources. New
+    // installs start with it off; earlier documents and imports had it on.
+    #[cfg_attr(feature = "serde", serde(default = "default_true"))]
+    pub remote_control: bool,
 }
 
 impl Default for Ndi {
@@ -525,6 +532,8 @@ impl Default for Ndi {
             off_subnet_sources: Vec::new(),
             tally: TallyMode::default(),
             color_space: ColorSpace::default(),
+            receiver_advertising: true,
+            remote_control: false,
         }
     }
 }

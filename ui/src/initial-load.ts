@@ -41,6 +41,9 @@ export let fmtHz = function(hz: number) {
 
 // Per-output modes cache: key = output_index
 export const outputModes: Record<number, VideoMode[]> = {};
+// The source an output shows, and who chose it when a Discovery Server did.
+const sourceLabel = (out: OutputStatus): string =>
+  (out.source_name || 'None') + (out.source_name && out.source_origin === 'discovery_server' ? ' · set by Discovery Server' : '');
 
 export let loadOutputModes = async function(cardIdx: number, outputIndex: number) {
   try {
@@ -362,7 +365,7 @@ export let buildOutputCards = function() {
         </div>
 
         <div class="row g-0 mb-3" style="background:var(--bg-card2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 12px">
-          <div class="col-12"><div class="stat-row"><span class="stat-label">Now showing</span><span class="stat-val" id="out-src-${idx}">${esc(out.source_name||'None')}</span></div></div>
+          <div class="col-12"><div class="stat-row"><span class="stat-label">Now showing</span><span class="stat-val" id="out-src-${idx}">${esc(sourceLabel(out))}</span></div></div>
           <div class="col-12"><div class="stat-row"><span class="stat-label">Input → Output</span><span class="stat-val" id="out-res-${idx}">—</span></div></div>
           <div class="col-12"><div class="stat-row"><span class="stat-label">Frame rate · Codec</span><span class="stat-val" id="out-fps-${idx}">—</span></div></div>
         </div>
@@ -454,7 +457,7 @@ export let updateOutputCards = function() {
     const disc = (document.getElementById(`out-disc-${idx}`) as HTMLButtonElement);
     if (disc) disc.disabled = !out.connected && !out.source_name;
     // Status rows (read-only labels — never touch form controls like dropdowns)
-    setText(`out-src-${idx}`, out.source_name || 'None');
+    setText(`out-src-${idx}`, sourceLabel(out));
     const inStr = out.input_width ? `${out.input_width}×${out.input_height}` : '—';
     const outStr = out.width ? `${out.width}×${out.height} @ ${fmtHz(out.refresh_hz||out.refresh)}` : '—';
     setText(`out-res-${idx}`, `${inStr} → ${outStr}`);

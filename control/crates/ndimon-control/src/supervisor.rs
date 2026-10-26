@@ -142,7 +142,9 @@ struct Recovery {
 impl Recovery {
     fn activity(&mut self, activity: CommandActivity) {
         match activity.command {
-            Command::SelectSource { output, .. } | Command::ReconnectSource { output } => {
+            Command::SelectSource { output, .. }
+            | Command::ReconnectSource { output }
+            | Command::AdoptRemoteSource { output, .. } => {
                 self.retries.remove(&output);
                 self.grace.insert(output, activity.at + GRACE);
             }
@@ -232,6 +234,30 @@ impl Recovery {
             .unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))
     }
 }
+/// A Discovery Server controller switched an output (the decoder's
+/// `remote_source` event): save that source, last writer wins. The SDK has
+/// already switched the receiver, so the command carries no connect.
+fn remote_source(saved: &DesiredState, data: &Value) -> Option<Command> {
+    if data["type"] != "remote_source" {
+        return None;
+    }
+    let id = output_id(data, "output")?;
+    let name = data["source"].as_str()?;
+    if !saved.ndi.remote_control {
+        tracing::warn!(
+            output = id,
+            source = name,
+            "Discovery Server route ignored: remote control is off"
+        );
+        return None;
+    }
+    let current = saved.outputs.get(&id).and_then(|o| o.source.as_ref());
+    if current.map_or("", |s| s.name.as_str()) == name {
+        return None;
+    }
+    let source = (!name.is_empty()).then(|| NdiSourceRef::new(name, ""));
+    Some(Command::AdoptRemoteSource { output: id, source })
+}
 fn output_id(data: &Value, key: &str) -> Option<u8> {
     data[key].as_u64().filter(|n| *n < 8).map(|n| n as u8 + 1)
 }
@@ -296,7 +322,17 @@ async fn run(
                 refresh(&handle, &mut recovery).await;
                 drain(&mut commands, &mut recovery);
                 match event {
-                    Ok(HubMessage::Event(event)) => if let Event::Status { source: StatusSource::Decoder, data } = event.as_ref() { recovery.event(data); },
+                    Ok(HubMessage::Event(event)) => if let Event::Status { source: StatusSource::Decoder, data } = event.as_ref() {
+                        recovery.event(data);
+                        if let Some(command) = remote_source(&recovery.saved, data) {
+                            tracing::info!(?command, "Discovery Server routed an output");
+                            if let Err(error) = handle.submit(CommandRequest::new(command), Origin::DiscoveryServer).await {
+                                tracing::warn!(?error, "cannot save the Discovery Server route");
+                            }
+                            refresh(&handle, &mut recovery).await;
+                            drain(&mut commands, &mut recovery);
+                        }
+                    },
                     Err(broadcast::error::RecvError::Closed) => return,
                     _ => { if let Ok(data) = decoder.request(json!({"action":"status"})).await { recovery.status(&data); } }
                 }

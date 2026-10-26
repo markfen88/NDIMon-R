@@ -256,20 +256,35 @@ public:
     }
     void set_ipc(IPCServer* ipc) { ipc_ = ipc; }
 
-    // Replay the last buffered routing event to all subscribers (startup race safety)
-    void replay_routing_event() {
+    // Replay a Discovery Server route the control plane may have missed (it
+    // was restarting) while this output is still on that source.
+    void replay_remote_source() {
         if (!ipc_) return;
-        std::lock_guard<std::mutex> lk(routing_event_mutex_);
-        if (!last_routing_event_.is_null()) {
-            ipc_->push_event(last_routing_event_);
+        nlohmann::json ev;
+        {
+            std::lock_guard<std::mutex> lk(source_mutex_);
+            if (!remote_origin_) return;
+            ev = remote_source_event(source_name_);
         }
+        ipc_->push_event(ev);
+    }
+
+    nlohmann::json remote_source_event(const std::string& name) const {
+        return {{"type", "remote_source"}, {"output", ch_num_ - 1}, {"source", name}};
+    }
+
+    // The control plane already holds this source because the Discovery
+    // Server put the receiver on it: connecting again would only interrupt it.
+    bool on_remote_source(const std::string& name, const std::string& ip) const {
+        std::lock_guard<std::mutex> lk(source_mutex_);
+        return remote_origin_ && ip.empty() && name == source_name_;
     }
 
     // Push current connection state to newly connected subscriber so the control
     // supervisor can start a retry loop immediately if the saved source is unavailable.
     // drm_ready is included so the supervisor won't start a reconnect loop for an
     // output with no physical display (avoids fighting with workers that have
-    // no display but have a saved source from a previous DS routing event).
+    // no display but have a saved source from a previous Discovery Server route).
     void push_connection_state() {
         if (!ipc_) return;
         nlohmann::json ev;
@@ -351,56 +366,20 @@ public:
         recv_->set_connection_callback([this](bool connected, const std::string& src) {
             on_connection(connected, src);
         });
-        recv_->set_status_metadata_callback([this]() -> std::string {
-            // Build device telemetry XML for Discovery Server
-            int w = input_w_.load(), h = input_h_.load();
-            std::string res = std::to_string(w) + "x" + std::to_string(h);
-
-            // Read SoC temperature
-            int soc_temp = 0;
+        recv_->set_remote_source_callback([this](const std::string& name) {
+            // The SDK already switched the receiver on a Discovery Server
+            // command. Record it and tell the control plane, which saves it as
+            // this output's source; it must never be answered with a connect.
             {
-                std::ifstream tf("/sys/class/thermal/thermal_zone0/temp");
-                if (tf) { tf >> soc_temp; soc_temp /= 1000; }
+                std::lock_guard<std::mutex> lk(source_mutex_);
+                source_name_ = name;
+                source_ip_.clear();
+                remote_origin_ = !name.empty();
+                if (!name.empty()) last_source_ = name;
             }
-
-            // Build XML
-            char buf[512];
-            snprintf(buf, sizeof(buf),
-                "<ndi_device_status"
-                " fps=\"%.2f\""
-                " resolution=\"%s\""
-                " codec=\"%s\""
-                " stream_type=\"%s\""
-                " connected=\"%s\""
-                " health=\"%s\""
-                " soc_temp_c=\"%d\""
-                " stall_count=\"%d\""
-                "/>",
-                fps_.load(),
-                res.c_str(),
-                codec_name_.c_str(),
-                (recv_ && recv_->stream_type() == NDIStreamType::HX) ? "HX" :
-                (recv_ && recv_->stream_type() == NDIStreamType::Standard) ? "Standard" : "unknown",
-                connected_.load() ? "true" : "false",
-                health_state().c_str(),
-                soc_temp,
-                stall_count_);
-            return std::string(buf);
-        });
-        recv_->set_routing_callback([this](const std::string& name, const std::string& url) {
-            // Discovery server assigned a new source — push event to the control plane,
-            // which owns all routing decisions. Buffer for subscriber reconnect replay.
-            if (!ipc_) return;
-            nlohmann::json ev;
-            ev["type"]   = "routing";
-            ev["source"] = name;
-            ev["url"]    = url;
-            ev["output"] = ch_num_ - 1;
-            {
-                std::lock_guard<std::mutex> lk(routing_event_mutex_);
-                last_routing_event_ = ev;
-            }
-            ipc_->push_event(ev);
+            std::cout << "[Worker" << ch_num_ << "] Discovery Server "
+                      << (name.empty() ? "disconnected the output" : "routed to: " + name) << "\n";
+            if (ipc_) ipc_->push_event(remote_source_event(name));
         });
 
         // Auto-connect to last source
@@ -423,6 +402,8 @@ public:
             !cfg.finder.discovery_server_ip.empty()) {
             recv_->set_discovery_server(cfg.finder.discovery_server_ip);
         }
+        recv_->set_advertising(cfg.finder.receiver_advertising, cfg.finder.remote_control,
+                               build_recv_name());
 
         // Always create and register the NDI receiver so this device appears
         // as a receiver in the DS regardless of display state.
@@ -495,13 +476,14 @@ public:
         connected_ = false;
         {
             std::lock_guard<std::mutex> lk(source_mutex_);
+            // A retry of the routed source keeps its origin; anything else is local.
+            remote_origin_ = remote_origin_ && real_source && name == source_name_;
             source_name_ = name;
             source_ip_   = ip;
         }
 
-        // Build properties metadata to send to the source/DS on connection.
-        // Informs the DS of the device identity, current routing assignment,
-        // and audio/video/general configuration.
+        // Build properties metadata to send to the source on connection:
+        // device identity and audio/video/general configuration.
         if (recv_ && real_source) {
             auto& cfg = Config::instance();
             auto out  = cfg.get_output(ch_num_);
@@ -519,11 +501,6 @@ public:
                 " model=\"NDI Decoder\""
                 " session=\"" + alias + "\""
                 " serial=\"" + cfg.device.ndi_recv_name + "\"/>";
-
-            // Routing ack — tells the DS which source this receiver is showing
-            xml += "<ndi_routing>"
-                   "<source name=\"" + name + "\" url=\"" + ip + "\"/>"
-                   "</ndi_routing>";
 
             // Audio
             xml += std::string("<ndi_audio_setup")
@@ -612,6 +589,7 @@ public:
             std::lock_guard<std::mutex> lk(source_mutex_);
             source_name_.clear();
             source_ip_.clear();
+            remote_origin_ = false;
         }
         auto& cfg = Config::instance();
         OutputConfig oc = cfg.get_output(ch_num_);
@@ -669,6 +647,8 @@ public:
                 write_ndi_sdk_config(cfg);   // update ndi-config.v1.json
                 recv_->reload_discovery(ds); // recreate advertiser with new DS
             }
+            recv_->set_advertising(cfg.finder.receiver_advertising, cfg.finder.remote_control,
+                                   build_recv_name());
         }
 
         // Transport mode — the SDK reads transport settings from
@@ -862,6 +842,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(source_mutex_);
             s["source_name"] = source_name_;
+            s["source_origin"] = remote_origin_ ? "discovery_server" : "local";
         }
         s["input_width"]  = input_w_.load();
         s["input_height"] = input_h_.load();
@@ -1522,6 +1503,7 @@ private:
     int         lease_fd_  = -1;
     std::string source_name_;
     std::string source_ip_;
+    bool        remote_origin_ = false;   // source_name_ was set by the Discovery Server
     mutable std::mutex source_mutex_;
 
     std::unique_ptr<DRMDisplay>   drm_;
@@ -1559,8 +1541,6 @@ private:
     int                  stall_count_{0};
 
     IPCServer*        ipc_ = nullptr;
-    nlohmann::json    last_routing_event_;   // buffered for subscriber reconnect
-    mutable std::mutex routing_event_mutex_;
     std::string       last_source_;          // last successfully connected source name
 
     bool ndi_started_ = false;
@@ -1992,7 +1972,8 @@ int main(int argc, char* argv[]) {
                     }
                     if (out.source_name != old.source_name || out.source_ip != old.source_ip) {
                         if (out.source_name.empty()) w->forget_source();
-                        else w->connect_source(out.source_name, out.source_ip);
+                        else if (!w->on_remote_source(out.source_name, out.source_ip))
+                            w->connect_source(out.source_name, out.source_ip);
                     }
                 }
                 if (!w->is_streaming()) w->show_splash(false);
@@ -2101,11 +2082,11 @@ int main(int argc, char* argv[]) {
     // Wire IPC pointer into workers so they can push events
     for (auto& w : workers) w->set_ipc(ipc.get());
 
-    // When a subscriber (ndimon-control) connects, replay buffered routing events
-    // so it can recover current state (handles startup race and control restarts)
+    // When a subscriber (ndimon-control) connects, replay a Discovery Server
+    // route it may have missed (handles startup race and control restarts)
     ipc->set_subscriber_connected_callback([&]() {
         for (auto& w : workers) {
-            w->replay_routing_event();
+            w->replay_remote_source();
             w->push_connection_state();   // triggers the supervisor's retry loop if needed
         }
     });

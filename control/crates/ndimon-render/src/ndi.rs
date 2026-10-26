@@ -43,6 +43,17 @@ pub fn import_json(state: &mut DesiredState, files: &LegacyFiles) -> Result<(), 
         groups
     };
     state.ndi.off_subnet_sources = split(read("ndi-config.json")?.as_str().unwrap_or(""));
+    // 1.3.x always let a Discovery Server route the outputs; an upgrade keeps
+    // that, a new install (no legacy NDI files) starts with it off.
+    state.ndi.remote_control = [
+        "/etc/ndimon-dec1-settings.json",
+        "/etc/ndimon-rx-settings.json",
+        "/etc/ndimon-find-settings.json",
+        "/etc/ndi-group.json",
+        "/etc/ndi-config.json",
+    ]
+    .iter()
+    .any(|path| files.contains_key(*path));
     Ok(())
 }
 

@@ -163,6 +163,41 @@
           "additionalProperties": false
         },
         {
+          "description": "Save the source a Discovery Server controller already switched the\noutput to (None = it disconnected the output). The decoder is on that\nsource, so this never reconnects it.",
+          "type": "object",
+          "properties": {
+            "adopt_remote_source": {
+              "type": "object",
+              "properties": {
+                "output": {
+                  "type": "integer",
+                  "format": "uint8",
+                  "minimum": 0,
+                  "maximum": 255
+                },
+                "source": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/NdiSourceRef"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "output"
+              ]
+            }
+          },
+          "required": [
+            "adopt_remote_source"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "Atomic legacy decode setup / restore across shared decoder-file fields.",
           "type": "object",
           "properties": {
@@ -1533,6 +1568,14 @@
         },
         "color_space": {
           "$ref": "#/$defs/ColorSpace"
+        },
+        "receiver_advertising": {
+          "type": "boolean",
+          "default": true
+        },
+        "remote_control": {
+          "type": "boolean",
+          "default": true
         }
       },
       "additionalProperties": false,

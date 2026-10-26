@@ -33,17 +33,30 @@ pub enum Domain {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum Origin {
-    Ui { session: String },
-    Cli { uid: u32 },
-    Plugin { name: String },
-    Tessera { peer: String },
+    Ui {
+        session: String,
+    },
+    Cli {
+        uid: u32,
+    },
+    Plugin {
+        name: String,
+    },
+    Tessera {
+        peer: String,
+    },
     Boot,
     Migration,
+    /// A Discovery Server controller routed an output (the SDK already switched it).
+    DiscoveryServer,
 }
 
 impl Origin {
     pub fn requires_confirmation(&self) -> bool {
-        !matches!(self, Self::Boot | Self::Migration | Self::Tessera { .. })
+        !matches!(
+            self,
+            Self::Boot | Self::Migration | Self::Tessera { .. } | Self::DiscoveryServer
+        )
     }
 }
 
@@ -179,6 +192,13 @@ pub enum Command {
     RetrySource {
         output: OutputId,
         source: NdiSourceRef,
+    },
+    /// Save the source a Discovery Server controller already switched the
+    /// output to (None = it disconnected the output). The decoder is on that
+    /// source, so this never reconnects it.
+    AdoptRemoteSource {
+        output: OutputId,
+        source: Option<NdiSourceRef>,
     },
     /// Atomic legacy decode setup / restore across shared decoder-file fields.
     PutOutputSettings {

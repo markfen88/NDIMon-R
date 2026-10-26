@@ -390,6 +390,14 @@
         },
         "color_space": {
           "$ref": "#/$defs/ColorSpace"
+        },
+        "receiver_advertising": {
+          "type": "boolean",
+          "default": true
+        },
+        "remote_control": {
+          "type": "boolean",
+          "default": true
         }
       },
       "additionalProperties": false,

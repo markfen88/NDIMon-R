@@ -52,7 +52,12 @@ impl super::DomainModule for Module {
         if previous.ndi != next.ndi {
             actions.push(Action::NdiDeliver);
         }
-        if previous.ndi.receive != next.ndi.receive {
+        // The SDK reads transport and Discovery Server settings only when the
+        // decoder starts: a receiver it routes by name is resolved through the
+        // server it started with, so both changes restart the decoder.
+        let transport = previous.ndi.receive != next.ndi.receive;
+        let discovery = previous.ndi.discovery_servers != next.ndi.discovery_servers;
+        if transport || discovery {
             actions.push(Action::NdiRestartDecoder);
             impact.scope = ImpactScope::Service;
             impact.restarts.push(Service::Decoder);
@@ -61,7 +66,15 @@ impl super::DomainModule for Module {
                 "decoder video/audio",
                 Some(3000),
             ));
+        }
+        if transport {
             impact.lines.push("Restart the decoder to change NDI receive transport; video and audio pause briefly".into());
+        }
+        if discovery {
+            impact.lines.push(
+                "Restart the decoder to change the Discovery Server; video and audio pause briefly"
+                    .into(),
+            );
         }
         if matches!(command, Command::RefreshNdi) {
             // A rescan the operator asked for interrupts only source discovery

@@ -163,6 +163,10 @@ export let saveNetSettings = async function() {
   await save({set_ndi:{...ndi,discovery_servers:split(ip)}});
   await save({set_ndi:{...ndi,groups}});
   await save({set_ndi:{...ndi,off_subnet_sources:split(ips)}});
+  const advertise = document.getElementById('ds-advertise') as HTMLInputElement | null;
+  const control = document.getElementById('ds-control') as HTMLInputElement | null;
+  if (advertise && control && (advertise.checked !== ndi.receiver_advertising || control.checked !== ndi.remote_control))
+    await save({set_ndi:{...ndi,receiver_advertising:advertise.checked,remote_control:control.checked}});
   await save({set_device:devicePatch({ndi_alias:alias})});
   const bad = results.find(r => r && r.ok === false);
   if (!done(bad || {}, 'Discovery settings saved')) return;
