@@ -139,7 +139,7 @@ cargo xtask build-plugin tessera --bundle /path/to/tessera-bundle_VERSION_ARCH.t
 cargo xtask build-plugin --plugin NAME [--arch amd64|arm64] [--output DIR] [--release-tag TAG]
 ```
 
-`build-deb` (default version `1.4.0-1`) builds the workspace in release mode, the
+`build-deb` (default version `1.4.1-1`) builds the workspace in release mode, the
 decoder and finder with CMake, fetches the vendor assets, and stages four
 packages for the machine's architecture into `dist/debian/`, assembled with
 `dpkg-deb` directly:

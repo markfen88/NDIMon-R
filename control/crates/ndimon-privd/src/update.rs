@@ -435,6 +435,43 @@ fn architecture(host: &Host) -> Result<String, Error> {
     }
     Ok(arch)
 }
+/// The distribution release a package set is built for, as release asset names
+/// carry it: os-release `ID` and `VERSION_ID` (`debian13`, `ubuntu24.04`). The
+/// runtime links the distribution's own libraries and every package its glibc,
+/// so a release holds one package set per distribution release and architecture.
+fn distribution(host: &Host) -> Result<String, Error> {
+    // /etc/os-release is usually a link to /usr/lib/os-release, and the reader
+    // follows no links.
+    let text = match host.root.read("/etc/os-release", 16 * 1024) {
+        Ok(Some(text)) => text,
+        _ => host
+            .root
+            .read("/usr/lib/os-release", 16 * 1024)?
+            .ok_or_else(|| Error::failed("distribution", "os-release is unavailable"))?,
+    };
+    let text = String::from_utf8_lossy(&text);
+    let field = |key: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+            .map(|value| value.trim().trim_matches(['"', '\'']).to_owned())
+            .unwrap_or_default()
+    };
+    let (id, version) = (field("ID"), field("VERSION_ID"));
+    let name = format!("{id}{version}");
+    if id.is_empty()
+        || version.is_empty()
+        || name.len() > 32
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+    {
+        return Err(Error::failed(
+            "distribution",
+            "os-release names no supported ID and VERSION_ID",
+        ));
+    }
+    Ok(name)
+}
 /// A release's assets by name; a repeated name is refused.
 fn asset_map(release: &Release) -> Result<BTreeMap<&str, &Asset>, Error> {
     let mut assets = BTreeMap::new();
@@ -472,18 +509,22 @@ fn verified_manifest(
     ndimon_release::verify_manifest(&sums, &signature, keys, version.as_str())
         .map_err(verification_error)
 }
-/// The packages of a manifest for this architecture (and the architecture-
-/// independent ones).
-fn package_names<'a>(manifest: &'a Manifest, arch: &str) -> Result<Vec<&'a str>, Error> {
-    let suffix = format!("_{arch}.deb");
+/// The packages of a manifest for this architecture and distribution release
+/// (`ndimon-control_1.4.1-1_arm64_debian13.deb`).
+fn package_names<'a>(
+    manifest: &'a Manifest,
+    arch: &str,
+    distribution: &str,
+) -> Result<Vec<&'a str>, Error> {
+    let suffix = format!("_{arch}_{distribution}.deb");
     let names: Vec<_> = manifest
         .names()
-        .filter(|name| name.ends_with(&suffix) || name.ends_with("_all.deb"))
+        .filter(|name| name.ends_with(&suffix))
         .collect();
     if names.is_empty() || names.len() > 32 {
         return Err(Error::failed(
             "release",
-            "release has no packages for this architecture or too many packages",
+            format!("release has no packages for {arch} {distribution} or too many packages"),
         ));
     }
     Ok(names)
@@ -500,6 +541,7 @@ fn lookup(
     source: &str,
 ) -> Result<Option<ReleaseVersion>, Error> {
     let arch = architecture(host)?;
+    let distribution = distribution(host)?;
     let bytes = download_bytes(http, api_url(source, None)?, true, MAX_API_BYTES)?;
     let release: Release = serde_json::from_slice(&bytes)
         .map_err(|_| Error::failed("release", "malformed release API response"))?;
@@ -534,7 +576,7 @@ fn lookup(
     let assets = asset_map(&release)?;
     let manifest = verified_manifest(http, source, &version, keys, &assets)?;
     // Exactly what an install accepts: one of each required package, and no other.
-    let names = package_names(&manifest, &arch)?;
+    let names = package_names(&manifest, &arch, &distribution)?;
     let one_of_each = |package: &&str| {
         names
             .iter()
@@ -612,6 +654,7 @@ impl Update<'_> {
         let current = installed_version(host)?;
         refuse_downgrade(host, self.version, &current, self.force)?;
         let arch = architecture(host)?;
+        let distribution = distribution(host)?;
         progress(host, self.id, self.version, "fetching_manifest", None)?;
         let bytes = download_bytes(
             self.http,
@@ -632,7 +675,7 @@ impl Update<'_> {
         }
         let assets = asset_map(&release)?;
         let manifest = verified_manifest(self.http, self.source, self.version, self.keys, &assets)?;
-        let names = package_names(&manifest, &arch)?;
+        let names = package_names(&manifest, &arch, &distribution)?;
         let _stage_root = host.root.directory("/var/lib/ndimon-updates", true, true)?;
         let stage = tempfile::Builder::new()
             .prefix("release-")

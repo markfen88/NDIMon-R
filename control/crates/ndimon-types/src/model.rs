@@ -905,6 +905,30 @@ pub struct TesseraClock {
     pub priority: u8,
 }
 
+impl TesseraClock {
+    /// Tessera 0.5 and later: a priority below this asks to be the Preferred
+    /// Leader, which a follower-only device cannot be. The daemon refuses the
+    /// pair from a controller and runs a configured one at the default priority.
+    pub const PREFERRED_LEADER_BELOW: u8 = 64;
+    pub const DEFAULT_PRIORITY: u8 = 128;
+    /// Role `follower` with a Preferred Leader priority.
+    pub fn conflicts(&self) -> bool {
+        self.role == ClockRole::Follower && self.priority < Self::PREFERRED_LEADER_BELOW
+    }
+    /// The role and priority the daemon runs: a follower's preferred priority
+    /// is dropped for the default.
+    pub fn effective(&self) -> Self {
+        Self {
+            role: self.role,
+            priority: if self.conflicts() {
+                Self::DEFAULT_PRIORITY
+            } else {
+                self.priority
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]

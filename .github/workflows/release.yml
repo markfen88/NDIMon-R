@@ -1,0 +1,193 @@
+name: Release packages
+
+# Builds the four NDIMon-R packages for every supported distribution release
+# and architecture with the project's own `cargo xtask build-deb`, in a clean
+# container of that release. Pull requests build and check only. A `v*` tag also
+# signs SHA256SUMS with the project key (docs/releases.md), records build
+# provenance and publishes the GitHub release. The signing job runs in the
+# `release` environment, which holds the key and serves only `v*` tags: pushing
+# a release tag is the decision to publish.
+
+on:
+  pull_request:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: never
+  RUSTFLAGS: -D warnings
+  # The NDI SDK v6 archive the packages are built against (6.3.2). A changed
+  # download stops the build until the new archive is reviewed and pinned.
+  NDI_SDK_SHA256: f0314f245446defc488b63ceb4689acf1a965aeefdadacb70571bb216a8cc183
+
+jobs:
+  packages:
+    name: ${{ matrix.distribution }} ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distribution: debian13, image: 'debian:trixie', arch: amd64, runner: ubuntu-24.04 }
+          - { distribution: debian13, image: 'debian:trixie', arch: arm64, runner: ubuntu-24.04-arm }
+          - { distribution: ubuntu24.04, image: 'ubuntu:24.04', arch: amd64, runner: ubuntu-24.04 }
+          - { distribution: ubuntu24.04, image: 'ubuntu:24.04', arch: arm64, runner: ubuntu-24.04-arm }
+          - { distribution: ubuntu26.04, image: 'ubuntu:26.04', arch: amd64, runner: ubuntu-24.04 }
+          - { distribution: ubuntu26.04, image: 'ubuntu:26.04', arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 90
+    steps:
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -eu
+          apt-get update
+          # VAAPI decoding is built for x86-64 only.
+          extra=""
+          if [ "${{ matrix.arch }}" = amd64 ]; then extra="libva-dev"; fi
+          apt-get install -y --no-install-recommends build-essential cmake pkg-config git curl \
+            ca-certificates xz-utils dpkg-dev lintian file libdrm-dev libasound2-dev \
+            libavahi-client-dev libavahi-common-dev nlohmann-json3-dev libsystemd-dev \
+            libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libswresample-dev \
+            zlib1g-dev $extra
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.distribution }}-${{ matrix.arch }}-${{ hashFiles('control/Cargo.lock') }}
+      - name: Install Rust (the version in control/rust-toolchain.toml)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Build and check the packages
+        working-directory: control
+        run: |
+          set -eu
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          . /etc/os-release
+          # The name the device's updater selects packages by (ID + VERSION_ID).
+          test "${ID}${VERSION_ID}" = "${{ matrix.distribution }}"
+          version="$(sed -n 's/^pub const DEFAULT_VERSION: &str = "\(.*\)";$/\1/p' xtask/src/package.rs)"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not name the source version $version" >&2
+            exit 1
+          fi
+          rustup show active-toolchain || rustup toolchain install
+          cargo xtask ndi-sdk --out "$RUNNER_TEMP/ndi" --arch "${{ matrix.arch }}"
+          cargo xtask build-deb --version "$version" -- \
+            "-DNDI_INCLUDE_DIR=$RUNNER_TEMP/ndi/include" "-DNDI_LIB_DIR=$RUNNER_TEMP/ndi/lib"
+          cargo xtask release-smoke --dir ../dist/debian --version "$version"
+          lintian --fail-on error ../dist/debian/*.deb
+          mkdir -p ../dist/assets
+          for deb in ../dist/debian/*.deb; do
+            name="$(basename "$deb" .deb)"
+            case "$name" in
+              *"_${version}_${{ matrix.arch }}") ;;
+              *) echo "unexpected package $name" >&2; exit 1 ;;
+            esac
+            cp "$deb" "../dist/assets/${name}_${{ matrix.distribution }}.deb"
+          done
+          ls -l ../dist/assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ndimon-r-${{ matrix.distribution }}-${{ matrix.arch }}
+          path: dist/assets/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Sign and publish
+    if: github.ref_type == 'tag'
+    needs: packages
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/assets
+          merge-multiple: true
+      - name: Build the signing tool before any secret is in the environment
+        working-directory: control
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo build -p xtask
+      - name: Sign SHA256SUMS
+        working-directory: control
+        env:
+          NDIMON_RELEASE_KEY: ${{ secrets.NDIMON_RELEASE_KEY }}
+          NDIMON_RELEASE_KEY_PASSWORD: ${{ secrets.NDIMON_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NDIMON_RELEASE_KEY" ] || [ -z "$NDIMON_RELEASE_KEY_PASSWORD" ]; then
+            echo "the release environment has no signing key; nothing is published" >&2
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          umask 077
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$NDIMON_RELEASE_KEY" > "$key"
+          unset NDIMON_RELEASE_KEY
+          NDIMON_RELEASE_KEY_FILE="$key" target/debug/xtask release --version "$version" \
+            --out ../dist/release ../dist/assets/*.deb
+          unset NDIMON_RELEASE_KEY_PASSWORD
+          # Verified with the key compiled into this release's updater.
+          target/debug/xtask verify-release --dir ../dist/release --version "$version" \
+            --public-key ../packaging/ndimon-release.pub
+          ls -l ../dist/release
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/release/*
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          {
+            awk -v head="## ${version%-*}" '$0 == head {found = 1; next} /^## / {if (found) exit} found' CHANGELOG.md
+            cat <<EOF
+
+          ### Packages
+
+          One set of four packages (\`ndimon-control\`, \`ndimon-privd\`, \`ndimon-runtime\`,
+          \`ndimon-ui\`) per distribution release and architecture:
+          \`<package>_${version}_<arch>_<distribution>.deb\`, for \`debian13\`, \`ubuntu24.04\` and
+          \`ubuntu26.04\` on \`amd64\` and \`arm64\`. Install all four of one set; the NDI SDK
+          library is installed separately (README, "Install").
+
+          ### Verifying
+
+          \`SHA256SUMS\` is signed with the project's minisign key \`$(sed -n 2p packaging/ndimon-release.pub)\`
+          (also in \`packaging/ndimon-release.pub\` and compiled into the updater). Check it before
+          installing (docs/releases.md):
+
+              minisign -Vm SHA256SUMS -p ndimon-release.pub -x SHA256SUMS.minisig
+              sha256sum --check --strict --ignore-missing SHA256SUMS
+
+          Build provenance: \`gh attestation verify <file> --repo ${GITHUB_REPOSITORY}\`.
+          EOF
+          } > notes.md
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/release/* --verify-tag \
+              --title "NDIMon-R ${version%-*}" --notes-file notes.md
+          fi

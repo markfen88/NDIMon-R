@@ -3,45 +3,45 @@
   "bundles": [
     {
       "name": "tessera",
-      "version": "0.3.0-1",
+      "version": "0.5.2-1",
       "arch": "amd64",
-      "commit": "4b747c135d4879769cd83b6ff960bda025d9f72f",
+      "commit": "ce3d8b0649e5ea767290f097b605d3a3369a6cfd",
       "os": {
         "id": "debian",
         "codename": "trixie",
         "version_id": "13",
         "systemd_min": 253
       },
-      "asset": "tessera-bundle_0.3.0-1_amd64.tar.gz",
-      "sha256": "378146aaef26a0d53b80624818a11cf934af068b69ea54561764f90a43505cfc"
+      "asset": "tessera-bundle_0.5.2-1_amd64.tar.gz",
+      "sha256": "b2331fc9b79f7b3bd4e08b2f4bfb8dbf9b5a9a61b7984dabc68f8bfb2fdc9a31"
     },
     {
       "name": "tessera",
-      "version": "0.3.0-1",
+      "version": "0.5.2-1",
       "arch": "arm64",
-      "commit": "4b747c135d4879769cd83b6ff960bda025d9f72f",
+      "commit": "ce3d8b0649e5ea767290f097b605d3a3369a6cfd",
       "os": {
         "id": "debian",
         "codename": "trixie",
         "version_id": "13",
         "systemd_min": 253
       },
-      "asset": "tessera-bundle_0.3.0-1_arm64.tar.gz",
-      "sha256": "e76b5b9dd1d95c2f4a0ed050c66ede49ea3a6e0abd9e4dc20eb0701fc6a367c2"
+      "asset": "tessera-bundle_0.5.2-1_arm64.tar.gz",
+      "sha256": "41722a9370c91e90307ca30e1b9640ad47681dc5c7860efb5c43b87d6b8ba182"
     },
     {
       "name": "tessera",
-      "version": "0.3.0-1",
+      "version": "0.5.2-1",
       "arch": "arm64",
-      "commit": "4b747c135d4879769cd83b6ff960bda025d9f72f",
+      "commit": "ce3d8b0649e5ea767290f097b605d3a3369a6cfd",
       "os": {
         "id": "ubuntu",
         "codename": "noble",
         "version_id": "24.04",
         "systemd_min": 253
       },
-      "asset": "tessera-bundle_0.3.0-1_arm64_ubuntu-noble-experimental.tar.gz",
-      "sha256": "9d3a48e87ba83a1aba2a3c1ac5a70259a29239185d2bc66a9572f5388bf5c746"
+      "asset": "tessera-bundle_0.5.2-1_arm64_ubuntu-noble-experimental.tar.gz",
+      "sha256": "1bf1fe2b5294bd9eff657e6dcf05bc68edf980db198b8213c0c7360b5696883d"
     }
   ]
 }

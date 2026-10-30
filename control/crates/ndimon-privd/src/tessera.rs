@@ -246,7 +246,8 @@ pub fn disable(host: &Host) -> Result<ActionOutput, Error> {
 }
 pub fn install(host: &Host) -> Result<ActionOutput, Error> {
     crate::network::sync_tessera(host)?;
-    bundle(host, &BundleAction::Install { restart: false })?;
+    let restart = replaces_daemon(host)?;
+    bundle(host, &BundleAction::Install { restart })?;
     if !native(host)? {
         write_alsa(
             host,
@@ -274,6 +275,32 @@ pub fn uninstall(host: &Host, purge: bool) -> Result<ActionOutput, Error> {
         }
     }
     crate::system::systemctl(host, &["daemon-reload"])
+}
+/// `tessera-bundle`'s record of the runtime it installed.
+const RECORD: &str = "/var/lib/tessera-bundle/record.json";
+/// Whether installing the plugin's bundle may replace the program of a running
+/// `tesserad`: the record names another runtime version or an earlier install
+/// left the restart pending, or there is no record. The installer restarts the
+/// daemon only when asked; without that an updated plugin left the old daemon
+/// running, and the new `tessera-controller` could not register with it. With
+/// no record the runtime predates the bundle installer (0.1.0 and 0.2.x were
+/// packages) or none is installed; asked to restart a daemon that is not
+/// running, the installer starts it, as it does anyway. A plugin update is
+/// already a confirmed change whose services may restart. A record that cannot
+/// be read counts as another version.
+fn replaces_daemon(host: &Host) -> Result<bool, Error> {
+    let Some(record) = host.root.read(RECORD, 65536)? else {
+        return Ok(true);
+    };
+    let record: Value = serde_json::from_slice(&record).unwrap_or(Value::Null);
+    let lock: Value = serde_json::from_slice(
+        &host
+            .root
+            .read("/opt/ndimon-r/plugins/tessera/bundle-lock.json", 65536)?
+            .ok_or_else(|| Error::invalid("bundle", "lock missing"))?,
+    )
+    .map_err(|e| Error::invalid("bundle", e.to_string()))?;
+    Ok(record["version"] != lock["version"] || record["restart_pending"] == true)
 }
 /// A runtime bundle that passed every check the installer relies on. The
 /// extraction directory lives as long as this value.
@@ -393,8 +420,9 @@ fn verify(host: &Host, plugin: &Directory) -> Result<Verified, Error> {
 }
 /// The platform flags of `tessera-bundle install` for a locked bundle.
 fn install_flags(lock: &Value) -> Result<Vec<String>, Error> {
-    // The reviewed SHA-256 lock above authenticates the archive; Tessera's
-    // own release-key list is empty until its owner provisions a key.
+    // The reviewed SHA-256 lock above (copied from the release's signed
+    // SHA256SUMS) authenticates the archive. Bundles from Tessera 0.5.2 also
+    // carry its release signature; relying on that instead awaits a device test.
     let mut argv = args(&[
         "install",
         "--profile",

@@ -1,4 +1,4 @@
-# NDIMon-R 1.4.0
+# NDIMon-R 1.4.1
 
 Dedicated **NDI receiver / HDMI decoder** for Linux appliances.
 
@@ -14,8 +14,12 @@ requests. The decoder and the NDI finder stay C++. The release also adds a
 native network engine with recoverable changes, out-of-process plugins, signed
 updates, native backup and restore, and a TypeScript web UI that updates live.
 It installs as four Debian packages, and a 1.3.x appliance upgrades in place.
-Read [Upgrading from 1.3.x](#upgrading-from-13x) before you upgrade. The packages
-write `1.4.0-1` to `/etc/ndimon-firmware-version`. See [the changelog](CHANGELOG.md)
+Read [Upgrading from 1.3.x](#upgrading-from-13x) before you upgrade. **1.4.1**
+publishes signed, prebuilt packages for Debian 13, Ubuntu 24.04 and Ubuntu 26.04 on
+amd64 and arm64, built in public from the release tag; trusts the project's
+release key, so **Update now** works without provisioning one; and rebuilds the
+Tessera plugin on Tessera 0.5.2. The packages write `1.4.1-1` to
+`/etc/ndimon-firmware-version`. See [the changelog](CHANGELOG.md)
 for the release notes and [the documentation index](docs/README.md) for operator
 and developer guides. Network audio remains experimental.
 
@@ -135,7 +139,7 @@ developer and CI tool only, for rebuilding the browser bundle. Open `http://<dev
 | `cargo xtask install --no-deps` | Rebuild and install with existing dependencies |
 | `cargo xtask install --no-deps --no-build` | Install already built packages/assets |
 | `cargo xtask setup-deps` | Provision build/runtime dependencies and the NDI SDK |
-| `cargo xtask build-deb --version 1.4.0-1` | Build the complete package set in `dist/debian/` |
+| `cargo xtask build-deb --version 1.4.1-1` | Build the complete package set in `dist/debian/` |
 
 Optional download pin: `NDI_SDK_SHA256=<64 hex digits> cargo xtask install`.
 New SDK installs record the exact version and archive hash in
@@ -145,12 +149,17 @@ VAAPI/NVIDIA detection preserve their software fallbacks. Pass CMake options
 after `--`, for example
 `cargo xtask build-deb -- -DENABLE_MPP=OFF`.
 
-For a prebuilt release, provision the SDK/media dependencies with
-`cargo xtask setup-deps`, verify its signature and checksums as described in
-[releases](docs/releases.md), then install the complete package set:
+For a prebuilt release, provision the NDI SDK and media dependencies with
+`cargo xtask setup-deps` (the NDI SDK is licensed separately and not part of the
+packages), download `SHA256SUMS`, `SHA256SUMS.minisig` and the four packages named
+for your architecture and distribution release from the
+[GitHub release](https://github.com/markfen88/NDIMon-R/releases)
+(`<package>_<version>_<arch>_<distribution>.deb`, `<distribution>` being
+`debian13`, `ubuntu24.04` or `ubuntu26.04`), verify them as described in
+[releases](docs/releases.md), then install the complete set:
 
 ```sh
-sudo apt install ./ndimon-*_1.4.0-1_amd64.deb
+sudo apt install ./ndimon-*_1.4.1-1_arm64_debian13.deb
 sudo systemctl status ndimon-control ndimon-privd.socket ndimon-finder ndimon-r
 sudo journalctl -u ndimon-control -u ndimon-privd -f
 ```
@@ -246,7 +255,7 @@ copies, stale links) are reported at the end and do not stop it.
 | Node.js | The upgrade does not remove the `nodejs` and `npm` packages. Nothing on the device uses them any more; remove them with `apt remove nodejs npm` if you installed them only for NDIMon-R. |
 | Names other than the device's own | The web UI answers only to the device's IP addresses, `localhost`, its hostname, `hostname.local` and `hostname.<search domain>`. A request under any other name (a DNS alias, a proxy name) is refused with HTTP 421 `misdirected_host`. Open the UI by IP address once and add the name under **Settings → Security → Additional host names**. |
 | Network changes | Nothing to do: the packages list all four backends as validated (a conffile of `ndimon-privd`), so VLAN and address changes work as they did in 1.3.x. To withdraw a backend you have not validated on your hardware, edit that file. See [Network](#network). |
-| Release keys | No release key ships with 1.4.0. Without one the device installs updates only by hand (packages or `cargo xtask install`); with one, **System → Update now** finds and installs the newest signed release. See [Updates](#updates). |
+| Release keys | No release key ships with 1.4.0: install 1.4.1 or later once by hand (packages or `cargo xtask install`). From 1.4.1 the project's key is built in and **System → Update now** finds and installs the newest signed release. See [Updates](#updates). |
 | Sessions and scripts | Sessions end at the upgrade; sign in again. Scripts that log in with `POST /api/login` and send `Authorization: Bearer` keep working; scripts that use the session cookie must also send `X-CSRF-Token` on every change. The cookie is `SameSite=Strict`. |
 
 Backups made by 1.3.x restore into 1.4.0, including the **Undo last restore**
@@ -843,7 +852,10 @@ script no longer works).
 
 **Tessera** is a first-party plugin whose settings are part of the NDIMon-R
 document. Use a plugin archive built from a **Tessera 0.3.0 or later** runtime
-bundle; this release pins the Tessera 0.3.0 runtime (`0.3.0-1`). Installing/enabling the plugin exposes its page; selecting experimental
+bundle; this release pins the Tessera 0.5.2 runtime (`0.5.2-1`). **Tessera 0.5
+changed the network clock: upgrade every Tessera device on the network to 0.5.2
+together**; a network that mixes 0.3.x and 0.5.x devices is not supported (see
+[Tessera setup](docs/plugins/tessera.md#upgrading)). Installing/enabling the plugin exposes its page; selecting experimental
 network audio is separate. Configure device/clock settings, static flows,
 reusable channel names and the Tessera network there. Configure each output's
 audio mix under **Outputs → Advanced → Audio**. [Tessera setup](docs/plugins/tessera.md)
@@ -916,14 +928,17 @@ A damaged checksum is refused. A newer `schema_version` is refused. Unknown keys
 
 ## Updates
 
-1.4.0 installs updates only from **signed releases**. A release is a set of the
-four Debian packages with `SHA256SUMS` and `SHA256SUMS.minisig` (minisign,
-Ed25519). The device checks the signature against the public keys it trusts,
-checks every package against the signed list and the package identity, version
-and architecture, and refuses downgrades unless forced. A killed update never
-advances the firmware marker. No project key ships in the packages: the owner
-of a deployment provisions the first public key as a root-owned
-`/etc/ndimon/trusted-release-keys`, as described in [releases](docs/releases.md).
+NDIMon-R installs updates only from **signed releases**. A release holds one set
+of the four Debian packages per distribution release and architecture, with
+`SHA256SUMS` and `SHA256SUMS.minisig` (minisign, Ed25519). The device picks the set
+named for its architecture and its os-release (`debian13`, `ubuntu24.04`,
+`ubuntu26.04`), checks the signature against the public keys it trusts, checks
+every package against the signed list and the package identity, version and
+architecture, and refuses downgrades unless forced. A killed update never
+advances the firmware marker. From 1.4.1 the project's release key is built in
+(key id `B88234A3FBE65D9D`); a root-owned `/etc/ndimon/trusted-release-keys` can
+add keys, as described in [releases](docs/releases.md). A 1.4.0 device has no
+key: install 1.4.1 on it by hand once.
 
 - **With a trusted key,** **System → Check for updates** looks up the newest
   release and **Update now** installs it. The lookup asks the release source for
@@ -931,7 +946,7 @@ of a deployment provisions the first public key as a root-owned
   `owner/repository`, over the same HTTPS host rules as an install) and reports
   it only when its checksum list carries a valid signature from a trusted key
   naming this product and that version, it holds the four packages for this
-  architecture, and its version is newer than the installed one. Unverified
+  architecture and distribution release, and its version is newer than the installed one. Unverified
   data is never offered. The lookup is bounded (about 20 seconds), runs only when
   a page asks for the version, and its answer is kept for an hour (ten minutes
   after a failed lookup, such as an offline device, which then says so instead
@@ -940,12 +955,12 @@ of a deployment provisions the first public key as a root-owned
   `update_message`; **Update now** installs `latest_version`. The install job
   verifies everything again. To install a specific version, send the
   `install_update` command (`POST /api/v1/commands`) or `POST /v1/System/update`
-  with `{"version":"1.4.0-1","force":false}`. Either starts a detached job that
+  with `{"version":"1.4.1-1","force":false}`. Either starts a detached job that
   survives a restart of the control plane; poll the job for its durable result.
   Do not run two updaters together. An update never overwrites your edit of
   `/etc/ndimon-network-certified-backends.json`.
-- **Without a key,** the page says "updates need a signed release; no release
-  key is configured" and refuses. Update by hand: install the complete,
+- **Without a key** (1.4.0 only), the page says "updates need a signed release;
+  no release key is configured" and refuses. Update by hand: install the complete,
   verified package set with apt, or check out the new release and run
   `RUSTFLAGS="-D warnings" cargo xtask install --no-deps` from `control/`.
 
@@ -1305,7 +1320,7 @@ The Tessera adapter routes are under `/v1/plugins/tessera`
 | Watchdog mode | `POST /v1/DeviceSettings/watchdog-mode` | The supervisor reads the document |
 | Scheduled reboot | `POST /v1/DeviceSettings/reboot-schedule` | privd `SetRebootSchedule` |
 | Network apply | `POST /v1/Network/profiles/apply` | Privileged profile transaction, then explicit `/api/net-confirm` |
-| Update | `POST /v1/System/update` (body `{"version":"1.4.0-1"}`) | Detached signed-release install job; refused while no release key is configured |
+| Update | `POST /v1/System/update` (body `{"version":"1.4.1-1"}`) | Detached signed-release install job |
 | Reboot | `POST /v1/System/reboot` | privd `Reboot` |
 
 ---

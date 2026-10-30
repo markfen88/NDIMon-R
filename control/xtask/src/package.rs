@@ -18,7 +18,7 @@ pub const PACKAGES: &[&str] = &[
 /// The retired Node follower package. ndimon-control replaces it so that an
 /// upgrade from an intermediate build removes it instead of keeping its unit.
 const RETIRED_PACKAGE: &str = "ndimon-legacy-api";
-pub const DEFAULT_VERSION: &str = "1.4.0-1";
+pub const DEFAULT_VERSION: &str = "1.4.1-1";
 /// Files below /etc that an operator may edit and an upgrade must keep, as
 /// (path in the package, source in the repository). dpkg treats them as
 /// conffiles: a fresh install and an upgrade from a 1.3.x install both create a
