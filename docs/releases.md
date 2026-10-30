@@ -8,7 +8,7 @@ its trusted comment are authenticated before package checksums are used. The
 trusted comment is exactly:
 
 ```text
-product:ndimon-r<TAB>version:1.4.0-1<TAB>file:SHA256SUMS
+product:ndimon-r<TAB>version:1.4.1-1<TAB>file:SHA256SUMS
 ```
 
 `<TAB>` denotes a literal tab. Versions are Debian versions without the tag's
@@ -16,7 +16,13 @@ leading `v`. Checksums use GNU coreutils records with LF endings and flat,
 unique asset basenames. Escaped names, paths, blank lines and self-references
 are refused. All selected package contents must match before installation.
 
-Each architecture contributes exactly four packages at the same Debian version:
+Each distribution release and architecture contributes exactly four packages at
+the same Debian version. A release asset carries both in its name,
+`<package>_<version>_<arch>_<distribution>.deb` (for example
+`ndimon-runtime_1.4.1-1_arm64_debian13.deb`), where `<distribution>` is the
+os-release `ID` and `VERSION_ID` of the build image (`debian13`, `ubuntu24.04`,
+`ubuntu26.04`). The updater installs only the set named for the device's own
+os-release:
 
 - `ndimon-control`: control plane, `ndimon-state-import`, `ndimonctl`, the native
   package-hook and console utility, defaults and the sysusers/tmpfiles
@@ -32,14 +38,15 @@ from an intermediate build that still had that package removes it.
 
 ## Trust: who signs, and which keys a device accepts
 
-**No project signing key is compiled into the packages.** The built-in list of
-trusted keys is empty. Without a provisioned public key every verification
-fails with `untrusted_key`, and setting the update switch alone does not create
-trust. A device installs only releases whose `SHA256SUMS` carries a signature
-from a key it trusts.
+**The project's release key is compiled into the updater** from 1.4.1:
+`packaging/ndimon-release.pub`, key id `B88234A3FBE65D9D`, public key
+`RWSdXeb7ozSCuME2JqOMfLLeTzSyp6wU9GCpiotbldaHxg5cHDqi2BTd`. A device installs
+only releases whose `SHA256SUMS` carries a signature from a key it trusts, so a
+device on 1.4.1 or later can use **Update now** with no key to provision. A 1.4.0
+device has no compiled key: install 1.4.1 on it once by hand (README, "Install"),
+or provision the key above as an override first.
 
-A deployment provisions its first trusted key as a root-owned file on each
-device:
+An override file adds keys, one per device, as a root-owned file:
 
 ```sh
 sudo install -d -o root -g root -m 0755 /etc/ndimon
@@ -52,15 +59,19 @@ not group- or world-writable and no component may be a symlink; the file itself
 must be a root-owned regular file with mode exactly 0644. The file **adds** keys
 to the compiled list; it cannot revoke a compiled key. Root provisioning
 establishes first trust through your own administrative channel: downloading a
-key from the release being verified establishes nothing.
+key from the release being verified establishes nothing. A rotation ships the
+new key in a release signed with a key that is already trusted.
 
-The signing key belongs to whoever publishes the release. Choose who holds the
-offline encrypted backup, where it is stored, who knows its password, and who may
-edit the CI secrets. Keep the secret key and its password out of source control,
-chat, job logs and release artifacts. The commands below are a **procedure for a
-trusted maintainer machine**, never for an unattended job or an appliance. From
-a private checkout's `control/` directory, choose a new private directory outside
-the checkout and enter a password without echoing it:
+**Custody.** The encrypted secret key and its password are the secrets
+`NDIMON_RELEASE_KEY` and `NDIMON_RELEASE_KEY_PASSWORD` of the GitHub `release`
+environment of `markfen88/NDIMon-R`, which serves only `v*` tags, with an
+encrypted backup in the owner's secret store. Only the signing job of the release
+workflow reads them, so pushing a release tag is the decision to publish. Keep the
+secret key and its password out of source control, chat, job logs and release
+artifacts. A new key (a rotation) is made on a trusted maintainer machine, never
+in an unattended job or on an appliance. From a private checkout's `control/`
+directory, choose a new private directory outside the checkout and enter a
+password without echoing it:
 
 ```sh
 read -rsp 'New release-key password: ' NDIMON_RELEASE_KEY_PASSWORD
@@ -73,22 +84,28 @@ The output directory must not already exist. The task writes an encrypted
 `ndimon-release.key` (0600) and `ndimon-release.pub` (0644) in a 0700 directory
 and prints only the bare public key. It refuses an empty password or an existing
 directory or file; a failed run can leave a private partial directory to remove
-before retrying. Set the CI secrets `NDIMON_RELEASE_KEY` (the complete encrypted
-key file) and `NDIMON_RELEASE_KEY_PASSWORD`. The signing job creates a 0600
-temporary key file with shell tracing disabled, removes it with an exit trap and
-uploads only the signed output directory; it never generates a key. Restrict
-release tags and workflow edits to trusted maintainers, because a signing job can
-use the CI secret.
+before retrying. The signing job writes the key to a 0600 temporary file, removes
+it with an exit trap and never generates a key. It builds the signing tool before
+any secret is in its environment, because a build script can record the
+environment of its build (RUSTSEC-2026-0418).
 
 ## Build, sign and verify
 
-Build releases on a build host or in CI; the source installer also supports
-building directly on the appliance. A release runner needs, for each
-architecture: stable Rust (an exact installed version, for example `1.99.1`;
-moving aliases such as `stable` are refused), dpkg-dev, Node 22 and npm (UI build
-tool only), CMake and the C++ dependencies, and the licensed NDI SDK, which
-this workflow does not redistribute. Both architectures must build before
-anything is signed.
+Releases are built in public by the GitHub workflow `.github/workflows/release.yml`
+of `markfen88/NDIMon-R`; the source installer also builds directly on the
+appliance. For every distribution release and architecture (Debian 13, Ubuntu
+24.04 and Ubuntu 26.04, each on amd64 and arm64) the workflow starts a clean
+container of that release on a GitHub runner of that architecture, installs the
+build dependencies, downloads the NDI SDK with `cargo xtask ndi-sdk` (pinned by
+`NDI_SDK_SHA256`; the SDK is not redistributed), and runs `cargo xtask build-deb`,
+`cargo xtask release-smoke` and `lintian --fail-on error`. Pull requests build and
+check the same way and keep the packages as workflow artifacts. A `v*` tag must
+name the source version (`DEFAULT_VERSION` in `control/xtask/src/package.rs`);
+every set must build before anything is signed. The signing job then signs one
+`SHA256SUMS` over all sets, verifies it with `packaging/ndimon-release.pub`,
+records GitHub build provenance for every file and publishes the release with the
+notes of the version's CHANGELOG section. The project's GitHub `main` marks that
+release as latest, which is what devices look up.
 
 Pushing a tag `vVERSION` runs the release workflow. On each architecture,
 `cargo xtask build-deb --version VERSION` builds the Rust workspace, the C++
@@ -104,20 +121,17 @@ extensionless hooks. `dpkg-shlibdeps` discovers the C++ dependencies for the bui
 distribution. The licensed NDI SDK is provisioned separately by
 `cargo xtask setup-deps` rather than redistributed without its license.
 
-### The runtime package is built per distribution release
+### Every package is built per distribution release
 
-`ndimon-control`, `ndimon-privd` and `ndimon-ui` are plain Rust and static
-assets; the same bytes install on every supported release. **`ndimon-runtime` is
-not interchangeable**: it holds the C++ decoder and finder, and
+**`ndimon-runtime` is not interchangeable**: it holds the C++ decoder and finder, and
 `dpkg-shlibdeps` writes the sonames of the libraries on the build machine into
 its `Depends`. A package built on Debian 13 names FFmpeg 7.1
 (`libavutil59`, `libswresample5`) and cannot be installed on Ubuntu 26.04, which
 only has `libavutil60`, `libswresample6` and `libavcodec62`; the reverse is
-true as well. Build the runtime package on each distribution release the
-appliance runs (or in a clean image of it) and publish one per release, named
-for it, next to the three shared packages. A practical recipe for an extra
-distribution is to build the C++ part in an image of that distribution, reuse the
-Rust binaries, then run `cargo xtask build-deb --no-build`.
+true as well. The Rust programs and package hooks of the other three packages
+need the build's glibc (a Debian 13 build needs 2.41; Ubuntu 24.04 has 2.39), so
+a release builds all four packages in a clean image of each distribution release
+and names each set for it.
 
 Dependencies that `dpkg-shlibdeps` cannot see are added by the builder. The
 NDI library is installed separately and links `libavahi-client.so.3` and
@@ -150,19 +164,16 @@ rejection. This creates no project trust. Lint every package with
 and an upgrade from 1.3.x before publishing. Lack of DRM/NDI hardware must be
 recorded separately from package and web-login checks.
 
-Compiler version details are included as architecture-specific artifacts.
-The final `signed-release` workflow artifact combines both architectures under
-one signed checksum manifest. The workflow performs no repository publication.
-
-To sign explicit prebuilt artifacts by hand on the signing machine:
+To sign explicit prebuilt artifacts by hand on a trusted machine (a rebuild
+outside the workflow, or a rotation):
 
 ```sh
 export NDIMON_RELEASE_KEY_FILE=/private/ndimon-release-key/ndimon-release.key
 read -rsp 'Release-key password: ' NDIMON_RELEASE_KEY_PASSWORD
 export NDIMON_RELEASE_KEY_PASSWORD
-cargo xtask release --version 1.4.0-1 --out ../dist/release ../dist/artifacts/*.deb
+cargo xtask release --version 1.4.1-1 --out ../dist/release ../dist/artifacts/*.deb
 unset NDIMON_RELEASE_KEY_FILE NDIMON_RELEASE_KEY_PASSWORD
-cargo xtask verify-release --dir ../dist/release --version 1.4.0-1 --public-key /private/ndimon-release-key/ndimon-release.pub
+cargo xtask verify-release --dir ../dist/release --version 1.4.1-1 --public-key ../packaging/ndimon-release.pub
 ```
 
 The output directory must be empty initially. Artifact paths are explicit; the
@@ -174,12 +185,14 @@ only public data.
 
 ### Verify a download by hand
 
-Obtain the public key through a trusted channel and, inside the downloaded release
-directory, run the independent minisign CLI:
+Obtain the public key through a trusted channel (`packaging/ndimon-release.pub`
+in the source, or the key printed above) and, inside the directory with the
+downloaded `SHA256SUMS`, `SHA256SUMS.minisig` and the package set, run the
+independent minisign CLI:
 
 ```sh
 minisign -Vm SHA256SUMS -p /trusted/path/ndimon-release.pub -x SHA256SUMS.minisig
-sha256sum --check --strict SHA256SUMS
+sha256sum --check --strict --ignore-missing SHA256SUMS
 ```
 
 Run the checksum command only after minisign succeeds. Confirm minisign's
@@ -189,16 +202,13 @@ or version; the Rust verifier enforces all three automatically.
 
 ## Publication
 
-Publishing a release to GitHub is a manual, attended step. Verify that the
-destination repository is public and review the exact artifact list first.
-Download the `signed-release` artifact, verify it independently as above, and
-attach the packages, compiler records, `SHA256SUMS` and `SHA256SUMS.minisig` to the
-matching `vVERSION` release with the exact filenames and bytes. If the runtime and
-build sources are published too, prepare a sanitized snapshot from the existing
-public branch and leave out private history, agent files, tests, testing results
-and methodology, and internal plans. The CI workflow has no GitHub mirror or
-publication step, and configuring signing secrets or tagging a release does not
-publish anything.
+Publishing is pushing a `v<version>` tag (for example `v1.4.1-1`) to the public
+repository `markfen88/NDIMon-R`, whose `main` carries the sanitized snapshot of the
+source: runtime and build code, assets, licenses and operator docs, without private
+history, agent files, tests, testing results and methodology, or internal plans.
+The release workflow builds, signs and
+publishes from that tag; nothing else uploads release files. Verify a published
+release independently as above.
 
 ## Device update operation
 
@@ -226,7 +236,8 @@ repository's release assets:
 3. For a newer release the agent downloads `SHA256SUMS` and `SHA256SUMS.minisig`
    (the same asset URL rules and limits as an install) and verifies the signature
    against the trusted keys, the trusted comment (product and this version) and
-   the checksum list. The list must name the four packages for this architecture.
+   the checksum list. The list must name the four packages for this architecture
+   and the device's distribution release (os-release `ID` + `VERSION_ID`).
    Only then is the version reported as installable. Packages are not downloaded.
 
 An answer is never reported on unverified data: a wrong signature, product or
@@ -252,7 +263,7 @@ install job itself re-verifies everything and refuses a downgrade unless forced.
 
 `InstallUpdate { version, force: false }` starts an independent transient systemd
 job, returned in the action output as `job`. On the wire the request is
-`{"install_update":{"version":"1.4.0-1","force":false}}`; an omitted `force`
+`{"install_update":{"version":"1.4.1-1","force":false}}`; an omitted `force`
 defaults to false. The job status reports the durable `result` and
 `data.progress` with the version, the stage and the current file name. The job is
 named `ndimon-plugin-update-N.service`, reusing the closed job type. Jobs run for

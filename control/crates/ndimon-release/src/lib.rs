@@ -5,8 +5,10 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 
 pub mod trust;
 
-/// A8/Q8: the owner provisions the first key. Never generate a project key here.
-pub const TRUSTED_KEYS: &[&str] = &[];
+/// The project's release key from 1.4.1 (`packaging/ndimon-release.pub`, key id
+/// B88234A3FBE65D9D). The public release workflow signs with it; a rotation
+/// ships the new key in a release signed with this one.
+pub const TRUSTED_KEYS: &[&str] = &["RWSdXeb7ozSCuME2JqOMfLLeTzSyp6wU9GCpiotbldaHxg5cHDqi2BTd"];
 pub const PRODUCT: &str = "ndimon-r";
 pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 pub const MAX_SIGNATURE_BYTES: usize = 4096;

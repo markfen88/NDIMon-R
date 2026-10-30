@@ -113,6 +113,20 @@ impl DomainModule for Module {
                 // Ownership locks are policy, not caller-removable settings.
                 let mut t = t.clone();
                 t.locks.extend(Tessera::owned_locks());
+                match state.tessera.as_ref().map(|before| &before.clock) {
+                    // Adopting a runtime's settings: keep the clock it runs.
+                    None => t.clock = t.clock.effective(),
+                    Some(before) if *before != t.clock && t.clock.conflicts() => {
+                        return Err(ApiError::invalid(vec![FieldError::new(
+                            "tessera.clock.priority",
+                            format!(
+                                "a follower cannot be the Preferred Leader: use priority {} or higher, or role auto",
+                                TesseraClock::PREFERRED_LEADER_BELOW
+                            ),
+                        )]));
+                    }
+                    Some(_) => (),
+                }
                 if state.tessera.as_ref().is_some_and(|before| {
                     before.device.rx_channels != t.device.rx_channels
                         || before.device.tx_channels != t.device.tx_channels

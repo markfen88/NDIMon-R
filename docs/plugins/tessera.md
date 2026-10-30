@@ -24,8 +24,8 @@ experimental.
   archive embeds is recorded in `bundles.lock.json` and `compatibility.json`, which
   `cargo xtask build-plugin` checks against the bundle; use an archive built from a
   Tessera 0.3.0 (or later) runtime bundle. This NDIMon-R release pins the public
-  Tessera **0.3.0** release (package version `0.3.0-1`, source commit
-  `4b747c135d4879769cd83b6ff960bda025d9f72f`) and builds plugin archive 0.3.0 from
+  Tessera **0.5.2** release (package version `0.5.2-1`, source commit
+  `ce3d8b0649e5ea767290f097b605d3a3369a6cfd`) and builds plugin archive 0.5.2 from
   it.
 - The device installs a runtime bundle only on Debian 13 (amd64 or arm64) and on
   Ubuntu 24.04 arm64, which is experimental. The bundle is not interchangeable
@@ -73,10 +73,14 @@ leaves no plugin files, no `broken` entry, no registry entry and no rendered
 Tessera configuration (`/etc/tessera/config.d`, `/etc/alsa/conf.d`), and the reason
 is returned to the page with status 400. A bundle
 that passes is installed with the bundle's own `tessera-bundle install` using the
-NDIMon-R profile. The lock pin is the authentication (`--allow-unsigned` until
-Tessera provisions a release key). The installer does not restart a running
-`tesserad`: restart it from the plugin's service control (this interrupts network
-audio) or reboot to run a newly installed runtime.
+NDIMon-R profile. The lock pin, copied from the release's signed `SHA256SUMS`, is
+the authentication (the installer runs with `--allow-unsigned`). When the bundle
+may replace the program of a running `tesserad` (Tessera's install record names
+another runtime version or an earlier install left a restart pending, or there
+is no record: a 0.1.0 or 0.2.x runtime predates the installer), the install
+restarts the daemon, which interrupts network audio for a moment; the plugin
+update already asks before its services restart. Installing the same version
+again restarts nothing, and a first install starts the daemon.
 
 Enabling the plugin synchronizes the network binding and starts `tesserad.service`;
 disabling it stops the daemon. Removing the plugin runs `tessera-bundle uninstall`
@@ -211,7 +215,7 @@ Device settings, as validated by the control plane:
 | Encoding | 16, 24 or 32 bits |
 | Latency | 1–1,000,000 microseconds. Input synchronization delay is set separately, in milliseconds |
 | Channels | 1–16 per direction. The 48 kHz stereo PCM path is the initial validation target; other channel counts need validation |
-| Clock | Role `auto`, `follower` or `leader`; priority 0–255. Each is saved only when its Save button is pressed |
+| Clock | Role `auto`, `follower` or `leader`; priority 0–255, lower wins. A priority below 64 makes the device a Preferred Leader, which a `follower` cannot be: that pair is refused (Tessera 0.5 refuses it too). Each is saved only when its Save button is pressed |
 
 Disruptive device changes show the daemon's impact and require confirmation.
 
@@ -283,8 +287,27 @@ through DOM properties and text nodes, never HTML interpolation.
   reports a flow ownership conflict until you install a plugin archive built from
   Tessera 0.3.0 or later.
 - **Updating the runtime.** Install the newer plugin archive from Plugins. The
-  installer does not restart a running daemon; restart `tesserad` from the plugin
-  (it asks before interrupting audio) or reboot, and expect audio to be interrupted.
+  update asks before its services restart, then restarts `tesserad` on the new
+  runtime; expect network audio to stop for a moment.
+- **Tessera 0.5.2: upgrade every Tessera device on the network together.**
+  Tessera 0.5 changed the PTPv1 media clock, and a network that mixes 0.3.x and
+  0.5.x devices is not supported. A 0.5 device advertises stratum 0x2A to 0x2D
+  (by priority) instead of 4, so that hardware leaders keep precedence; a 0.3.0
+  device's stratum 4 therefore wins every election against it. Sync messages
+  come every 250 ms instead of every second, and general messages use DSCP 46
+  (EF) instead of 8 (event messages keep 56): update switch QoS rules that match
+  the old marking. A follower advertises stratum 255, and a priority below 64
+  makes a Preferred Leader. The new clock takes effect when `tesserad` restarts,
+  which the plugin update does. Upgrade NDIMon-R devices (this plugin), standalone
+  Tessera hosts and speakers in one maintenance window.
+- **Going back to an earlier runtime.** Tessera's installer refuses a downgrade.
+  Remove the plugin without purging, then install the plugin archive of the
+  earlier runtime.
+  On a network that went back, every device must go back.
+- **Purge.** Removing with purge runs `tessera-bundle uninstall --purge`, which
+  removes what the bundle created. `/var/lib/tessera-rate` (the speaker sample-rate
+  follower's state, created by `tessera-web` on speaker hosts) is left behind;
+  delete it by hand if it exists.
 - **Standalone Tessera.** Newer standalone Tessera releases have their own
   management and audio VLAN editor. It refuses changes when NDIMon-R ownership
   markers are present; moving a configured standalone device to NDIMon-R uses the
@@ -302,7 +325,7 @@ through DOM properties and text nodes, never HTML interpolation.
 - Software PTP was tested; hardware timestamping through VLAN interfaces has not been
   validated.
 - Runtime behaviour such as the Tessera portal and its default login belongs to the
-  runtime release. The 0.3.0 runtime starts its portal with the password `tessera`
+  runtime release. The 0.5.2 runtime, like 0.3.0, starts its portal with the password `tessera`
   on a fresh install (an upgrade keeps an existing password) and answers on
   loopback only until `listen` is changed in its `web.toml`; read the notes of the
   release you install and change the portal password before connecting the device

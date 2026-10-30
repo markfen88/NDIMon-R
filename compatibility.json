@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "tessera": {
-    "plugin_version": "0.3.0",
+    "plugin_version": "0.5.2",
     "min_ndimon": "1.4.0",
-    "runtime_release": "0.3.0",
-    "runtime_package": "0.3.0-1",
+    "runtime_release": "0.5.2",
+    "runtime_package": "0.5.2-1",
     "control_wire_version": 1,
-    "control_types": "0.3.0",
+    "control_types": "0.5.2",
     "sample_rate": 48000,
     "channels_per_direction": [
       1,

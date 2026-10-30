@@ -1,6 +1,72 @@
 # NDIMon-R changelog
 
-## Unreleased
+## 1.4.1
+
+1.4.1 publishes NDIMon-R as signed, prebuilt packages built in public, trusts the
+project's release key so that **Update now** works out of the box, and rebuilds the
+Tessera plugin on Tessera 0.5.2. **If you use Tessera network audio, upgrade every
+Tessera device on the network to 0.5.2 together** (see below).
+
+### Packages and signed updates
+
+- **Prebuilt packages for six platforms, built in public.** A `v*` tag of the
+  public repository runs `.github/workflows/release.yml`: one set of the four
+  packages for each of Debian 13, Ubuntu 24.04 and Ubuntu 26.04 on amd64 and
+  arm64, built with `cargo xtask build-deb` in a clean container of that release,
+  checked with `release-smoke` and lintian, signed (one `SHA256SUMS` over all sets),
+  with GitHub build provenance for every file. Assets are named
+  `<package>_<version>_<arch>_<distribution>.deb`, for example
+  `ndimon-runtime_1.4.1-1_arm64_debian13.deb`. The NDI SDK download the build uses
+  is pinned by SHA-256 and not redistributed.
+- **The project's release key is built in** (`packaging/ndimon-release.pub`, key
+  id `B88234A3FBE65D9D`). A device on 1.4.1 or later verifies and installs the
+  newest release from **System → Update now** without a provisioned key;
+  `/etc/ndimon/trusted-release-keys` can still add keys.
+- **The updater picks the package set of the device's distribution release**
+  (os-release `ID` + `VERSION_ID`, for example `debian13` or `ubuntu24.04`), so an
+  Ubuntu device no longer selects Debian packages, whose libraries it lacks.
+- **Upgrade notes.** A 1.4.0 device has no release key and selects packages by
+  architecture only: install 1.4.1 on it by hand once (download the set for your
+  distribution release, verify it, `apt install` all four, README "Install"), or
+  with `cargo xtask install`. Later releases then arrive through **Update now**.
+
+### Tessera plugin
+
+- **The Tessera plugin is rebuilt on the Tessera 0.5.2 runtime** (`0.5.2-1`,
+  source commit `ce3d8b0`; Debian 13 amd64 and arm64, experimental Ubuntu 24.04
+  arm64), in place of 0.3.0. `bundles.lock.json`, `compatibility.json` and the
+  plugin version follow. The control wire version (1) and the bundle installer's
+  integration contract are unchanged since 0.3.0.
+- **Upgrade every Tessera device on the network together.** Tessera 0.5 changed
+  the PTPv1 media clock: a leader-capable device advertises stratum 0x2A to 0x2D
+  instead of 4 (hardware leaders keep precedence), Sync comes every 250 ms instead
+  of every second, and general messages use DSCP 46 (EF) instead of 8. A 0.3.x
+  device wins every election against 0.5.x devices, so a mixed network is not
+  supported: upgrade NDIMon-R devices, standalone Tessera hosts and speakers in one
+  window, and update switch QoS rules that match DSCP 8.
+- **An update restarts `tesserad` on the new runtime.** The plugin install passed
+  no `--restart`, so after an update the old daemon kept running (and kept the old
+  clock) and the new `tessera-controller` could not register with it until
+  someone restarted Tessera. The install now restarts the daemon when Tessera's
+  install record names another runtime version or a restart is pending, or when
+  there is no record (a 0.1.0 or 0.2.x runtime from before the bundle installer);
+  the plugin update already asks before its services restart. The same version installed
+  again restarts nothing.
+- **A follower cannot be the Preferred Leader.** Tessera 0.5 treats a clock
+  priority below 64 as Preferred Leader and refuses it together with role
+  `follower`. NDIMon-R now refuses that pair too (`tessera.clock.priority`) instead
+  of saving a value the daemon ignores; adopting a running Tessera keeps the
+  priority it actually runs (128), and a pair saved by an earlier release does not
+  block other changes.
+- Documented: going back to an earlier runtime (Tessera's installer refuses a
+  downgrade: remove without purge, then install the older plugin) and what a purge
+  leaves (`/var/lib/tessera-rate`).
+
+### Security
+
+- `libz-sys` 1.1.31 (RUSTSEC-2026-0418: the build script of earlier versions
+  wrote the build's whole environment into `target/`). The release workflow also
+  builds its signing tool before any secret is in the environment.
 
 ### NDI Discovery Server monitoring and control
 
