@@ -3,4 +3,4 @@ import type { TesseraClock } from "./TesseraClock";
 import type { TesseraDevice } from "./TesseraDevice";
 import type { TesseraFlow } from "./TesseraFlow";
 
-export type Tessera = { enabled: boolean, device: TesseraDevice, clock: TesseraClock, flows: Array<TesseraFlow>, locks: { [key in string]?: string }, network_binding: string | null, protocol_flow_lock: boolean, };
+export type Tessera = { enabled: boolean, device: TesseraDevice, clock: TesseraClock, flows: Array<TesseraFlow>, locks: { [key in string]?: string }, network_binding: string | null, protocol_flow_lock: boolean, routing: boolean, routing_sources: Array<string>, };

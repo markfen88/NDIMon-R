@@ -19,6 +19,11 @@ class DriftCompensator {
     void push(const float *const *planes, int frames);
     bool pull(Block &out);
     int drain(float *const *out, int max_frames, int measured_fill);
+    // Puts PCM + FIFO at the target in one step instead of slewing towards it:
+    // discards the oldest excess FIFO frames, or returns how many frames of
+    // silence the caller must write first. Clears the loop state, so the PI
+    // loop afterwards follows only the clock drift.
+    int align(int measured_fill);
     double ppm() const { return ppm_; }
     int fill() const {
         return int(write_.load(std::memory_order_acquire) - read_.load(std::memory_order_acquire));

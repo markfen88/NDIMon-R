@@ -13,6 +13,7 @@ class AlsaPcm {
     int open_error() const { return runtime_error_.load() ? runtime_error_.load() : open_error_; }
     int avail();
     int delay();
+    bool running() const;
     bool recover(int err);
     bool wait(int ms);
     int write_planar(const Block &);

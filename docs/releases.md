@@ -8,7 +8,7 @@ its trusted comment are authenticated before package checksums are used. The
 trusted comment is exactly:
 
 ```text
-product:ndimon-r<TAB>version:1.4.1-1<TAB>file:SHA256SUMS
+product:ndimon-r<TAB>version:1.5.0-1<TAB>file:SHA256SUMS
 ```
 
 `<TAB>` denotes a literal tab. Versions are Debian versions without the tag's
@@ -19,7 +19,7 @@ are refused. All selected package contents must match before installation.
 Each distribution release and architecture contributes exactly four packages at
 the same Debian version. A release asset carries both in its name,
 `<package>_<version>_<arch>_<distribution>.deb` (for example
-`ndimon-runtime_1.4.1-1_arm64_debian13.deb`), where `<distribution>` is the
+`ndimon-runtime_1.5.0-1_arm64_debian13.deb`), where `<distribution>` is the
 os-release `ID` and `VERSION_ID` of the build image (`debian13`, `ubuntu24.04`,
 `ubuntu26.04`). The updater installs only the set named for the device's own
 os-release:
@@ -96,8 +96,14 @@ of `markfen88/NDIMon-R`; the source installer also builds directly on the
 appliance. For every distribution release and architecture (Debian 13, Ubuntu
 24.04 and Ubuntu 26.04, each on amd64 and arm64) the workflow starts a clean
 container of that release on a GitHub runner of that architecture, installs the
-build dependencies, downloads the NDI SDK with `cargo xtask ndi-sdk` (pinned by
-`NDI_SDK_SHA256`; the SDK is not redistributed), and runs `cargo xtask build-deb`,
+build dependencies, downloads the NDI SDK with `cargo xtask ndi-sdk` (pinned in
+one place by `SDK_SHA256` in `control/xtask/src/install.rs` to NDI SDK 6.4.0.2,
+`libndi.so.6.4.0`, SHA-256
+`1b066cca076d3e8b49a5f1dc7fbf77065967256807e3cb5ea387c574176eace6`; the release
+workflow carries no separate pin, `NDI_SDK_SHA256=<64 hex>` overrides it with an
+empty value treated as unset, a changed download stops with a checksum mismatch
+naming both hashes, and the SDK is not redistributed), and runs
+`cargo xtask build-deb`,
 `cargo xtask release-smoke` and `lintian --fail-on error`. Pull requests build and
 check the same way and keep the packages as workflow artifacts. A `v*` tag must
 name the source version (`DEFAULT_VERSION` in `control/xtask/src/package.rs`);
@@ -171,9 +177,9 @@ outside the workflow, or a rotation):
 export NDIMON_RELEASE_KEY_FILE=/private/ndimon-release-key/ndimon-release.key
 read -rsp 'Release-key password: ' NDIMON_RELEASE_KEY_PASSWORD
 export NDIMON_RELEASE_KEY_PASSWORD
-cargo xtask release --version 1.4.1-1 --out ../dist/release ../dist/artifacts/*.deb
+cargo xtask release --version 1.5.0-1 --out ../dist/release ../dist/artifacts/*.deb
 unset NDIMON_RELEASE_KEY_FILE NDIMON_RELEASE_KEY_PASSWORD
-cargo xtask verify-release --dir ../dist/release --version 1.4.1-1 --public-key ../packaging/ndimon-release.pub
+cargo xtask verify-release --dir ../dist/release --version 1.5.0-1 --public-key ../packaging/ndimon-release.pub
 ```
 
 The output directory must be empty initially. Artifact paths are explicit; the
@@ -202,7 +208,7 @@ or version; the Rust verifier enforces all three automatically.
 
 ## Publication
 
-Publishing is pushing a `v<version>` tag (for example `v1.4.1-1`) to the public
+Publishing is pushing a `v<version>` tag (for example `v1.5.0-1`) to the public
 repository `markfen88/NDIMon-R`, whose `main` carries the sanitized snapshot of the
 source: runtime and build code, assets, licenses and operator docs, without private
 history, agent files, tests, testing results and methodology, or internal plans.
@@ -263,7 +269,7 @@ install job itself re-verifies everything and refuses a downgrade unless forced.
 
 `InstallUpdate { version, force: false }` starts an independent transient systemd
 job, returned in the action output as `job`. On the wire the request is
-`{"install_update":{"version":"1.4.1-1","force":false}}`; an omitted `force`
+`{"install_update":{"version":"1.5.0-1","force":false}}`; an omitted `force`
 defaults to false. The job status reports the durable `result` and
 `data.progress` with the version, the stage and the current file name. The job is
 named `ndimon-plugin-update-N.service`, reusing the closed job type. Jobs run for

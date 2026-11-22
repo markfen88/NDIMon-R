@@ -16,6 +16,8 @@ use tokio::{
 };
 use wire::*;
 pub const MAX_FRAME: usize = 1 << 20;
+/// Deadline of routing requests (see [`Client::request_within`]).
+pub const ROUTING_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("{0}")]
@@ -56,10 +58,20 @@ impl Client {
         self.0.online.load(Ordering::Relaxed)
     }
     pub async fn request(&self, body: RequestBody) -> Result<Reply, Error> {
+        self.request_within(body, self.0.timeout).await
+    }
+    /// As [`Client::request`] with its own deadline: a routing change waits for
+    /// the receiver (Tessera's CLI allows 10 s), and abandoning it early leaves
+    /// an uncertain operation that blocks routing until it is reconciled.
+    pub async fn request_within(
+        &self,
+        body: RequestBody,
+        timeout: Duration,
+    ) -> Result<Reply, Error> {
         let mut session = self.0.session.lock().await;
         let mut socket = session.take();
         let id = self.0.next.fetch_add(1, Ordering::Relaxed);
-        let result = tokio::time::timeout(self.0.timeout, async {
+        let result = tokio::time::timeout(timeout, async {
             if socket.is_none() {
                 socket = Some(UnixStream::connect(&self.0.path).await?);
             }
@@ -100,6 +112,10 @@ impl Client {
             Some(expect) => RequestBody::ConfirmedCommand { command, expect },
         })
         .await
+    }
+    /// Routing reads and changes, with [`ROUTING_TIMEOUT`].
+    pub async fn routing(&self, body: RequestBody) -> Result<Reply, Error> {
+        self.request_within(body, ROUTING_TIMEOUT).await
     }
     pub async fn subscribe(&self) -> Result<Subscription, Error> {
         tokio::time::timeout(self.0.timeout, async {

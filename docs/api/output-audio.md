@@ -70,7 +70,13 @@ An output with an empty input or destination list is saved with `enabled:false`.
   when it fell back to the timer), rate, period size, per-source and per-sink
   readiness and xruns, drift compensation, per-route delay and capacity, and
   `memory_bytes` against `memory_budget_bytes`. It answers 503 when the decoder
-  cannot be reached.
+  cannot be reached. Each ALSA sink reports `latency_frames`, the frames between
+  the engine and the device output measured before each write (the PCM delay,
+  plus the drift FIFO of a network sink), and a network sink its `target_frames`
+  and `aligns`. A network (Tessera) sink is put at its target in one step once its
+  stream runs, after an xrun and after a jump of more than four periods, so its
+  latency is the same after every start; the drift loop then follows only the
+  clock difference between HDMI and the network clock.
 - Natively, `GET /api/v1/state/audio` returns the domain with the document
   `revision` and the `domain_revision`.
 

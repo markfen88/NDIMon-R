@@ -1,5 +1,180 @@
 # NDIMon-R changelog
 
+## 1.5.0
+
+1.5.0 moves NDIMon-R to NDI SDK 6.4.0.2, keeps HDMI and network audio at the same
+offset after every restart, rebuilds the Tessera plugin on Tessera 0.6.0, and
+fixes Tessera controller routing with a native device role and a **Routing**
+matrix in the plugin. On fresh Tessera installs NDIMon-R now leads the PTP clock
+by default while existing installations keep their clock role, and a second
+output without audio no longer causes a false `video_delay_capped` status.
+Packages carry version `1.5.0-1` and ship as signed, prebuilt sets for Debian
+13, Ubuntu 24.04 and Ubuntu 26.04 on amd64 and arm64.
+
+### NDI SDK 6.4
+
+- **Built against NDI SDK 6.4.0.2.** NDI replaced its unversioned Linux v6 SDK
+  download with 6.4.0.2 on 2026-11-18 (archive `Version.txt`:
+  `NDI 2026-11-17 git-f9a2905b9 v6.4.0.2`, `libndi.so.6.4.0`). The 1.4.1 release
+  build pinned the 6.3.2 archive hash and can no longer build. The reviewed
+  archive's SHA-256
+  (`1b066cca076d3e8b49a5f1dc7fbf77065967256807e3cb5ea387c574176eace6`) is now
+  pinned in one place, `SDK_SHA256` in `control/xtask/src/install.rs`; the
+  release workflow no longer carries its own pin. `NDI_SDK_SHA256=<64 hex>`
+  overrides the pin to try another archive (an empty value counts as unset). If
+  NDI changes the download again, the build stops with a checksum mismatch naming
+  both hashes until the new archive is reviewed and pinned.
+- **Pinned SDK replacement on install.** `cargo xtask setup-deps` and
+  `cargo xtask install` now replace an installed SDK whose recorded hash
+  (`/etc/ndimon-ndi-sha256`) is missing or differs from the pin, instead of
+  keeping any v6 library they find. The new library is copied first as new files
+  (so running services keep the library they loaded); only then are other
+  `libndi.so.6.*` versions removed so `ldconfig` cannot point `libndi.so.6` at a
+  different version than the one recorded. A failed copy leaves the old SDK and
+  its record in place, and the next run retries.
+- **What 6.4 changes here.** From NDI's 6.4 release notes: fixes a crash caused
+  by an unaligned memory access on some ARM platforms, resolves Linux clock drift
+  (NDI's timing white paper says Linux SDKs after 6.3 take timestamps from
+  `CLOCK_REALTIME`, following NTP/PTP, instead of a free-running clock anchored
+  once at start-up; not yet measured on a device), and stops
+  synthesized timecode from drifting over long runs. The new fixed receive delay
+  API (`NDIlib_recv_set_video_delay` / `NDIlib_recv_set_audio_delay`, 0–2000 ms)
+  is deliberately not used: it acts on the receiver before audio splits between
+  HDMI and network audio, so it shifts both outputs together and cannot change
+  the offset between them. NDI still has no clock synchronisation or PTP of its
+  own; Genlock remains an Advanced SDK, sender-side feature.
+
+### Audio
+
+- **HDMI and network audio keep the same offset after every restart.** Before,
+  the network (Tessera) audio output started with an arbitrary amount of queued
+  audio and the drift-compensation loop slewed it toward its target over up to a
+  minute, overshooting by 3–5 ms, so a lip-sync delay set once was wrong after
+  the next restart of the NDIMon-R services. The output is now put at its target
+  in one step as soon as its stream runs, and again after an xrun or a jump of
+  more than four periods; afterwards the loop only follows clock drift (limit
+  ±3000 ppm).
+  - Measured on a Debian 13 VM: 1536 ±5 frames (about 0.1 ms) from the first
+    second after each restart of the decoder and of `tesserad`, against 790–1170
+    frames drifting over 60 s before.
+  - Measured on a ROCK 5B (Ubuntu 24.04, audio engine v2, 512-frame periods):
+    HDMI master sink 1512 frames (31.5 ms) queued; network sink at its 1536-frame
+    (32.0 ms) target, aligned once, drift −0.1 to −8 ppm, 0 xruns.
+  - Audio status reports `latency_frames`, `target_frames` and `aligns` per sink;
+    the Tessera plugin Status card shows the network output latency. The offset
+    between HDMI and network audio is still set by hand (route delay) because the
+    display's picture processing and a speaker's DSP add their own fixed delays;
+    there is still no automatic lip-sync measurement.
+
+### Tessera plugin
+
+- **Plugin archive 0.6.0-1 on Tessera 0.6.0.** Pins the public signed Tessera
+  `0.6.0` release (`0.6.0-1`, tag `v0.6.0`, commit `62b735d`) for Debian 13
+  amd64 and arm64 and experimental Ubuntu 24.04 arm64
+  (`tessera-bundle_0.6.0-1_arm64_ubuntu-noble-experimental.tar.gz`), packaged as
+  `tessera-plugin_0.6.0-1_{amd64,arm64}.tar.gz` (the Ubuntu 24.04 arm64 archive
+  uses the same name and is published separately). Control wire version stays 1;
+  NDIMon-R's Tessera client needs no change because 0.6.0's control additions
+  are additive and unknown fields are ignored. The plugin now requires NDIMon-R
+  **1.5.0** (`min_ndimon` 1.5.0): earlier releases lock Tessera's flows (which
+  stops the controller runtime from starting) and lack the routing API the
+  plugin's **Routing** card uses.
+  - **What Tessera 0.6.0 adds** (details in
+    [Tessera's changelog](https://github.com/markfen88/Tessera/blob/main/CHANGELOG.md)):
+    a host router (whose default grid reproduces 0.5: RX *n* → host output *n*,
+    apps → TX, monitoring, configured flows), mixers, per-channel and per-port
+    gain and mute, and a post-mix output level and mute stage.
+  - Local monitoring and card inputs can reach host outputs without a network
+    flow; hardware control surfaces (MIDI over ALSA rawmidi, HID or TCP MIDI,
+    with an Allen & Heath CQ profile shipped) can drive those levels; and
+    Tessera's portal adds Router, Mixer and Surfaces pages.
+  - **Behaviour notes and UI limit:** Tessera now defaults `browse_devices` to
+    true (NDIMon-R already renders it on for 0.5+), defaults the monitor delay
+    to auto, and adds `SupplementaryGroups=audio` and ALSA/hidraw device access
+    to `tesserad.service` (NDIMon-R's drop-ins do not change device rules).
+    Router, mixer, gain/mute and control surface settings are managed through
+    Tessera's portal and `tesseractl`; NDIMon-R 1.5.0 does not yet expose them
+    in its own UI. The PTP clock is unchanged from 0.5 (0.5 and 0.6 devices can
+    share a network; mixing 0.3 with 0.5 or 0.6 remains unsupported).
+- **Controller routing works.** NDIMon-R used to render
+  `[control] locked = ["flows"]`, which made Tessera's Controller compatibility
+  runtime (`tessera-controller@main`) exit at every start ("flows is locked by
+  the configuration"), restart every few seconds and answer no controller. Flows
+  are no longer locked: static flows stay host configuration, and controller
+  flows are observed without being reported as drift.
+- **Native device role on Tessera 0.5+.** With Tessera 0.5 or later, NDIMon-R
+  runs `tesserad` with Tessera's native device role (drop-in
+  `tesserad.service.d/71-ndimon-native-device.conf`) and adds a condition drop-in
+  keeping `tessera-controller@main` from starting, because the compatibility
+  runtime cannot route this device's own inputs. The switch runs once when
+  NDIMon-R first sees a 0.5 or later daemon (one `tesserad` restart, a brief
+  pause in network audio) and only when the setting actually changes.
+- **Routing matrix and trusted source devices.** With Tessera 0.5 or later, the
+  plugin tab adds a **Routing** card: transmit channels of every discovered
+  device down the side, the receive inputs of every discovered receiver (this
+  device first) across the top. Selecting a crosspoint connects, replaces or
+  disconnects after confirmation. **Trusted
+  source devices** saves Tessera's `routing_sources`. A **Review and accept
+  current routing** action recovers from an interrupted change. NDIMon-R renders
+  `[discovery] browse_devices = true` and `routing_sources` for a 0.5 or later
+  daemon only; older runtimes keep the previous files. New routes:
+  `GET /v1/plugins/tessera/routing/{devices,channels,receiver,inspect}` and
+  `POST /v1/plugins/tessera/routing/{route,reconcile,sources}`. The Routing card
+  and network output latency readout ship in plugin archive **0.6.0-1** (Tessera
+  0.6.0 runtime).
+- **15 s routing timeout and named refusals.** Routing requests now wait up to
+  15 s (previously 3 s; Tessera can take longer, and an abandoned request made
+  Tessera block routing until reviewed). Routing refusals are now named instead
+  of `internal: Unknown`: `timeout` (HTTP 504) for a receiver that does not
+  answer, and `refused` (HTTP 409) for an expired routing inventory, an
+  unavailable receiver read or a PIN-locked device, with Tessera's message.
+- **NDIMon-R leads the PTP clock by default.** A new Tessera section (fresh
+  plugin install) now starts with clock role `leader`, priority 128, instead of
+  `auto`; `auto` and `follower` stay selectable. An existing Tessera installation
+  keeps the role its running daemon reports, both in the one-shot 1.3.x import
+  and when the control plane first adopts it; a saved role is never changed.
+  Exception: a 1.3.x import whose daemon does not answer at boot starts as
+  `leader`. Keep exactly one leader per network: two forced leaders split the
+  clock, and receivers drop the audio of the leader they do not follow. A
+  `follower` cannot have a priority below 64 (Preferred Leader); that pair is
+  refused.
+
+### Fixes
+
+- **No false "video delay capped" with a second output.** Status took the
+  smallest effective video delay of all outputs, so a second output without audio
+  (effective 0 ms) made a fully applied delay report as `video_delay_capped`. The
+  cap and effective delay are now read from the primary output carrying the audio
+  (video delay requires audio engine v2).
+
+### Upgrade notes
+
+- **SDK replacement needs network access.** A device or build host with a
+  hand-installed NDI SDK, or one installed before `/etc/ndimon-ndi-sha256`
+  existed, needs network access for its next `cargo xtask setup-deps` or
+  `cargo xtask install` so it can download the pinned 6.4.0.2 archive.
+- **Upgrade NDIMon-R to 1.5.0 first, then install Tessera plugin 0.6.0-1.** Core
+  updates do not replace installed plugin archives, and plugin archive `0.6.0-1`
+  requires NDIMon-R 1.5.0 (`min_ndimon` 1.5.0). Update NDIMon-R first, then
+  install `0.6.0-1` from **Plugins** to get Tessera 0.6.0, the **Routing** card
+  and the network output latency readout.
+- **One-time `tesserad` restart.** Installing plugin `0.6.0-1` over Tessera 0.5.2
+  restarts `tesserad` once on the new runtime (pausing network audio briefly).
+  Switching an existing 0.5+ daemon to the native device role also restarts
+  `tesserad` once when 1.5.0 first applies it.
+- **Going back from Tessera 0.6.0 to 0.5.x.** A 0.5.x daemon refuses the
+  configuration keys 0.6 introduces (`[host_volume]`, `[router]`, `[[mixer]]`,
+  `[[surface]]` and new `[[bridge]]` keys). To downgrade, remove the 0.6.0
+  plugin without purging (or run the 0.6.0 bundle's `uninstall --yes`, which
+  keeps `state.toml.<version>`), then install the older plugin; saved gain,
+  mute, router, mixer and surface settings are not carried back. 0.5 and 0.6
+  devices can share a network (the PTP clock is unchanged from 0.5); mixing 0.3
+  with 0.5 or 0.6 remains unsupported.
+- **One PTP leader per network.** Existing saved Tessera clock roles are kept,
+  and an existing installation keeps the role its running daemon reports. When
+  adding a new NDIMon-R device to a network that already has a PTP leader, switch
+  it from the new `leader` default to `follower` or `auto`.
+
 ## 1.4.1
 
 1.4.1 publishes NDIMon-R as signed, prebuilt packages built in public, trusts the

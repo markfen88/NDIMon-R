@@ -258,7 +258,7 @@ pub async fn capture(
     } else {
         commit
     };
-    doc["app"] = json!({"firmware":read("/etc/ndimon-firmware-version","1.4.0")?,"commit":commit,"ndi_version":read("/etc/ndimon-ndi-version","6.x")?});
+    doc["app"] = json!({"firmware":read("/etc/ndimon-firmware-version",env!("CARGO_PKG_VERSION"))?,"commit":commit,"ndi_version":read("/etc/ndimon-ndi-version","6.x")?});
     doc["source_device"] = json!({"hostname":io.hostname(),"ndi_alias":alias,"platform":io.platform(),"mac_suffix":io.mac_suffix()});
     doc["sections"] = ordered;
     doc["checksum"] = json!(checksum(&doc["sections"]).map_err(invalid)?);

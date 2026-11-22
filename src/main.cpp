@@ -1842,8 +1842,15 @@ int main(int argc, char* argv[]) {
 
     if (audio_engine)
         audio_engine->set_primary_output(primary_audio_output);
+    // The video delay belongs to the audio worker (the primary output).
+    auto video_delay_cap = [&]() {
+        if (audio_worker) return audio_worker->video_delay_cap_ms();
+        int cap = 5000;
+        for (auto& w : workers) cap = std::min(cap, w->video_delay_cap_ms());
+        return cap;
+    };
     auto reload_audio = [&]() -> nlohmann::json {
-        int cap=5000;for(auto& w:workers)cap=std::min(cap,w->video_delay_cap_ms());
+        int cap=video_delay_cap();
         if(!audio_engine)return {{"ok",true},{"applied",nlohmann::json::array()},{"restarted",false},{"restart_required",true}};
         auto result = cfg.follows("audio") ? audio_engine->apply(cfg.audio_settings(nullptr), cap)
             : audio_engine->reload("/etc/ndimon-audio-settings.json", cap);
@@ -1946,8 +1953,7 @@ int main(int argc, char* argv[]) {
             for (auto& w : workers) previous.emplace(w->ch_num(), cfg.get_output(w->ch_num()));
             auto response = cfg.apply_config(cmd.config_request, [&](const ndimon::audio::AudioSettings& settings) {
                 if (!audio_engine || engine_restart) return std::string{};
-                int cap = 5000;
-                for (auto& w : workers) cap = std::min(cap, w->video_delay_cap_ms());
+                int cap = video_delay_cap();
                 const auto result = audio_engine->apply(settings, cap);
                 return result.ok ? std::string{} : result.error;
             });
@@ -2012,8 +2018,7 @@ int main(int argc, char* argv[]) {
         }
         if (cmd.action == "reload_audio") return reload_audio();
         if (cmd.action == "check_audio") {
-            int cap=5000;for(auto& w:workers)cap=std::min(cap,w->video_delay_cap_ms());
-            return nlohmann::json{{"ok",true},{"video_delay_cap_ms",cap}};
+            return nlohmann::json{{"ok",true},{"video_delay_cap_ms",video_delay_cap()}};
         }
         if (cmd.action == "get_status_all") {
             nlohmann::json j = nlohmann::json::array();
@@ -2059,8 +2064,10 @@ int main(int argc, char* argv[]) {
         s["outputs"] = all;
         s["audio"] = audio_engine ? audio_engine->status() : nlohmann::json{{"running",false},{"engine","v1"}};
         if(audio_engine){
-            int cap=5000,effective=5000;
-            for(auto& w:workers){cap=std::min(cap,w->video_delay_cap_ms());effective=std::min(effective,w->effective_video_delay_ms());}
+            // Only the audio worker delays video; another output reports 0 and
+            // would make a satisfied delay look capped.
+            int cap=video_delay_cap();
+            int effective=audio_worker?audio_worker->effective_video_delay_ms():0;
             s["audio"]["video_delay_cap_ms"]=cap;
             s["audio"]["effective_video_delay_ms"]=effective;
             s["audio"]["video_delay_capped"]=s["audio"].value("video_delay_ms",0)>effective;

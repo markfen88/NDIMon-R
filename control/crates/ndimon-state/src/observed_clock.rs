@@ -111,10 +111,11 @@ mod tests {
     fn the_import_keeps_the_role_and_priority_the_daemon_runs() {
         let imported = import::import(board_files()).unwrap();
         let tessera = imported.document.tessera.as_ref().unwrap();
-        // Without the daemon the files give the type default: the bug.
+        // Without the daemon the files give the new-section default (leader
+        // since 1.5.0); the daemon's answer overrides it below.
         assert_eq!(
             (tessera.clock.role, tessera.clock.priority),
-            (ClockRole::Auto, 128)
+            (ClockRole::Leader, 128)
         );
         for (role, priority) in [
             (ClockRole::Follower, 128),
@@ -130,7 +131,10 @@ mod tests {
         // No answer: the files decide, as before.
         let mut state = import::import(board_files()).unwrap();
         keep(&mut state, None).unwrap();
-        assert_eq!(state.document.tessera.unwrap().clock.role, ClockRole::Auto);
+        assert_eq!(
+            state.document.tessera.unwrap().clock.role,
+            ClockRole::Leader
+        );
         // A device without Tessera has nothing to keep.
         let mut state = import::import(LegacyFiles::new()).unwrap();
         keep(&mut state, Some((ClockRole::Follower, 128))).unwrap();

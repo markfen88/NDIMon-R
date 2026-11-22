@@ -246,6 +246,28 @@
       "additionalProperties": false
     },
     {
+      "description": "Tessera routing inventory and receiver pages, read through the daemon.",
+      "type": "object",
+      "properties": {
+        "tessera_routing": {
+          "type": "object",
+          "properties": {
+            "read": {
+              "$ref": "#/$defs/TesseraRoutingRead"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "read"
+          ]
+        }
+      },
+      "required": [
+        "tessera_routing"
+      ],
+      "additionalProperties": false
+    },
+    {
       "description": "The legacy encoder/subscription endpoints have no implementation.",
       "type": "object",
       "properties": {
@@ -470,6 +492,119 @@
       "enum": [
         "require_management_address",
         "token_only"
+      ]
+    },
+    "TesseraRoutingRead": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "devices": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "devices"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "object",
+              "properties": {
+                "endpoint": {
+                  "$ref": "#/$defs/TesseraEndpointRef"
+                },
+                "direction": {
+                  "$ref": "#/$defs/Direction"
+                },
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "direction"
+              ]
+            }
+          },
+          "required": [
+            "channels"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "receiver": {
+              "type": "object",
+              "properties": {
+                "endpoint": {
+                  "$ref": "#/$defs/TesseraEndpointRef"
+                },
+                "first": {
+                  "type": "integer",
+                  "format": "uint16",
+                  "minimum": 0,
+                  "maximum": 65535
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "endpoint",
+                "first"
+              ]
+            }
+          },
+          "required": [
+            "receiver"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The complete review of this device's inputs, with a `review` token.",
+          "type": "string",
+          "const": "inspect"
+        }
+      ]
+    },
+    "TesseraEndpointRef": {
+      "description": "A daemon-issued routing endpoint reference (opaque ID and generation).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "generation"
+      ]
+    },
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "rx",
+        "tx"
       ]
     },
     "RestoreScope": {
@@ -1360,6 +1495,17 @@
         "protocol_flow_lock": {
           "type": "boolean",
           "default": true
+        },
+        "routing": {
+          "type": "boolean",
+          "default": false
+        },
+        "routing_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "additionalProperties": false,
@@ -1507,13 +1653,6 @@
         "direction",
         "port",
         "any_source"
-      ]
-    },
-    "Direction": {
-      "type": "string",
-      "enum": [
-        "rx",
-        "tx"
       ]
     },
     "Display": {

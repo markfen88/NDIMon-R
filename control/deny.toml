@@ -32,6 +32,12 @@ allow-wildcard-paths = true
 
 [advisories]
 yanked = "deny"
+# chrono is used only to format and parse RFC 3339 UTC timestamps in the network
+# engine (handoff created_at, pending-change expiry). The advisory reports the
+# crate as unmaintained, not a vulnerability; replacing it is a follow-up.
+ignore = [
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; RFC 3339 formatting only, replacement tracked" },
+]
 
 [sources]
 unknown-registry = "deny"

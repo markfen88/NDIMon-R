@@ -27,5 +27,12 @@ class AlsaSink : public AudioSink {
     std::atomic<uint64_t> frames_{0};
     std::atomic<uint32_t> short_writes_{0};
     std::atomic<int> fill_{0};
+    // Frames between the engine and the device output (PCM delay, plus the
+    // drift FIFO of a non-master sink), measured before each write.
+    std::atomic<int> latency_{0};
+    int target_;
+    bool aligned_ = false;
+    uint32_t seen_xruns_ = 0;
+    std::atomic<uint32_t> aligns_{0};
 };
 } // namespace ndimon::audio

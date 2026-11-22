@@ -4,7 +4,7 @@ use crate::common::*;
 use axum::{
     Extension, Router,
     body::Bytes,
-    extract::{FromRef, Path, State},
+    extract::{FromRef, Path, Query as HttpQuery, State},
     response::Response,
     routing::{get, post},
 };
@@ -30,6 +30,10 @@ where
                 .route("/disable", post(disable))
                 .route("/update", post(update))
                 .route("/uninstall", post(uninstall))
+                .route(
+                    "/routing/{operation}",
+                    get(routing_read).post(routing_write),
+                )
                 .route("/{operation}", get(read).post(write).put(write))
                 .route("/audio/{operation}", post(write_audio)),
         )
@@ -98,6 +102,7 @@ fn legacy_error(e: ApiError) -> Response {
                     "offline" => 503,
                     "timeout" => 504,
                     "protocol" | "response_too_large" => 502,
+                    "refused" => 409,
                     _ => 500,
                 };
             }
@@ -155,6 +160,150 @@ async fn read(
         }),
         _ => Err(ApiError::NotFound { what: op }),
     };
+    match result {
+        Ok(v) => success(v),
+        Err(e) => legacy_error(e),
+    }
+}
+fn short(value: Option<&String>, name: &str, max: usize) -> Result<Option<String>, ApiError> {
+    match value {
+        Some(v) if v.is_empty() || v.len() > max || v.chars().any(char::is_control) => {
+            Err(invalid(format!("invalid {name}")))
+        }
+        v => Ok(v.cloned()),
+    }
+}
+fn endpoint_query(
+    q: &std::collections::BTreeMap<String, String>,
+) -> Result<TesseraEndpointRef, ApiError> {
+    Ok(TesseraEndpointRef::new(
+        short(q.get("id"), "endpoint", 256)?.ok_or_else(|| invalid("endpoint required"))?,
+        short(q.get("generation"), "generation", 256)?
+            .ok_or_else(|| invalid("generation required"))?,
+    ))
+}
+/// Tessera 0.5 routing, read through the daemon: `devices?cursor=`,
+/// `channels?id=&generation=&direction=rx|tx&cursor=`, `receiver?id=&generation=&first=`.
+async fn routing_read(
+    State(h): State<StateHandle>,
+    Path(op): Path<String>,
+    HttpQuery(q): HttpQuery<std::collections::BTreeMap<String, String>>,
+) -> Response {
+    if let Err(e) = enabled(&h).await {
+        return legacy_error(e);
+    }
+    let read = (|| {
+        Ok::<_, ApiError>(match op.as_str() {
+            "devices" => TesseraRoutingRead::Devices {
+                cursor: short(q.get("cursor"), "cursor", 512)?,
+            },
+            "channels" => TesseraRoutingRead::Channels {
+                endpoint: endpoint_query(&q)?,
+                direction: match q.get("direction").map(String::as_str) {
+                    Some("rx") => Direction::Rx,
+                    Some("tx") => Direction::Tx,
+                    _ => return Err(invalid("direction must be rx or tx")),
+                },
+                cursor: short(q.get("cursor"), "cursor", 512)?,
+            },
+            "receiver" => TesseraRoutingRead::Receiver {
+                endpoint: endpoint_query(&q)?,
+                first: q
+                    .get("first")
+                    .map(|v| v.parse::<u16>().ok().filter(|n| *n >= 1))
+                    .unwrap_or(Some(1))
+                    .ok_or_else(|| invalid("first must be 1..65535"))?,
+            },
+            "inspect" => TesseraRoutingRead::Inspect,
+            _ => return Err(ApiError::NotFound { what: op.clone() }),
+        })
+    })();
+    let result = match read {
+        Ok(read) => h.query(Query::TesseraRouting { read }).await,
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(v) => success(v),
+        Err(e) => legacy_error(e),
+    }
+}
+/// `route` `{expectation, change}` executes one reviewed receiver change;
+/// `sources` `{sources: [...]}` saves the trusted source hosts.
+async fn routing_write(
+    State(h): State<StateHandle>,
+    Path(op): Path<String>,
+    session: Option<Extension<UiSession>>,
+    value: Body,
+) -> Response {
+    if let Err(e) = enabled(&h).await {
+        return legacy_error(e);
+    }
+    let value = match body(value) {
+        Ok(v) => v,
+        Err(e) => return *e,
+    };
+    let origin = ui(session);
+    let result = async {
+        match op.as_str() {
+            "route" => {
+                object(&value, &["expectation", "change"])?;
+                let expectation = value["expectation"]
+                    .as_str()
+                    .filter(|e| !e.is_empty() && e.len() <= 256)
+                    .ok_or_else(|| invalid("expectation required"))?
+                    .to_string();
+                let change: TesseraRouteChange = serde_json::from_value(value["change"].clone())
+                    .map_err(|e| invalid(format!("invalid routing change: {e}")))?;
+                let submission = submit_domain(
+                    &h,
+                    Command::TesseraRoute {
+                        expectation,
+                        change,
+                    },
+                    None,
+                    origin,
+                    &json!({}),
+                    Domain::Tessera,
+                    invalid,
+                )
+                .await?;
+                Ok(json!({"ok":true,"result":submission.apply.get("tessera_result").cloned().unwrap_or(json!("done"))}))
+            }
+            "reconcile" => {
+                object(&value, &["review"])?;
+                let review = value["review"]
+                    .as_str()
+                    .filter(|e| !e.is_empty() && e.len() <= 256)
+                    .ok_or_else(|| invalid("review required"))?
+                    .to_string();
+                let submission = submit_domain(
+                    &h,
+                    Command::TesseraReconcileRouting { review },
+                    None,
+                    origin,
+                    &json!({}),
+                    Domain::Tessera,
+                    invalid,
+                )
+                .await?;
+                Ok(json!({"ok":true,"result":submission.apply.get("tessera_result").cloned().unwrap_or(json!("done"))}))
+            }
+            "sources" => {
+                object(&value, &["sources"])?;
+                let sources: Vec<String> = serde_json::from_value(value["sources"].clone())
+                    .map_err(|_| invalid("sources must be an array of device IDs"))?;
+                let snapshot = h.snapshot().await?;
+                let rev = snapshot.domain_revision(Domain::Tessera);
+                let mut tessera = configured(&snapshot.document)?;
+                tessera.routing_sources = sources;
+                save(&h, Command::SetTessera(tessera), rev, &json!({}), origin)
+                    .await
+                    .map(|_| json!({"ok":true}))
+            }
+            _ => Err(ApiError::NotFound { what: op.clone() }),
+        }
+    }
+    .await;
     match result {
         Ok(v) => success(v),
         Err(e) => legacy_error(e),

@@ -2,6 +2,16 @@
 use crate::{LegacyFiles, PathSpec};
 use ndimon_types::*;
 
+/// The vendor token of the native device role: the compatibility runtime's
+/// `--vendor` (`/usr/lib/tessera/controller.args`), so controllers see the same
+/// device after the switch.
+pub const NATIVE_VENDOR: &str = "Audinate";
+/// Generated systemd drop-ins whose change needs `daemon-reload` and a restart
+/// of `tesserad` (the role is chosen when the daemon starts).
+pub const NATIVE_ROLE_PATHS: [&str; 2] = [
+    "/etc/systemd/system/tesserad.service.d/71-ndimon-native-device.conf",
+    "/etc/systemd/system/tessera-controller@main.service.d/71-ndimon-native-device.conf",
+];
 pub fn render_path(
     spec: &PathSpec,
     state: &DesiredState,
@@ -23,7 +33,7 @@ pub(crate) fn render_artifact(id: &str, state: &DesiredState) -> Result<Vec<u8>,
     let q = |s: &str| serde_json::to_string(s).map_err(|e| e.to_string());
     let text = match id {
         "tessera-device" => format!(
-            "[[device]]\nid = \"main\"\nname = {}\nsample_rate = {}\nencoding = {}\nlatency_us = {}\nrx_channels = {}\ntx_channels = {}\nlocked = [\"name\", \"sample_rate\", \"encoding\", \"latency\", \"rx_channels\", \"tx_channels\", \"rx_channel_labels\", \"tx_channel_labels\"]\nrx_channel_labels = {}\ntx_channel_labels = {}\n\n[clock]\nrole = {}\npriority = {}\nlocked = [\"role\", \"priority\"]\n{}\n[discovery]\nadvertise_devices = {}\n",
+            "[[device]]\nid = \"main\"\nname = {}\nsample_rate = {}\nencoding = {}\nlatency_us = {}\nrx_channels = {}\ntx_channels = {}\nlocked = [\"name\", \"sample_rate\", \"encoding\", \"latency\", \"rx_channels\", \"tx_channels\", \"rx_channel_labels\", \"tx_channel_labels\"]\nrx_channel_labels = {}\ntx_channel_labels = {}\n\n[clock]\nrole = {}\npriority = {}\nlocked = [\"role\", \"priority\"]\n{}\n[discovery]\nadvertise_devices = {}\n{}",
             q(&t.device.name)?,
             t.device.sample_rate,
             t.device.encoding,
@@ -34,12 +44,24 @@ pub(crate) fn render_artifact(id: &str, state: &DesiredState) -> Result<Vec<u8>,
             labels(&t.device.tx_labels)?,
             serde_json::to_string(&t.clock.role).map_err(|e| e.to_string())?,
             t.clock.priority,
-            if t.protocol_flow_lock {
-                "\n[control]\nlocked = [\"flows\"]\n"
+            // Flows are not locked: Tessera's controller compatibility runtime
+            // exits while `flows` is locked, and controller routing (Dante
+            // Controller, Tessera portals, this plugin) installs its flows as
+            // controller flows. Static flows stay host configuration.
+            if t.routing && !t.routing_sources.is_empty() {
+                format!(
+                    "\n[control]\nrouting_sources = {}\n",
+                    serde_json::to_string(&t.routing_sources).map_err(|e| e.to_string())?
+                )
+            } else {
+                String::new()
+            },
+            t.device.advertise_devices,
+            if t.routing {
+                "browse_devices = true\n"
             } else {
                 ""
-            },
-            t.device.advertise_devices
+            }
         ),
         "tessera-flows" => {
             let mut out =
@@ -72,6 +94,27 @@ pub(crate) fn render_artifact(id: &str, state: &DesiredState) -> Result<Vec<u8>,
             out
         }
         "tessera-probe-flows" => String::new(),
+        // Tessera 0.5: the daemon serves the device role itself (controllers,
+        // flow requests, routing of this device's own inputs) in place of the
+        // Controller compatibility runtime, which cannot execute receiver
+        // routing. Both bind the same ports, so the runtime is kept from
+        // starting while the role is on. Older daemons keep the runtime.
+        "tessera-native-device" => {
+            if t.routing {
+                format!(
+                    "# NDIMon-R Tessera plugin; native device role (Tessera 0.5)\n[Service]\nEnvironment=TESSERA_NATIVE_DEVICE=true\nEnvironment=TESSERA_NATIVE_VENDOR={NATIVE_VENDOR}\n"
+                )
+            } else {
+                "# NDIMon-R Tessera plugin; this runtime uses the Controller compatibility runtime\n".into()
+            }
+        }
+        "tessera-controller-native" => {
+            if t.routing {
+                "# NDIMon-R Tessera plugin; tesserad serves the device role itself\n[Unit]\nConditionPathExists=/run/ndimon/tessera-controller-compatibility\n".into()
+            } else {
+                "# NDIMon-R Tessera plugin; the Controller compatibility runtime serves the device role\n".into()
+            }
+        }
         "tessera-network" => {
             let row = state
                 .network

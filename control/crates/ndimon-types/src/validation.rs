@@ -962,6 +962,26 @@ impl Validator {
             "tessera.flows",
             "flow set exceeds 60 KB",
         );
+        self.check(
+            tessera.routing_sources.len() <= 64,
+            "tessera.routing_sources",
+            "at most 64 routing sources",
+        );
+        for (i, id) in tessera.routing_sources.iter().enumerate() {
+            self.check(
+                id.len() == 16
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+                &format!("tessera.routing_sources[{i}]"),
+                "a routing source is a 16-digit lower-case hexadecimal device ID",
+            );
+            self.check(
+                !tessera.routing_sources[..i].contains(id),
+                &format!("tessera.routing_sources[{i}]"),
+                "duplicate routing source",
+            );
+        }
     }
     fn display(&mut self, display: &Display) {
         // splash-config.js clamps all four percentages to 0..100. Color strings

@@ -1,4 +1,4 @@
-# NDIMon-R 1.4.1
+# NDIMon-R 1.5.0
 
 Dedicated **NDI receiver / HDMI decoder** for Linux appliances.
 
@@ -14,14 +14,18 @@ requests. The decoder and the NDI finder stay C++. The release also adds a
 native network engine with recoverable changes, out-of-process plugins, signed
 updates, native backup and restore, and a TypeScript web UI that updates live.
 It installs as four Debian packages, and a 1.3.x appliance upgrades in place.
-Read [Upgrading from 1.3.x](#upgrading-from-13x) before you upgrade. **1.4.1**
-publishes signed, prebuilt packages for Debian 13, Ubuntu 24.04 and Ubuntu 26.04 on
-amd64 and arm64, built in public from the release tag; trusts the project's
-release key, so **Update now** works without provisioning one; and rebuilds the
-Tessera plugin on Tessera 0.5.2. The packages write `1.4.1-1` to
-`/etc/ndimon-firmware-version`. See [the changelog](CHANGELOG.md)
-for the release notes and [the documentation index](docs/README.md) for operator
-and developer guides. Network audio remains experimental.
+Read [Upgrading from 1.3.x](#upgrading-from-13x) before you upgrade. **1.5.0**
+moves to NDI SDK 6.4.0.2, keeps HDMI and network audio at the same offset after
+every restart, moves the Tessera plugin to Tessera 0.6.0 (`0.6.0-1`), enables
+Tessera controller routing with the native device role and a **Routing** matrix
+in the plugin, makes NDIMon-R the Tessera PTP clock leader by default on fresh
+installs, and fixes false `video_delay_capped` reports with a second output.
+Like 1.4.1 it publishes signed, prebuilt packages for Debian 13,
+Ubuntu 24.04 and Ubuntu 26.04 on amd64 and arm64, built in public from the
+release tag. The packages write `1.5.0-1` to `/etc/ndimon-firmware-version`. See
+[the changelog](CHANGELOG.md) for the release notes and
+[the documentation index](docs/README.md) for operator and developer guides.
+Network audio remains experimental.
 
 It takes a live NDI stream off the network, decodes it, and scans it out to HDMI or DisplayPort with DRM/KMS. Audio goes to ALSA. A web UI on port 80 is the day-to-day control surface. The decoder core is C++ because the path is memory-bandwidth limited on ARM boards.
 
@@ -36,6 +40,7 @@ Official NDI documentation: [docs.ndi.video](https://docs.ndi.video/all/).
 - [Changelog and release notes](CHANGELOG.md)
 - [Documentation index](docs/README.md)
 - [What it does](#what-it-does)
+- [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Upgrading from 1.3.x](#upgrading-from-13x)
@@ -76,6 +81,21 @@ the Standard SDK, both Standard NDI and HX arrive as uncompressed frames and use
 FrameSync. The retained compressed-frame decoder factory can fall back to
 FFmpeg, but MPP/V4L2/VAAPI HX decoding is dormant on this SDK path.
 
+### Screenshots
+
+The dashboard: one tile per output, the discovered sources with a **Connect**
+button each, and the system card.
+
+![Dashboard with one live output and four NDI sources](docs/images/dashboard.png)
+
+An output's audio routes (**Outputs → Advanced → Audio**): NDI audio feeds the
+HDMI output and the Tessera network output, which has 75 ms of destination delay.
+
+![Output audio editor with HDMI and Network audio destinations](docs/images/output-audio-routes.png)
+
+More pages are shown in [Web UI](#web-ui) and in the
+[Tessera plugin guide](docs/plugins/tessera.md#routing).
+
 ---
 
 ## Requirements
@@ -91,7 +111,7 @@ FFmpeg, but MPP/V4L2/VAAPI HX decoding is dormant on this SDK path.
 These are NDIMon's host requirements. Tessera network audio needs **Tessera 0.3.0 or later**, which has its own OS/architecture requirements.
 See [Tessera setup](docs/plugins/tessera.md) before installing it.
 
-Installing accepts the [NDI SDK License Agreement](https://www.ndi.tv/license). The SDK tarball (~60 MB) is downloaded from NDI on the first `cargo xtask setup-deps`.
+Installing accepts the [NDI SDK License Agreement](https://www.ndi.tv/license). The SDK tarball (~60 MB) is downloaded from NDI on the first `cargo xtask setup-deps` and whenever the recorded SDK hash (`/etc/ndimon-ndi-sha256`) is missing or differs from the pin.
 
 **Ubuntu 24.04 (noble) and Armbian noble.** The build compiles against noble's own
 FFmpeg 6.1 development packages and `ndimon-runtime` depends on noble's runtime
@@ -139,15 +159,25 @@ developer and CI tool only, for rebuilding the browser bundle. Open `http://<dev
 | `cargo xtask install --no-deps` | Rebuild and install with existing dependencies |
 | `cargo xtask install --no-deps --no-build` | Install already built packages/assets |
 | `cargo xtask setup-deps` | Provision build/runtime dependencies and the NDI SDK |
-| `cargo xtask build-deb --version 1.4.1-1` | Build the complete package set in `dist/debian/` |
+| `cargo xtask build-deb --version 1.5.0-1` | Build the complete package set in `dist/debian/` |
 
-Optional download pin: `NDI_SDK_SHA256=<64 hex digits> cargo xtask install`.
-New SDK installs record the exact version and archive hash in
-`/etc/ndimon-ndi-version` and `/etc/ndimon-ndi-sha256`. Existing v6 installs are
-retained and their version marker is repaired. Rockchip MPP, Pi V4L2 and x86
+The NDI SDK download is pinned in one place to the reviewed archive of NDI SDK
+6.4.0.2 (`libndi.so.6.4.0`, `SDK_SHA256` in `control/xtask/src/install.rs`,
+SHA-256 `1b066cca076d3e8b49a5f1dc7fbf77065967256807e3cb5ea387c574176eace6`); if
+NDI replaces the unversioned download, the build stops with a checksum mismatch
+naming both hashes until the new archive is reviewed and pinned.
+`NDI_SDK_SHA256=<64 hex digits>` overrides the pin to try another archive (an
+empty value counts as unset). Installs record the exact version and archive hash
+in `/etc/ndimon-ndi-version` and `/etc/ndimon-ndi-sha256`. `cargo xtask
+setup-deps` and `cargo xtask install` replace an installed SDK whose recorded
+hash is missing (for example a hand-installed SDK or one installed before the
+record existed) or differs from the pin, so such a host needs network access for
+its next install. New library files are copied first as new files (running
+services keep the library they loaded), then other `libndi.so.6.*` versions are
+removed so `ldconfig` cannot point `libndi.so.6` at a different version; a failed
+copy leaves the old SDK and its record in place. Rockchip MPP, Pi V4L2 and x86
 VAAPI/NVIDIA detection preserve their software fallbacks. Pass CMake options
-after `--`, for example
-`cargo xtask build-deb -- -DENABLE_MPP=OFF`.
+after `--`, for example `cargo xtask build-deb -- -DENABLE_MPP=OFF`.
 
 For a prebuilt release, provision the NDI SDK and media dependencies with
 `cargo xtask setup-deps` (the NDI SDK is licensed separately and not part of the
@@ -159,7 +189,7 @@ for your architecture and distribution release from the
 [releases](docs/releases.md), then install the complete set:
 
 ```sh
-sudo apt install ./ndimon-*_1.4.1-1_arm64_debian13.deb
+sudo apt install ./ndimon-*_1.5.0-1_arm64_debian13.deb
 sudo systemctl status ndimon-control ndimon-privd.socket ndimon-finder ndimon-r
 sudo journalctl -u ndimon-control -u ndimon-privd -f
 ```
@@ -411,7 +441,7 @@ NDI network
 
 ### HX on the Standard SDK
 
-The build links the Standard SDK and creates v3 receivers in `fastest` mode. On the tested SDK 6.3.2, NDI Screen Capture HX arrives as uncompressed UYVY: the SDK decodes the H.264/H.265 itself, in software, on the appliance CPU. The old global `codec.*.passthrough` keys (which exist as strings in `libndi` 6.3.2) did not enable compressed receive in our test and are no longer written; whether any earlier SDK build honoured them is unverified.
+The build links the Standard SDK and creates v3 receivers in `fastest` mode. When tested on SDK 6.3.2, NDI Screen Capture HX arrived as uncompressed UYVY: the SDK decoded the H.264/H.265 itself, in software, on the appliance CPU. The old global `codec.*.passthrough` keys (which existed as strings in `libndi` 6.3.2) did not enable compressed receive in that test and are no longer written; whether any earlier SDK build honoured them is unverified, and this behaviour has not been re-measured on SDK 6.4.
 
 Per-output `compressed_frame_observed` reports whether a compressed frame has
 actually reached the application (it stays false on the Standard SDK). Use
@@ -640,7 +670,7 @@ Warnings stack in the page flow under the top bar. Destructive actions (reboot, 
 
 ### Dashboard
 
-One tile per output (LIVE/IDLE, source, input and output resolution, frame rate, codec, HW/SW decode, SATURATED), a system card (CPU, memory, thermals, platform, uptime, audio, frame counters), **Rescan sources**, **Change source**, and the source list with a **Connect** button per source. With more than one output, a selector in the card header picks which output the button connects.
+One tile per output (LIVE/IDLE, source, input and output resolution, frame rate, codec, HW/SW decode, SATURATED), a system card (CPU, memory, thermals, platform, uptime, audio, frame counters), **Rescan sources**, **Change source**, and the source list with a **Connect** button per source. With more than one output, a selector in the card header picks which output the button connects. See the [dashboard screenshot](#screenshots).
 
 ### Outputs
 
@@ -676,7 +706,12 @@ mixed together, rather than interpreted as a left/right pair.
 
 Input gain is −60 to +12 dB (−60 mutes). Input and destination delays are whole
 milliseconds from 0–5000; the sum for an active input/destination pair must fit
-5000 ms. These are manual delays. There is no automatic HDMI/Dante latency
+5000 ms. These are manual delays. The network (Tessera) audio output aligns to
+its target fill in one step as soon as its stream runs (and again after an xrun
+or a jump of more than four periods), and the drift loop afterwards only follows
+clock drift (±3000 ppm), so the offset between HDMI and network audio stays the
+same after every restart. The display's picture processing and a speaker's DSP
+still add their own fixed delays; there is no automatic HDMI/Dante latency
 measurement or per-output video delay.
 
 **Save output audio** affects that output and preserves other outputs. Routes
@@ -739,6 +774,8 @@ Tessera plugin select their roles from the same network IDs. See [Network](#netw
 
 ### System
 
+![System page: device information with firmware 1.5.0 and NDI SDK 6.4, software update, backup, time and watchdog](docs/images/system.png)
+
 | Control | API |
 |---------|-----|
 | Device information | `GET /v1/AboutMe` and `/api/status` |
@@ -766,6 +803,8 @@ One network is the **management** network (web UI, gateway, DNS and optional DNS
 search domains); the NDI page picks the network for discovery and every receiver,
 and the Tessera plugin picks its audio network. An assigned network cannot be
 removed until another is selected. Wi-Fi is out of scope.
+
+![Settings → Network with an untagged management network and an audio VLAN assigned to Tessera](docs/images/settings-network.png)
 
 - **Four backends.** The engine adopts and changes the effective wired
   configuration of NetworkManager, Netplan (networkd renderer), systemd-networkd
@@ -829,6 +868,8 @@ commands and events, and a static UI panel. Its state lives in the NDIMon-R
 document, so it gets revisions, events and backup for free; a plugin asks the
 host for privileged work by naming one of the commands its manifest declares.
 
+![Plugins page with the Tessera network audio plugin 0.6.0-1 enabled](docs/images/plugins.png)
+
 Open **Plugins** to upload a trusted plugin archive or choose a release from a
 configured feed. Enter the plugin name, choose its `.tar.gz` file, and select
 **Upload and install**. Installation does not restart the control plane; the plugin is enabled afterwards and its tab opens
@@ -852,14 +893,25 @@ script no longer works).
 
 **Tessera** is a first-party plugin whose settings are part of the NDIMon-R
 document. Use a plugin archive built from a **Tessera 0.3.0 or later** runtime
-bundle; this release pins the Tessera 0.5.2 runtime (`0.5.2-1`). **Tessera 0.5
-changed the network clock: upgrade every Tessera device on the network to 0.5.2
-together**; a network that mixes 0.3.x and 0.5.x devices is not supported (see
-[Tessera setup](docs/plugins/tessera.md#upgrading)). Installing/enabling the plugin exposes its page; selecting experimental
-network audio is separate. Configure device/clock settings, static flows,
-reusable channel names and the Tessera network there. Configure each output's
-audio mix under **Outputs → Advanced → Audio**. [Tessera setup](docs/plugins/tessera.md)
-describes compatibility, ownership and the current limitations.
+bundle; this release pins the Tessera 0.6.0 runtime (`0.6.0-1`) and ships plugin
+archive **0.6.0-1** (requires NDIMon-R 1.5.0) with the **Routing** card and
+network output latency readout. Update NDIMon-R to 1.5.0 before installing
+plugin `0.6.0-1`. **Tessera 0.5 changed the network clock: 0.5 and 0.6 devices
+can share a network, but mixing 0.3.x with 0.5 or 0.6 is not supported** (see
+[Tessera setup](docs/plugins/tessera.md#upgrading)). On a fresh Tessera install
+NDIMon-R starts as the PTP clock `leader` (priority 128), while existing
+installations keep their running or saved role; keep exactly one leader per
+network. Installing/enabling the plugin exposes its page; selecting experimental
+network audio is separate. Flows are unlocked, and with Tessera 0.5 or later
+NDIMon-R runs `tesserad` in its native device role so controller routing works
+from the plugin's **Routing** card, Tessera portals and Dante Controller.
+Configure device/clock settings, receiver routing, trusted source devices, static
+flows, reusable channel names and the Tessera network there; Tessera 0.6's host
+router, mixers, gain/mute stages and control surfaces are managed in Tessera's
+own portal and `tesseractl` (not yet in NDIMon-R's UI). Configure each output's
+audio mix under **Outputs → Advanced → Audio**.
+[Tessera setup](docs/plugins/tessera.md) describes compatibility, ownership and
+the current limitations.
 
 ---
 
@@ -955,7 +1007,7 @@ key: install 1.4.1 on it by hand once.
   `update_message`; **Update now** installs `latest_version`. The install job
   verifies everything again. To install a specific version, send the
   `install_update` command (`POST /api/v1/commands`) or `POST /v1/System/update`
-  with `{"version":"1.4.1-1","force":false}`. Either starts a detached job that
+  with `{"version":"1.5.0-1","force":false}`. Either starts a detached job that
   survives a restart of the control plane; poll the job for its durable result.
   Do not run two updaters together. An update never overwrites your edit of
   `/etc/ndimon-network-certified-backends.json`.
@@ -1188,7 +1240,7 @@ Allowed `decodesetup` values: `NDIAudioEn` or `NDIAudioDis`; `BlackSS`, `SplashS
 | GET, POST | `/engine` | Read engine; explicitly select `v1`/`v2` with `confirm:true`, restarting the decoder |
 | GET, PUT | `/settings` | Full audio document; legacy projection is limited to the primary output |
 | PATCH | `/sources/:id`, `/sinks/:id` | Legacy endpoint overlay preserving other outputs; ambiguous edits refused |
-| GET | `/status` | Runtime master, period timing, endpoint readiness, xruns and drift compensation |
+| GET | `/status` | Runtime master, period timing, endpoint readiness, per-sink `latency_frames`, `target_frames` and `aligns`, xruns, drift compensation and primary video delay status |
 
 Output writes require the current revision; stale writes return 409
 `revision_conflict`. Saving an output also selects engine v2 (confirmed first
@@ -1320,7 +1372,7 @@ The Tessera adapter routes are under `/v1/plugins/tessera`
 | Watchdog mode | `POST /v1/DeviceSettings/watchdog-mode` | The supervisor reads the document |
 | Scheduled reboot | `POST /v1/DeviceSettings/reboot-schedule` | privd `SetRebootSchedule` |
 | Network apply | `POST /v1/Network/profiles/apply` | Privileged profile transaction, then explicit `/api/net-confirm` |
-| Update | `POST /v1/System/update` (body `{"version":"1.4.1-1"}`) | Detached signed-release install job |
+| Update | `POST /v1/System/update` (body `{"version":"1.5.0-1"}`) | Detached signed-release install job |
 | Reboot | `POST /v1/System/reboot` | privd `Reboot` |
 
 ---
@@ -1370,7 +1422,7 @@ runtime data. Prefer the web UI; to change a setting from a script use the API.
 | `/var/lib/ndimon-network/` | Network engine in `ndimon-privd` | Private journal, committed copy and recovery state (root only) |
 | `/etc/ndimon-network-interfaces.json` | Network engine | Public interface mapping for the selected roles |
 | `/etc/ndimon-network-certified-backends.json` | Root administrator (a conffile of `ndimon-privd`) | The network backends validated for changes; the packages list all four, edit it to withdraw one |
-| `/etc/tessera/config.d/60-ndimon.toml`, `61-ndimon-flows.toml`, `62-ndimon-network.toml`, `90-probe-flows.toml`; `/etc/alsa/conf.d/60-ndimon-tessera*.conf` | Generated by `ndimon-privd` | Tessera device, flows, network binding and ALSA PCM files |
+| `/etc/tessera/config.d/60-ndimon.toml`, `61-ndimon-flows.toml`, `62-ndimon-network.toml`, `90-probe-flows.toml`; `/etc/systemd/system/tesserad.service.d/71-ndimon-native-device.conf`, `tessera-controller@main.service.d/71-ndimon-native-device.conf`; `/etc/alsa/conf.d/60-ndimon-tessera*.conf` | Generated by `ndimon-privd` | Tessera device, flows, network binding, native device role drop-ins and ALSA PCM files |
 | `/opt/ndimon-r/plugins/<name>/`, `/var/lib/ndimon/plugins/<name>/` | Root (install jobs), the plugin's process | Installed plugin code and its private state |
 | `/etc/ndimon/trusted-release-keys`, `/etc/ndimon/release-source` | Root administrator | Release trust and source override |
 | `/etc/ndimon-firmware-version`, `-ndi-version`, `-ndi-sha256`, `-vaapi-info` | Packages / installer | Version metadata and install-time captures |
@@ -1486,13 +1538,17 @@ JavaScript plugin; install its manifest v2 release.
 - VAAPI decoding is built only where libva is present; check it on your hardware.
 - Audio v2 and the Ubuntu ARM Tessera bundle remain experimental. Sustained
   clock stability, external Dante hardware interoperability, HDMI/Dante delay
-  matching and hardware PTP support are not certified. No automatic lip-sync is provided.
+  matching and hardware PTP support are not certified. The HDMI/network audio
+  offset now stays fixed across restarts, but no automatic lip-sync measurement
+  is provided.
 - Bluetooth speaker routing/latency calibration and HDMI ARC/eARC capture are
   planned research, with no implementation in this release.
-- This integration configures static flows and exposes no automatic
-  vendor-controller subscription setup. Use the established controller workflow
-  where supported; ordinary Dante Controller discovery/routing interoperability
-  was not established by the local PCM checks.
+- Receiver routing (the plugin's Routing card, Tessera portals, and Dante
+  Controller through Tessera 0.5+'s native device role) was tested between
+  Tessera 0.5.2 hosts; interoperability with Dante hardware is a property of the
+  Tessera runtime and is not certified. Tessera 0.6's host router, mixers,
+  gain/mute stages and control surfaces are not yet exposed in NDIMon-R's UI
+  (use Tessera's portal or `tesseractl`).
 
 ---
 

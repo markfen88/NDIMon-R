@@ -14,7 +14,14 @@
 <h6 class="mt-3">Channel names</h6><p class="form-text">Name individual receive and transmit channels for reusable audio endpoint choices. Reset restores the default name.</p><div data-channel-labels></div>
 </div></div>
 <div class="card mb-3"><div class="card-body"><h5>Clock</h5><form data-form="clock" class="row g-3"><div class="col-md-6"><label class="form-label" for="tessera-role">Clock role</label><select id="tessera-role" name="role" class="form-select"><option value="auto">Auto</option><option value="follower">Follower</option><option value="leader">Leader</option></select><button type="submit" name="field" value="role" class="btn btn-outline-primary mt-2">Save role</button></div><div class="col-md-6"><label class="form-label" for="tessera-priority">Clock priority</label><input id="tessera-priority" name="priority" type="number" min="0" max="255" step="1" required class="form-control"><button type="submit" name="field" value="priority" class="btn btn-outline-primary mt-2">Save priority</button></div></form><p class="form-text mb-0" data-clock></p></div></div>
-<div class="card mb-3"><div class="card-body"><h5>Network flows</h5><div class="alert alert-info">The bundled runtime enables Controller compatibility for the first logical device. Automatic subscriptions remain unsupported. Static flows can also be configured here; match peer address, UDP port and channel count at both ends.</div><div data-flows></div><button type="button" class="btn btn-outline-secondary mt-2" data-add-flow>Add flow</button><button type="button" class="btn btn-primary mt-2" data-save-flows>Save flows</button><p class="form-text">RX receives network audio; TX sends the network output mix. Peer must be a unicast IPv4 address; ports are 1024–65535.</p></div></div>
+<div class="card mb-3" data-routing-card hidden><div class="card-body"><div class="d-flex align-items-center gap-2 mb-2"><h5 class="mb-0 me-auto">Routing</h5><button type="button" class="btn btn-outline-secondary btn-sm" data-routing-refresh>Refresh</button></div>
+<p class="form-text">Transmit channels down the left, receive inputs across the top. Select a crosspoint to connect, replace or disconnect; the receiving device checks the change again and applies its own locks. Dante Controller and Tessera portals can route this device too.</p>
+<p class="small mb-2" data-routing-state>Routing not loaded.</p>
+<div class="alert alert-warning py-2" data-routing-recovery hidden><span data-routing-recovery-text></span> <button type="button" class="btn btn-sm btn-outline-dark ms-2" data-routing-reconcile>Review and accept current routing</button></div>
+<div class="table-responsive"><table class="table table-sm table-bordered align-middle text-center small mb-2" data-routing-matrix></table></div>
+<details class="mt-2"><summary>Trusted source devices</summary><p class="form-text">This device routes another host's transmitter only when that host is trusted here (Tessera <code>routing_sources</code>). Its own transmitter needs no entry.</p><div data-routing-sources></div><button type="button" class="btn btn-outline-primary btn-sm mt-2" data-routing-sources-save>Save trusted sources</button></details>
+</div></div>
+<div class="card mb-3"><div class="card-body"><h5>Network flows</h5><p class="form-text">Prefer <strong>Routing</strong> above or a network controller; static flows are for peers that do not route. Match peer address, UDP port and channel count at both ends.</p><div data-flows></div><button type="button" class="btn btn-outline-secondary mt-2" data-add-flow>Add flow</button><button type="button" class="btn btn-primary mt-2" data-save-flows>Save flows</button><p class="form-text">RX receives network audio; TX sends the network output mix. Peer must be a unicast IPv4 address; ports are 1024–65535.</p></div></div>
 <div class="card mb-3"><div class="card-body"><h5>Current primary-output mapping</h5><p data-audio-state>Audio integration status unavailable.</p><button type="button" class="btn btn-primary" data-enable>Enable network audio</button> <button type="button" class="btn btn-outline-secondary" data-disable>Disable network audio and return to v1</button><p class="form-text">Enabling selects audio engine v2 and restarts the decoder. Video may pause briefly. Disabling returns to audio engine v1 and restarts the decoder briefly. Installing the plugin does not enable this automatically.</p>
 <form data-form="delay" class="mt-3"><label class="form-label" for="tessera-delay">Network input delay (ms)</label><div class="d-flex gap-3 align-items-center"><input id="tessera-delay" name="ms" type="number" min="0" max="2000" step="1" required class="form-control" style="max-width:8rem"><input aria-label="Network input delay slider" data-delay-slider type="range" min="0" max="2000" step="1" class="form-range"><button class="btn btn-outline-primary">Save delay</button></div></form>
 <form data-form="routing" class="mt-3"><h6>Source gains</h6><p class="form-text">Gain in dB. −60 dB mutes a source; 0 dB keeps its original level. Mix NDI and network input independently for each output.</p><div class="row g-3" data-routing></div><button class="btn btn-outline-primary mt-3">Save routing</button></form></div></div>
@@ -124,6 +131,118 @@ window.NDIMON_PLUGIN_INIT_tessera = function(pane) {
     const result=await host.get(base+'/diagnostics'); if(result.ok===false || result.error) throw Error(result.error||'Diagnostics unavailable');
     const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'})); const link=document.createElement('a'); link.href=url; link.download='tessera-diagnostics.json'; link.click(); URL.revokeObjectURL(url); return false;
   });
+  // Routing (Tessera 0.5): inventory and receiver pages through the daemon.
+  let routing={devices:[],tx:[],receivers:[]}, routingLoading=false, routingSources=null, sourcesDirty=false;
+  const q=o=>Object.entries(o).filter(([,v])=>v!==undefined&&v!==null).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
+  const rget=async(path,params)=>{ const r=await host.get(base+'/routing/'+path+'?'+q(params||{})); if(r.ok===false||r.error) throw Error((typeof r.error==='string'?r.error:JSON.stringify(r.error))+(r.detail?' · '+r.detail:'')); return r; };
+  const unwrap=(r,key)=>r[key]||r;
+  async function receiverPages(endpoint) {
+    const pages=[]; let first=1;
+    for(let i=0;i<8&&first;i++){ const page=unwrap(await rget('receiver',{id:endpoint.id,generation:endpoint.generation,first}),'routing_receiver'); pages.push(page); first=page.next_first; }
+    return {endpoint, label:pages[0]?.label, unavailable:pages.find(p=>p.operation_unavailable)?.operation_unavailable, locked:pages.some(p=>p.access_locked===true), channels:pages.flatMap(p=>p.channels||[])};
+  }
+  async function loadRouting() {
+    if(routingLoading||stopped) return; routingLoading=true;
+    const state=$('[data-routing-state]');
+    try {
+      const devices=[]; let cursor;
+      for(let i=0;i<8;i++){ const page=unwrap(await rget('devices',{cursor}),'routing_devices'); devices.push(...(page.devices||[])); cursor=page.next_cursor; if(!cursor) break; }
+      const tx=[], receivers=[], problems=[];
+      await Promise.all(devices.map(async d=>{
+        if(d.tx_channels!==0) try { let c; for(let i=0;i<8;i++){ const page=unwrap(await rget('channels',{id:d.endpoint.id,generation:d.endpoint.generation,direction:'tx',cursor:c}),'routing_channels'); for(const ch of page.channels||[]) tx.push({device:d,channel:ch}); c=page.next_cursor; if(!c) break; } } catch(e) { problems.push(d.label+': '+e.message); }
+        if(d.rx_channels!==0) try { receivers.push({device:d,...await receiverPages(d.endpoint)}); } catch(e) { problems.push(d.label+' (receiver): '+e.message); }
+      }));
+      const order=(a,b)=>(a.local_device?0:1)-(b.local_device?0:1)||a.label.localeCompare(b.label);
+      tx.sort((a,b)=>order(a.device,b.device)||a.channel.id-b.channel.id); receivers.sort((a,b)=>order(a.device,b.device));
+      routing={devices,tx,receivers}; if(stopped) return;
+      // An abandoned or unanswered change leaves this device's routing fenced
+      // until the current state is reviewed and accepted (Tessera reconcile).
+      const fenced=receivers.find(r=>/reconcil/i.test(r.unavailable||''));
+      $('[data-routing-recovery]').hidden=!fenced;
+      $('[data-routing-recovery-text]').textContent=fenced?'Routing is paused: '+fenced.unavailable+'.':'';
+      renderRouting();
+      state.textContent=devices.length+' device(s) · read '+new Date().toLocaleTimeString()+(problems.length?' · '+problems.join(' · '):'');
+    } catch(e) { if(!stopped) state.textContent='Routing unavailable: '+e.message; }
+    finally { routingLoading=false; }
+  }
+  const sameSource=(sel,row)=>!!sel && sel.tx_device===row.device.label && [row.channel.label,...(row.channel.aliases||[])].includes(sel.tx_channel);
+  const el=(tag,text,cls)=>{ const e=document.createElement(tag); if(text!==undefined) e.textContent=text; if(cls) e.className=cls; return e; };
+  function renderRouting() {
+    const table=$('[data-routing-matrix]'); table.replaceChildren();
+    const inputs=routing.receivers.flatMap(r=>r.channels.map(ch=>({receiver:r,ch})));
+    if(!routing.tx.length || !inputs.length) { const tr=el('tr'); tr.append(el('td',!routing.devices.length?'No devices discovered yet.':'No transmit channels or receive inputs to route.')); table.append(tr); renderSources(); return; }
+    const head=el('thead'), devRow=el('tr'), chRow=el('tr');
+    const corner=el('th','TX ↓ / RX →'); corner.rowSpan=2; devRow.append(corner);
+    for(const r of routing.receivers) { if(!r.channels.length) continue; const th=el('th',r.label||r.device.label); th.colSpan=r.channels.length; if(r.locked||r.unavailable) { th.title=r.unavailable||'Device access is locked'; th.textContent+=' 🔒'; } devRow.append(th); }
+    for(const {ch} of inputs) chRow.append(el('th',ch.label||String(ch.id)));
+    head.append(devRow,chRow);
+    const body=el('tbody'); let last;
+    for(const row of routing.tx) {
+      const tr=el('tr'), th=el('th',(row.device.label!==last?row.device.label+' · ':'')+row.channel.label,'text-start text-nowrap'); last=row.device.label; tr.append(th);
+      for(const {receiver,ch} of inputs) {
+        const td=el('td'), on=sameSource(ch.source,row), button=el('button',on?'●':'·','btn btn-sm '+(on?'btn-success':'btn-outline-secondary'));
+        button.type='button'; button.dataset.route=row.device.label+'|'+row.channel.id+'|'+(receiver.label||receiver.device.label)+'|'+ch.id;
+        button.setAttribute('aria-label',(on?'Disconnect ':'Connect ')+row.device.label+' '+row.channel.label+' → '+(receiver.label||receiver.device.label)+' '+(ch.label||ch.id));
+        if(receiver.locked||receiver.unavailable) { button.disabled=true; button.title=receiver.unavailable||'Device access is locked'; }
+        button.onclick=()=>route(row,receiver,ch);
+        td.append(button); tr.append(td);
+      }
+      body.append(tr);
+    }
+    table.append(head,body);
+    renderSources();
+  }
+  async function route(row,receiver,ch) {
+    if(busy||stopped) return;
+    const target=(receiver.label||receiver.device.label)+' '+(ch.label||ch.id), source=row.device.label+' '+row.channel.label;
+    const message=sameSource(ch.source,row)?'Disconnect '+source+' from '+target+'?':ch.source?'Replace '+ch.source.tx_channel+' @ '+ch.source.tx_device+' with '+source+' on '+target+'?':'Connect '+source+' to '+target+'?';
+    if(!await confirmChange(message,null)) return;
+    busy=true; error('');
+    try {
+      // The receiver's token expires after 30 s: read the input again now.
+      const fresh=(await receiverPages(receiver.endpoint)).channels.find(c=>c.id===ch.id);
+      if(!fresh?.expectation) throw Error('The receiver did not offer this input for routing. Refresh and try again.');
+      if(JSON.stringify(fresh.source||null)!==JSON.stringify(ch.source||null)) throw Error('The input changed meanwhile; review the refreshed matrix and try again.');
+      const src={endpoint:row.device.endpoint,channel:row.channel.id};
+      const change=sameSource(fresh.source,row)?{disconnect:{previous:fresh.source}}:fresh.source?{replace:{previous:fresh.source,source:src}}:{connect:{source:src}};
+      const result=await host.post(base+'/routing/route',{expectation:fresh.expectation,change});
+      if(result.ok===false||result.error) throw Error((typeof result.error==='string'?result.error:JSON.stringify(result.error))+(result.detail?' · '+result.detail:''));
+      const st=result.result?.state; const refused=st?.refused||st?.conflict||st?.unknown;
+      if(refused) throw Error('Routing refused: '+(refused.reason||JSON.stringify(st)));
+      host.toast(st==='pending'?'Routing sent; waiting for the receiver':'Routing applied','success');
+    } catch(e) { error(e.message); }
+    finally { busy=false; await loadRouting(); }
+  }
+  function renderSources() {
+    const box=$('[data-routing-sources]'); if(sourcesDirty) return; box.replaceChildren();
+    const remote=routing.devices.filter(d=>!d.local_device&&d.wire_id);
+    if(!remote.length) { box.textContent='No other devices discovered.'; return; }
+    for(const d of remote) { const label=el('label',undefined,'form-check'), input=el('input',undefined,'form-check-input'); input.type='checkbox'; input.dataset.sourceId=d.wire_id; input.checked=(routingSources||[]).includes(d.wire_id); input.onchange=()=>sourcesDirty=true; label.append(input,el('span',d.label+' ('+d.wire_id+')','form-check-label')); box.append(label); }
+  }
+  $('[data-routing-refresh]').onclick=()=>loadRouting();
+  $('[data-routing-reconcile]').onclick=async()=>{
+    if(busy||stopped) return; error('');
+    try {
+      const first=unwrap(await rget('inspect'),'receiver_recovery');
+      const rows=(first.observed||[]).map(o=>'RX '+o.rx+': '+(o.source?o.source.tx_channel+' @ '+o.source.tx_device:'nothing'));
+      if(!await confirmChange('Accept the routing this device reports now? The unfinished change is not retried.\n'+rows.join('\n'),null)) return;
+      busy=true;
+      // The review token is single-use and tied to the inventory: read it again now.
+      const fresh=unwrap(await rget('inspect'),'receiver_recovery');
+      if(!fresh.review) throw Error(fresh.unavailable||'No review is available; refresh and try again.');
+      const result=await host.post(base+'/routing/reconcile',{review:fresh.review});
+      if(result.ok===false||result.error) throw Error((typeof result.error==='string'?result.error:JSON.stringify(result.error))+(result.detail?' · '+result.detail:''));
+      host.toast('Routing accepted','success');
+    } catch(e) { error(e.message); }
+    finally { busy=false; await loadRouting(); }
+  };
+  $('[data-routing-sources-save]').onclick=()=>action(async()=>{
+    const keep=new Set((routingSources||[]).filter(id=>!routing.devices.some(d=>d.wire_id===id)));
+    for(const label of $('[data-routing-sources]').children||[]) { const i=label.children?.[0]; if(i?.dataset?.sourceId && i.checked) keep.add(i.dataset.sourceId); }
+    const ok=await send('/routing/sources',{sources:[...keep].sort()}); if(ok) { sourcesDirty=false; routingSources=[...keep].sort(); } return ok;
+  });
+  let routingTimer;
+  function routingPoll() { if(stopped) return; if(!busy && !document.hidden) loadRouting(); routingTimer=setTimeout(routingPoll,15000); }
   function renderChannelLabels(device) {
     const present=new Set();
     for(const direction of ['rx','tx']) for(const channel of device[direction+'_channels']||[]) {
@@ -152,7 +271,7 @@ window.NDIMON_PLUGIN_INIT_tessera = function(pane) {
     $('[data-status]').className='alert '+(data.daemon==='online'?'alert-success':'alert-warning');
     const values={'Daemon version':status.version,'RX packets':metrics.flows?.filter(f=>f.direction==='rx').reduce((n,f)=>n+(f.packets||0),0),'TX packets':metrics.flows?.filter(f=>f.direction==='tx').reduce((n,f)=>n+(f.packets||0),0),'Clock':clock.state ?? status.clock_state,'Offset (ns)':clock.offset_ns,'Interface':status.network?.primary,'RX late':metrics.flows?.reduce((n,f)=>n+(f.rx?.late_packets||0),0),'TX late skips':metrics.flows?.reduce((n,f)=>n+(f.tx?.late_skips||0),0)};
     // Engine v2 names Tessera endpoints per channel range (tessera-rx-1-2, tessera-tx-1-2); legacy is net-in/net-out.
-    for(const [label,kind,legacy,prefix] of [['Network input','sources','net-in','tessera-rx-'],['Network output','sinks','net-out','tessera-tx-']]) { const all=data.engine?.[kind]||{}; const items=Object.entries(all).filter(([id])=>id===legacy||id.startsWith(prefix)).map(([,v])=>v); const item=items[0]||{}; values[label+' fill']=item.fill ?? item.fill_frames; values[label+' ppm']=item.ppm; values[label+' xruns']=items.length?items.reduce((n,v)=>n+(v.xruns||0),0):undefined; }
+    for(const [label,kind,legacy,prefix] of [['Network input','sources','net-in','tessera-rx-'],['Network output','sinks','net-out','tessera-tx-']]) { const all=data.engine?.[kind]||{}; const items=Object.entries(all).filter(([id])=>id===legacy||id.startsWith(prefix)).map(([,v])=>v); const item=items[0]||{}; values[label+' fill']=item.fill ?? item.fill_frames; if(typeof item.latency_frames==='number') values[label+' latency (ms)']=(item.latency_frames/48).toFixed(2); values[label+' ppm']=item.ppm; values[label+' xruns']=items.length?items.reduce((n,v)=>n+(v.xruns||0),0):undefined; }
     $('[data-metrics]').replaceChildren(); for(const [label,value] of Object.entries(values)) { const dt=document.createElement('dt'),dd=document.createElement('dd'); dt.className='col-sm-4'; dd.className='col-sm-8'; dt.textContent=label; dd.textContent=value??'Unavailable'; $('[data-metrics]').append(dt,dd); }
     $('[data-clock]').textContent='Timestamping: '+(clock.timestamping ?? status.network?.timestamping ?? 'unavailable')+' · State: '+(clock.state??'unavailable');
     $('[data-version]').textContent='Embedded Ubuntu experimental bundle: '+(data.bundle?.embedded_version??'unknown')+' · Daemon: '+(data.bundle?.daemon_version??status.version??'unknown')+'. Plugin updates are available from the Plugins list.';
@@ -168,6 +287,10 @@ window.NDIMON_PLUGIN_INIT_tessera = function(pane) {
       initialized=!!device.key;
     }
     if(!flowDirty) { $('[data-flows]').replaceChildren(); (data.flows||[]).forEach(addFlow); }
+    if(Array.isArray(data.routing_sources) && !sourcesDirty) routingSources=data.routing_sources;
+    const routable=data.capabilities?.routing===true && data.daemon==='online', card=$('[data-routing-card]');
+    card.hidden=!routable;
+    if(routable && !routingTimer) routingPoll();
   }
   async function refresh(force=false) {
     if(window.NDIMON_NETWORK) window.NDIMON_NETWORK.loadRole('tessera',networkSelect).then(()=>{
@@ -178,6 +301,6 @@ window.NDIMON_PLUGIN_INIT_tessera = function(pane) {
   }
   async function poll() { if(stopped) return; if(!busy) await refresh(); if(!stopped) timer=setTimeout(poll,2000); }
   poll();
-  return ()=>{ stopped=true; clearTimeout(timer); if(resolveConfirm) finishConfirm(false); };
+  return ()=>{ stopped=true; clearTimeout(timer); clearTimeout(routingTimer); if(resolveConfirm) finishConfirm(false); };
 };
 </script>
