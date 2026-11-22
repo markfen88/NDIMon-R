@@ -103,6 +103,20 @@ bool DriftCompensator::pull(Block &out) {
         ++underruns_;
     return made == out.frames;
 }
+int DriftCompensator::align(int measured_fill) {
+    int error = measured_fill + fill() - params_.target_fill_frames;
+    int pad = 0;
+    if (error > 0) {
+        int n = std::min(error, fill());
+        read_.store(read_.load(std::memory_order_relaxed) + n, std::memory_order_release);
+    } else {
+        pad = -error;
+    }
+    integral_ = 0;
+    ppm_ = 0;
+    swr_set_compensation(swr_, 0, params_.rate);
+    return pad;
+}
 int DriftCompensator::drain(float *const *out, int frames, int measured_fill) {
     control(measured_fill + fill() - params_.target_fill_frames, frames, true);
     int n = convert(out, frames);

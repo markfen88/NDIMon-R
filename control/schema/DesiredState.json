@@ -986,6 +986,17 @@
         "protocol_flow_lock": {
           "type": "boolean",
           "default": true
+        },
+        "routing": {
+          "type": "boolean",
+          "default": false
+        },
+        "routing_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "additionalProperties": false,

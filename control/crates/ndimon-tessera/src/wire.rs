@@ -1,4 +1,4 @@
-//! The subset of tessera-control-types 0.2.2 used by NDIMon-R. No Tessera
+//! The subset of tessera-control-types (0.2.2, routing from 0.5.0) used by NDIMon-R. No Tessera
 //! crate is linked. Unknown observation fields are retained for legacy clients.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -57,12 +57,74 @@ pub enum Command {
         priority: u8,
     },
     ReloadConfig,
+    /// Tessera 0.5: one observed receiver change, checked again by the daemon.
+    RouteReceiver {
+        expectation: String,
+        change: ReceiverChange,
+    },
+    /// Accept a freshly inspected local receiver baseline after an uncertain
+    /// operation; never retries the mutation.
+    ReconcileReceiverOperation {
+        review: String,
+    },
+}
+/// Tessera 0.5 routing references, as the daemon issues them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointRef {
+    pub id: String,
+    pub generation: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiverSelection {
+    pub tx_device: String,
+    pub tx_channel: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingSourceRef {
+    pub endpoint: EndpointRef,
+    pub channel: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiverChange {
+    Connect {
+        source: RoutingSourceRef,
+    },
+    Replace {
+        previous: ReceiverSelection,
+        source: RoutingSourceRef,
+    },
+    Disconnect {
+        previous: ReceiverSelection,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingDevicesQuery {
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingChannelsQuery {
+    pub endpoint: EndpointRef,
+    pub direction: Direction,
+    pub cursor: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingReceiverQuery {
+    pub endpoint: EndpointRef,
+    pub first: u16,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Query {
     Status,
     Metrics,
+    RoutingDevices(RoutingDevicesQuery),
+    RoutingChannels(RoutingChannelsQuery),
+    RoutingReceiver(RoutingReceiverQuery),
+    /// Complete local receiver review (also while execution is fenced).
+    InspectReceiverOperation {
+        operation: Option<String>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,6 +166,13 @@ impl Status {
             .and_then(|v| v.parse::<u32>().ok());
         matches!((major,minor,patch), (Some(a),Some(b),Some(c)) if (a,b,c) >= (0,2,2))
     }
+    /// Receiver routing, discovery browsing and `routing_sources` (0.5.0).
+    pub fn supports_routing(&self) -> bool {
+        let mut parts = self.version.trim_start_matches('v').split('.');
+        let major = parts.next().and_then(|v| v.parse::<u32>().ok());
+        let minor = parts.next().and_then(|v| v.parse::<u32>().ok());
+        matches!((major, minor), (Some(a), Some(b)) if (a, b) >= (0, 5))
+    }
 }
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DeviceStatus {
@@ -135,6 +204,18 @@ pub struct Impact {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandError {
+    /// Tessera 0.5 routing: refresh the inventory and choose again.
+    RoutingSnapshotExpired,
+    /// Tessera 0.5 routing: the receiver did not answer; nothing was retried.
+    ReceiverReadTimeout,
+    ReceiverReadUnavailable {
+        reason: String,
+    },
+    /// Tessera 0.5 device access lock (PIN).
+    AccessLocked {
+        device: String,
+    },
+    IncorrectPin,
     Invalid {
         field: String,
         reason: String,
@@ -174,6 +255,22 @@ impl std::fmt::Display for CommandError {
             Self::NotFound { what } | Self::Unsupported { what } => f.write_str(what),
             Self::Internal { message } => f.write_str(message),
             Self::ConfirmationRequired { .. } => f.write_str("confirmation_required"),
+            Self::RoutingSnapshotExpired => {
+                f.write_str("routing inventory changed; refresh and choose again")
+            }
+            Self::ReceiverReadTimeout => {
+                f.write_str("receiver did not answer in time; no retry was sent")
+            }
+            Self::ReceiverReadUnavailable { reason } => {
+                write!(f, "receiver read unavailable: {reason}")
+            }
+            Self::AccessLocked { device } => {
+                write!(f, "device {device} is locked with a PIN; unlock it first")
+            }
+            Self::IncorrectPin => f.write_str("incorrect PIN"),
+            Self::Unknown => {
+                f.write_str("Tessera refused the request with an error this NDIMon-R does not know")
+            }
             _ => write!(f, "{self:?}"),
         }
     }
@@ -217,6 +314,11 @@ pub enum Reply {
     Metrics(Metrics),
     Impact(Impact),
     Event(Event),
+    RoutingDevices(Value),
+    RoutingChannels(Value),
+    RoutingReceiver(Value),
+    ReceiverOperation(Value),
+    ReceiverRecovery(Value),
     Lagged {
         dropped: u64,
     },

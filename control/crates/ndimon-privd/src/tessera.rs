@@ -267,6 +267,8 @@ pub fn uninstall(host: &Host, purge: bool) -> Result<ActionOutput, Error> {
         RANGES,
         "/etc/tessera/config.d/62-ndimon-network.toml",
         "/etc/systemd/system/tesserad.service.d/70-ndimon-network.conf",
+        ndimon_render::tessera::NATIVE_ROLE_PATHS[0],
+        ndimon_render::tessera::NATIVE_ROLE_PATHS[1],
     ] {
         if host.root.path(path).parent().is_some_and(|p| p.exists()) {
             let (dir, name) = host.root.parent(path, false, true)?;

@@ -24,9 +24,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: never
   RUSTFLAGS: -D warnings
-  # The NDI SDK v6 archive the packages are built against (6.3.2). A changed
-  # download stops the build until the new archive is reviewed and pinned.
-  NDI_SDK_SHA256: f0314f245446defc488b63ceb4689acf1a965aeefdadacb70571bb216a8cc183
+  # The NDI SDK archive is pinned in control/xtask/src/install.rs (SDK_SHA256,
+  # 6.4.0.2). A changed download stops the build until it is reviewed and pinned.
 
 jobs:
   packages:

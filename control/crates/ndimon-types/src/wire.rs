@@ -279,6 +279,17 @@ pub enum Command {
     PutTesseraFlows {
         flows: Vec<TesseraFlow>,
     },
+    /// One reviewed receiver change through the Tessera daemon (`route_receiver`).
+    /// Routing is the daemon's runtime state, not desired state: nothing is saved.
+    TesseraRoute {
+        expectation: String,
+        change: TesseraRouteChange,
+    },
+    /// Accept the freshly inspected routing of this device's inputs after an
+    /// uncertain operation (`reconcile_receiver_operation`); retries nothing.
+    TesseraReconcileRouting {
+        review: String,
+    },
     SetTesseraLabel {
         direction: Direction,
         channel: u16,
@@ -1121,6 +1132,10 @@ pub enum Query {
     TesseraMetrics,
     TesseraDiagnostics,
     TesseraFlows,
+    /// Tessera routing inventory and receiver pages, read through the daemon.
+    TesseraRouting {
+        read: TesseraRoutingRead,
+    },
     /// The legacy encoder/subscription endpoints have no implementation.
     Unsupported {
         what: String,
@@ -1178,6 +1193,121 @@ pub enum SessionCommand {
         current_password: Password,
         new_password: Password,
     },
+}
+
+/// A daemon-issued routing endpoint reference (opaque ID and generation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TesseraEndpointRef {
+    pub id: String,
+    pub generation: String,
+}
+impl TesseraEndpointRef {
+    pub fn new(id: impl Into<String>, generation: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            generation: generation.into(),
+        }
+    }
+}
+
+/// What a receiver reports for one of its inputs (device and channel names).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TesseraSelection {
+    pub tx_device: String,
+    pub tx_channel: String,
+}
+impl TesseraSelection {
+    pub fn new(tx_device: impl Into<String>, tx_channel: impl Into<String>) -> Self {
+        Self {
+            tx_device: tx_device.into(),
+            tx_channel: tx_channel.into(),
+        }
+    }
+}
+
+/// A transmit channel from the routing inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(deny_unknown_fields)
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct TesseraRouteSource {
+    pub endpoint: TesseraEndpointRef,
+    pub channel: u32,
+}
+impl TesseraRouteSource {
+    pub fn new(endpoint: TesseraEndpointRef, channel: u32) -> Self {
+        Self { endpoint, channel }
+    }
+}
+
+/// Connect needs an empty input; Replace and Disconnect name what they remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum TesseraRouteChange {
+    Connect {
+        source: TesseraRouteSource,
+    },
+    Replace {
+        previous: TesseraSelection,
+        source: TesseraRouteSource,
+    },
+    Disconnect {
+        previous: TesseraSelection,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "snake_case", deny_unknown_fields)
+)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum TesseraRoutingRead {
+    Devices {
+        cursor: Option<String>,
+    },
+    Channels {
+        endpoint: TesseraEndpointRef,
+        direction: Direction,
+        cursor: Option<String>,
+    },
+    Receiver {
+        endpoint: TesseraEndpointRef,
+        first: u16,
+    },
+    /// The complete review of this device's inputs, with a `review` token.
+    Inspect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

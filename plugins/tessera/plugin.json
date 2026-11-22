@@ -1,9 +1,9 @@
 {
   "name": "tessera",
-  "version": "0.5.2",
+  "version": "0.6.0-1",
   "title": "Network audio (Tessera)",
   "icon": "bi-soundwave",
-  "min_ndimon": "1.4.0",
+  "min_ndimon": "1.5.0",
   "ui": "ui.html",
   "backup": null,
   "priv_commands": [

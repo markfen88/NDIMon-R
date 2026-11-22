@@ -183,6 +183,22 @@ pub const PATHS: &[PathSpec] = &[
         mode: 0o644,
     },
     PathSpec {
+        path_id: "tessera-native-device",
+        path: "/etc/systemd/system/tesserad.service.d/71-ndimon-native-device.conf",
+        domain: Domain::Tessera,
+        owner: "root",
+        group: "root",
+        mode: 0o644,
+    },
+    PathSpec {
+        path_id: "tessera-controller-native",
+        path: "/etc/systemd/system/tessera-controller@main.service.d/71-ndimon-native-device.conf",
+        domain: Domain::Tessera,
+        owner: "root",
+        group: "root",
+        mode: 0o644,
+    },
+    PathSpec {
         path_id: "alsa",
         path: "/etc/alsa/conf.d/60-ndimon-tessera.conf",
         domain: Domain::Tessera,

@@ -88,6 +88,9 @@ int AlsaPcm::avail() {
     }
     return int(n);
 }
+bool AlsaPcm::running() const {
+    return pcm_ && snd_pcm_state(pcm_) == SND_PCM_STATE_RUNNING;
+}
 int AlsaPcm::delay() {
     snd_pcm_sframes_t d = 0;
     if (pcm_ && snd_pcm_delay(pcm_, &d) >= 0)

@@ -357,6 +357,8 @@ pub const COMMAND_ROUTES: &[CommandRoute] = &[
         matches!(
             command,
             Command::TesseraService { .. }
+                | Command::TesseraRoute { .. }
+                | Command::TesseraReconcileRouting { .. }
                 | Command::RestoreTessera { .. }
                 | Command::SetTessera(_)
                 | Command::PutTesseraFlows { .. }

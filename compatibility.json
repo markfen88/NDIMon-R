@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
   "tessera": {
-    "plugin_version": "0.5.2",
-    "min_ndimon": "1.4.0",
-    "runtime_release": "0.5.2",
-    "runtime_package": "0.5.2-1",
+    "plugin_version": "0.6.0-1",
+    "min_ndimon": "1.5.0",
+    "runtime_release": "0.6.0",
+    "runtime_package": "0.6.0-1",
     "control_wire_version": 1,
-    "control_types": "0.5.2",
+    "control_types": "0.6.0",
     "sample_rate": 48000,
     "channels_per_direction": [
       1,
       16
     ],
     "static_flows": true,
-    "controller_subscriptions": false,
+    "controller_subscriptions": true,
     "automatic_lipsync": false,
     "network_owner": "ndimon",
     "experimental": true,

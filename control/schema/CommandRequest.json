@@ -719,6 +719,54 @@
           "additionalProperties": false
         },
         {
+          "description": "One reviewed receiver change through the Tessera daemon (`route_receiver`).\nRouting is the daemon's runtime state, not desired state: nothing is saved.",
+          "type": "object",
+          "properties": {
+            "tessera_route": {
+              "type": "object",
+              "properties": {
+                "expectation": {
+                  "type": "string"
+                },
+                "change": {
+                  "$ref": "#/$defs/TesseraRouteChange"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "expectation",
+                "change"
+              ]
+            }
+          },
+          "required": [
+            "tessera_route"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Accept the freshly inspected routing of this device's inputs after an\nuncertain operation (`reconcile_receiver_operation`); retries nothing.",
+          "type": "object",
+          "properties": {
+            "tessera_reconcile_routing": {
+              "type": "object",
+              "properties": {
+                "review": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "review"
+              ]
+            }
+          },
+          "required": [
+            "tessera_reconcile_routing"
+          ],
+          "additionalProperties": false
+        },
+        {
           "type": "object",
           "properties": {
             "set_tessera_label": {
@@ -2188,6 +2236,17 @@
         "protocol_flow_lock": {
           "type": "boolean",
           "default": true
+        },
+        "routing": {
+          "type": "boolean",
+          "default": false
+        },
+        "routing_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
         }
       },
       "additionalProperties": false,
@@ -2351,6 +2410,131 @@
         "stop",
         "restart",
         "reload"
+      ]
+    },
+    "TesseraRouteChange": {
+      "description": "Connect needs an empty input; Replace and Disconnect name what they remove.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "connect": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/TesseraRouteSource"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "connect"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "replace": {
+              "type": "object",
+              "properties": {
+                "previous": {
+                  "$ref": "#/$defs/TesseraSelection"
+                },
+                "source": {
+                  "$ref": "#/$defs/TesseraRouteSource"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "previous",
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "replace"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "disconnect": {
+              "type": "object",
+              "properties": {
+                "previous": {
+                  "$ref": "#/$defs/TesseraSelection"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "previous"
+              ]
+            }
+          },
+          "required": [
+            "disconnect"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TesseraRouteSource": {
+      "description": "A transmit channel from the routing inventory.",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "$ref": "#/$defs/TesseraEndpointRef"
+        },
+        "channel": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "channel"
+      ]
+    },
+    "TesseraEndpointRef": {
+      "description": "A daemon-issued routing endpoint reference (opaque ID and generation).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "generation"
+      ]
+    },
+    "TesseraSelection": {
+      "description": "What a receiver reports for one of its inputs (device and channel names).",
+      "type": "object",
+      "properties": {
+        "tx_device": {
+          "type": "string"
+        },
+        "tx_channel": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tx_device",
+        "tx_channel"
       ]
     },
     "Display": {

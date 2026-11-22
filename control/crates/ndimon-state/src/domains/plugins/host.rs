@@ -431,7 +431,7 @@ impl NativeHost {
         let mut result = result;
         result["host_version"] = json!(
             fs::read_to_string(self.path("/etc/ndimon-firmware-version"))
-                .unwrap_or_else(|_| "1.4.0".into())
+                .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into())
                 .trim()
         );
         Ok(result)

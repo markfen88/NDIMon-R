@@ -21,6 +21,90 @@ pub use reload::Reloads;
 pub enum Action {
     TesseraReload,
     TesseraService(TesseraServiceAction),
+    /// A reviewed receiver change, executed by the daemon (Tessera 0.5).
+    TesseraRoute {
+        expectation: String,
+        change: TesseraRouteChange,
+    },
+    TesseraReconcileRouting {
+        review: String,
+    },
+}
+async fn routing_command(client: &Client, command: upstream::Command) -> Result<Value, ApiError> {
+    let reply = client
+        .routing(upstream::RequestBody::Command(command))
+        .await
+        .map_err(api_error)?;
+    Ok(match reply {
+        upstream::Reply::ReceiverOperation(v) => v,
+        upstream::Reply::Done => json!("done"),
+        other => serde_json::to_value(other).map_err(internal)?,
+    })
+}
+fn upstream_endpoint(e: &TesseraEndpointRef) -> upstream::EndpointRef {
+    upstream::EndpointRef {
+        id: e.id.clone(),
+        generation: e.generation.clone(),
+    }
+}
+fn upstream_selection(s: &TesseraSelection) -> upstream::ReceiverSelection {
+    upstream::ReceiverSelection {
+        tx_device: s.tx_device.clone(),
+        tx_channel: s.tx_channel.clone(),
+    }
+}
+fn upstream_source(s: &TesseraRouteSource) -> upstream::RoutingSourceRef {
+    upstream::RoutingSourceRef {
+        endpoint: upstream_endpoint(&s.endpoint),
+        channel: s.channel,
+    }
+}
+pub fn upstream_change(change: &TesseraRouteChange) -> Result<upstream::ReceiverChange, ApiError> {
+    Ok(match change {
+        TesseraRouteChange::Connect { source } => upstream::ReceiverChange::Connect {
+            source: upstream_source(source),
+        },
+        TesseraRouteChange::Replace { previous, source } => upstream::ReceiverChange::Replace {
+            previous: upstream_selection(previous),
+            source: upstream_source(source),
+        },
+        TesseraRouteChange::Disconnect { previous } => upstream::ReceiverChange::Disconnect {
+            previous: upstream_selection(previous),
+        },
+        _ => return Err(invalid("unsupported routing change")),
+    })
+}
+pub fn upstream_routing(read: &TesseraRoutingRead) -> Result<upstream::Query, ApiError> {
+    Ok(match read {
+        TesseraRoutingRead::Devices { cursor } => {
+            upstream::Query::RoutingDevices(upstream::RoutingDevicesQuery {
+                cursor: cursor.clone(),
+            })
+        }
+        TesseraRoutingRead::Channels {
+            endpoint,
+            direction,
+            cursor,
+        } => upstream::Query::RoutingChannels(upstream::RoutingChannelsQuery {
+            endpoint: upstream_endpoint(endpoint),
+            direction: match direction {
+                Direction::Rx => upstream::Direction::Rx,
+                Direction::Tx => upstream::Direction::Tx,
+                _ => return Err(invalid("invalid direction")),
+            },
+            cursor: cursor.clone(),
+        }),
+        TesseraRoutingRead::Receiver { endpoint, first } => {
+            upstream::Query::RoutingReceiver(upstream::RoutingReceiverQuery {
+                endpoint: upstream_endpoint(endpoint),
+                first: (*first).max(1),
+            })
+        }
+        TesseraRoutingRead::Inspect => {
+            upstream::Query::InspectReceiverOperation { operation: None }
+        }
+        _ => return Err(invalid("unsupported routing read")),
+    })
 }
 #[derive(Debug)]
 pub struct Module;
@@ -69,6 +153,13 @@ pub fn api_error(error: ClientError) -> ApiError {
             ApiError::ConfirmationRequired { impact: own }
         }
         ClientError::Timeout => failure("timeout", "Tessera request timed out"),
+        ClientError::Command(e @ E::ReceiverReadTimeout) => failure("timeout", &e.to_string()),
+        ClientError::Command(
+            e @ (E::RoutingSnapshotExpired
+            | E::ReceiverReadUnavailable { .. }
+            | E::AccessLocked { .. }
+            | E::IncorrectPin),
+        ) => failure("refused", &e.to_string()),
         ClientError::Io(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             ApiError::PermissionDenied
         }
@@ -81,8 +172,17 @@ pub fn api_error(error: ClientError) -> ApiError {
     }
 }
 impl DomainModule for Module {
+    // Routing reads can wait on a remote receiver; they need only a snapshot.
+    fn query_outside_actor(&self, query: &Query) -> bool {
+        matches!(query, Query::TesseraRouting { .. })
+    }
     fn imperative(&self, command: &Command) -> bool {
-        matches!(command, Command::TesseraService { .. })
+        matches!(
+            command,
+            Command::TesseraService { .. }
+                | Command::TesseraRoute { .. }
+                | Command::TesseraReconcileRouting { .. }
+        )
     }
     fn observe(
         &self,
@@ -99,7 +199,8 @@ impl DomainModule for Module {
                     action: TesseraServiceAction::Start
                         | TesseraServiceAction::Stop
                         | TesseraServiceAction::Restart
-                }
+                } | Command::TesseraRoute { .. }
+                    | Command::TesseraReconcileRouting { .. }
             )
     }
     fn reduce(&self, state: &mut DesiredState, command: &Command) -> Result<(), ApiError> {
@@ -112,6 +213,7 @@ impl DomainModule for Module {
             Command::SetTessera(t) => {
                 // Ownership locks are policy, not caller-removable settings.
                 let mut t = t.clone();
+                t.locks.remove("flows");
                 t.locks.extend(Tessera::owned_locks());
                 match state.tessera.as_ref().map(|before| &before.clock) {
                     // Adopting a runtime's settings: keep the clock it runs.
@@ -175,11 +277,36 @@ impl DomainModule for Module {
                     ));
                 }
                 let mut t = tessera.clone();
+                t.locks.remove("flows");
                 t.locks.extend(Tessera::owned_locks());
                 state.tessera = Some(t);
                 state.audio = audio.clone();
             }
             Command::TesseraService { .. } => (),
+            Command::TesseraRoute {
+                expectation,
+                change,
+            } => {
+                if !state.tessera.as_ref().is_some_and(|t| t.routing) {
+                    return Err(ApiError::Unsupported {
+                        what: "Receiver routing needs Tessera 0.5 or later".into(),
+                    });
+                }
+                if expectation.is_empty() || expectation.len() > 256 {
+                    return Err(invalid("routing expectation required"));
+                }
+                upstream_change(change)?;
+            }
+            Command::TesseraReconcileRouting { review } => {
+                if !state.tessera.as_ref().is_some_and(|t| t.routing) {
+                    return Err(ApiError::Unsupported {
+                        what: "Receiver routing needs Tessera 0.5 or later".into(),
+                    });
+                }
+                if review.is_empty() || review.len() > 256 {
+                    return Err(invalid("routing review required"));
+                }
+            }
             _ => return Err(invalid("command does not belong to Tessera")),
         }
         if let Some(t) = &state.tessera {
@@ -271,6 +398,9 @@ impl DomainModule for Module {
                 if t.protocol_flow_lock != status.supports_flow_lock() {
                     return Err("Tessera flow lock mode must match the daemon contract; wait for capability reconciliation".into());
                 }
+                if t.routing && !status.supports_routing() {
+                    return Err("Tessera routing settings need Tessera 0.5 or later; wait for capability reconciliation".into());
+                }
             }
             Ok(())
         })
@@ -346,6 +476,16 @@ impl DomainModule for Module {
         applier: &'a dyn Applier,
         query: &'a Query,
     ) -> Option<BoxFuture<'a, Result<Value, ApiError>>> {
+        if let Query::TesseraRouting { read } = query {
+            return Some(Box::pin(async move {
+                if !state.document.tessera.as_ref().is_some_and(|t| t.routing) {
+                    return Err(ApiError::Unsupported {
+                        what: "Receiver routing needs Tessera 0.5 or later".into(),
+                    });
+                }
+                applier.tessera_query(upstream_routing(read)?).await
+            }));
+        }
         if !matches!(
             query,
             Query::TesseraStatus
@@ -411,7 +551,7 @@ impl DomainModule for Module {
                                 s.enabled && TesseraEndpoint::is_tx(id, &s.resource)
                             }));
                     Ok(
-                        json!({"daemon":daemon,"status":status,"metrics":metrics,"engine":core.get("audio").cloned().unwrap_or(Value::Null),"flows":flows,"audio":audio,"audio_engine":state.document.audio.engine,"audio_enabled":active,"bundle":{"installed_version":null,"embedded_version":applier.tessera_bundle_version().await,"daemon_version":status.get("version").cloned().unwrap_or(Value::Null),"experimental":true},"capabilities":{"subscriptions":false},"flow_toml":toml,"error":error}),
+                        json!({"daemon":daemon,"status":status,"metrics":metrics,"engine":core.get("audio").cloned().unwrap_or(Value::Null),"flows":flows,"audio":audio,"audio_engine":state.document.audio.engine,"audio_enabled":active,"bundle":{"installed_version":null,"embedded_version":applier.tessera_bundle_version().await,"daemon_version":status.get("version").cloned().unwrap_or(Value::Null),"experimental":true},"capabilities":{"subscriptions":false,"routing":state.document.tessera.as_ref().is_some_and(|t|t.routing)},"routing_sources":state.document.tessera.as_ref().map(|t|t.routing_sources.clone()).unwrap_or_default(),"flow_toml":toml,"error":error}),
                     )
                 }
             }
@@ -454,6 +594,30 @@ impl Module {
                         .map_err(internal)?;
                         applier.memory.tessera.sent(seen);
                     }
+                    DomainAction::Tessera(Action::TesseraRoute {
+                        expectation,
+                        change,
+                    }) if !rollback => {
+                        result = routing_command(
+                            &applier.tessera,
+                            upstream::Command::RouteReceiver {
+                                expectation: expectation.clone(),
+                                change: upstream_change(change)?,
+                            },
+                        )
+                        .await?;
+                    }
+                    DomainAction::Tessera(Action::TesseraReconcileRouting { review })
+                        if !rollback =>
+                    {
+                        result = routing_command(
+                            &applier.tessera,
+                            upstream::Command::ReconcileReceiverOperation {
+                                review: review.clone(),
+                            },
+                        )
+                        .await?;
+                    }
                     DomainAction::Tessera(Action::TesseraService(action)) if !rollback => {
                         use ndimon_privd_proto::UnitAction;
                         let action = match action {
@@ -476,6 +640,27 @@ impl Module {
     }
 }
 fn service_plan(command: &Command) -> Result<DomainPlan, ApiError> {
+    if let Command::TesseraRoute {
+        expectation,
+        change,
+    } = command
+    {
+        return Ok(DomainPlan {
+            actions: vec![DomainAction::Tessera(Action::TesseraRoute {
+                expectation: expectation.clone(),
+                change: change.clone(),
+            })],
+            impact: Impact::default(),
+        });
+    }
+    if let Command::TesseraReconcileRouting { review } = command {
+        return Ok(DomainPlan {
+            actions: vec![DomainAction::Tessera(Action::TesseraReconcileRouting {
+                review: review.clone(),
+            })],
+            impact: Impact::default(),
+        });
+    }
     let Command::TesseraService { action } = command else {
         return Ok(DomainPlan::default());
     };
@@ -548,8 +733,10 @@ fn observation(event: upstream::Event) -> Option<Event> {
         upstream::Event::LockedValueRefused {
             locked_value_refused: e,
         } => Some(drift_event(&format!("tessera.{}", e.field))),
-        upstream::Event::ProtocolFlowsChanged { .. } => Some(drift_event("tessera.flows")),
-        upstream::Event::RuntimeValueChanged { .. } => {
+        // Controller flows (Dante Controller, routing) are expected runtime
+        // state, observed but not drift.
+        upstream::Event::ProtocolFlowsChanged { .. }
+        | upstream::Event::RuntimeValueChanged { .. } => {
             let mut delta = DomainObserved::default();
             delta.detail = Some(json!(event).to_string());
             Some(Event::Observed {
@@ -606,6 +793,10 @@ fn observe(handle: StateHandle, client: Client) -> BoxFuture<'static, ()> {
                     let mut imported=snapshot.document.clone();
                     crate::import::import_tessera(&mut imported,&snapshot.legacy_files).map_err(internal)?;
                     desired=imported.tessera;
+                    // The role the running daemon reports wins over the files'
+                    // default (leader since 1.5.0): a follower must not become a
+                    // second leader when the control plane first adopts it.
+                    if let (Some(t),Some((role,priority)))=(desired.as_mut(),crate::observed_clock::from_status(&status)) {t.clock.role=role;t.clock.priority=priority;}
                     if desired.is_none() {
                         let main=status.devices.iter().find(|d|d.key=="main").ok_or_else(||invalid("main Tessera device missing"))?;
                         let name=main.extra.get("name").and_then(Value::as_str).ok_or_else(||invalid("Tessera name missing"))?;
@@ -616,12 +807,17 @@ fn observe(handle: StateHandle, client: Client) -> BoxFuture<'static, ()> {
                         t.device.rx_channels=u16::try_from(main.rx_channels.len()).map_err(internal)?;
                         t.device.tx_channels=u16::try_from(main.tx_channels.len()).map_err(internal)?;
                         for (labels,channels) in [(&mut t.device.rx_labels,&main.rx_channels),(&mut t.device.tx_labels,&main.tx_channels)] {for channel in channels {if let (Some(n),Some(label))=(channel["channel"].as_u64().and_then(|n|u16::try_from(n).ok()),channel["label"].as_str()){labels.insert(n,label.into());}}}
-                        if let Some(clock)=status.extra.get("clock_settings").filter(|v|!v.is_null()){t.clock.role=serde_json::from_value(clock["role"].clone()).map_err(internal)?;t.clock.priority=clock["priority"].as_u64().and_then(|n|u8::try_from(n).ok()).ok_or_else(||invalid("Tessera clock priority missing"))?;}
+                        // No NDIMon files: a fresh plugin install, whose daemon
+                        // only reports its own default role. The new-section
+                        // default (leader since 1.5.0) applies.
                         desired=Some(t);
                     }
                 }
                 if let Some(mut desired)=desired {
                     desired.protocol_flow_lock=status.supports_flow_lock();
+                    desired.routing=status.supports_routing();
+                    // Flows are no longer an owned lock (controller routing).
+                    desired.locks.remove("flows");
                     desired.locks.extend(Tessera::owned_locks());
                     if snapshot.document.tessera.as_ref()!=Some(&desired) {
                         let mut request=CommandRequest::new(Command::SetTessera(desired));request.expect_revision=Some(snapshot.revision);
@@ -630,10 +826,6 @@ fn observe(handle: StateHandle, client: Client) -> BoxFuture<'static, ()> {
                 }
                 handle.replay().await?;
                 handle.observe(Event::Observed {domain:Domain::Tessera,delta:DomainObserved::default()}).await?;
-                if !status.supports_flow_lock() && handle.snapshot().await?.document.tessera.is_some() {
-                    handle.observe(drift_event("/etc/tessera/config.d/90-probe-flows.toml")).await?;
-                    let mut delta=DomainObserved::default();delta.status=SyncStatus::Drift;delta.detail=Some("Flow ownership conflict: daemon lacks protocol flow locks; deprecated probe flows are emptied, but controllers can still change runtime flows. Install a Tessera release whose bundle ships the tessera-bundle installer (0.3.0 or later).".into());handle.observe(Event::Observed {domain:Domain::Tessera,delta}).await?;
-                }
                 handle.observe(Event::Status {source:StatusSource::Tessera,data:json!({"status":status,"metrics":client.metrics().await.map_err(api_error)?})}).await?;
                 let mut timer=tokio::time::interval(std::time::Duration::from_secs(2));
                 loop {

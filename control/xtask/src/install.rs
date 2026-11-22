@@ -12,6 +12,18 @@ use std::{
 };
 
 const SDK_URL: &str = "https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz";
+/// SHA-256 of the reviewed SDK archive (NDI SDK 6.4.0.2, served since
+/// 2026-11-18). The URL is unversioned: when NDI replaces the archive the
+/// download stops with a checksum mismatch until the new one is reviewed and
+/// pinned here. `NDI_SDK_SHA256` overrides it to try another archive.
+pub const SDK_SHA256: &str = "1b066cca076d3e8b49a5f1dc7fbf77065967256807e3cb5ea387c574176eace6";
+/// The pin in effect: `NDI_SDK_SHA256` if set, else [`SDK_SHA256`].
+fn sdk_pin() -> String {
+    std::env::var("NDI_SDK_SHA256")
+        .ok()
+        .filter(|pin| !pin.trim().is_empty())
+        .unwrap_or_else(|| SDK_SHA256.to_owned())
+}
 const BUILD_DEPS: &[&str] = &[
     "build-essential",
     "cmake",
@@ -138,10 +150,13 @@ pub fn sdk(prefix: &Path, arch: &str) -> Result {
     download(SDK_URL, &archive)?;
     let bytes = fs::read(&archive)?;
     let hash = format!("{:x}", Sha256::digest(&bytes));
-    if let Ok(pin) = std::env::var("NDI_SDK_SHA256") {
-        if pin.len() != 64 || !pin.eq_ignore_ascii_case(&hash) {
-            return Err("NDI SDK checksum mismatch".into());
-        }
+    let pin = sdk_pin();
+    if pin.len() != 64 || !pin.eq_ignore_ascii_case(&hash) {
+        return Err(format!(
+            "NDI SDK checksum mismatch: the download is {hash}, the pin is {pin}; \
+             review the new archive and update SDK_SHA256 in control/xtask/src/install.rs"
+        )
+        .into());
     }
     let outer = temporary.path().join("outer");
     fs::create_dir(&outer)?;
@@ -224,8 +239,14 @@ pub fn sdk_task(args: &[String]) -> Result {
     }
 }
 fn install_sdk(root: &Path, arch: &str) -> Result {
+    // An installed SDK is kept only when it came from the pinned archive; a
+    // missing record (installed by hand or before the record existed) or another
+    // archive is replaced.
+    let installed = fs::read_to_string("/etc/ndimon-ndi-sha256").unwrap_or_default();
     if Path::new("/usr/local/lib/libndi.so.6").exists()
         && Path::new("/usr/local/include/Processing.NDI.Lib.h").exists()
+        && installed.trim().len() == 64
+        && installed.trim().eq_ignore_ascii_case(&sdk_pin())
     {
         let library = fs::canonicalize("/usr/local/lib/libndi.so.6")?;
         let version = library
@@ -246,7 +267,10 @@ fn install_sdk(root: &Path, arch: &str) -> Result {
                 "/etc/ndimon-ndi-version",
             ],
         )?;
-        println!("NDI SDK already installed; preserving existing v6 installation");
+        println!(
+            "NDI SDK {} already installed from the pinned archive",
+            installed.trim()
+        );
         return Ok(());
     }
     let stage = tempfile::tempdir()?;
@@ -265,10 +289,24 @@ fn install_sdk(root: &Path, arch: &str) -> Result {
         "cp",
         &[
             "-a",
+            // A new inode for every file: a running decoder keeps the library
+            // it has mapped instead of seeing it truncated under it.
+            "--remove-destination",
             stage.path().join("lib/.").to_str().unwrap(),
             "/usr/local/lib/",
         ],
     )?;
+    // Only now drop every other v6 library: ldconfig points libndi.so.6 at the
+    // highest version present, which need not be the archive just installed.
+    let staged: Vec<String> = fs::read_dir(stage.path().join("lib"))?
+        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
+        .collect();
+    for entry in fs::read_dir("/usr/local/lib")? {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if name.starts_with("libndi.so.6.") && !staged.contains(&name) {
+            sudo(root, "rm", &["-f", &format!("/usr/local/lib/{name}")])?;
+        }
+    }
     for (source, dest) in [
         ("ndimon-ndi-version", "/etc/ndimon-ndi-version"),
         ("ndimon-ndi-sha256", "/etc/ndimon-ndi-sha256"),

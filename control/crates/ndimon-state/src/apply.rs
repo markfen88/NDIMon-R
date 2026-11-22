@@ -492,11 +492,15 @@ impl Applier for ProductionApplier {
         query: ndimon_tessera::wire::Query,
     ) -> BoxFuture<'_, Result<Value, ndimon_types::ApiError>> {
         Box::pin(async move {
-            let reply = self
-                .tessera
-                .request(ndimon_tessera::wire::RequestBody::Query(query))
-                .await
-                .map_err(crate::domains::tessera::api_error)?;
+            use ndimon_tessera::wire::{Query, RequestBody};
+            let routing = !matches!(query, Query::Status | Query::Metrics);
+            let body = RequestBody::Query(query);
+            let reply = if routing {
+                self.tessera.routing(body).await
+            } else {
+                self.tessera.request(body).await
+            }
+            .map_err(crate::domains::tessera::api_error)?;
             match reply {
                 ndimon_tessera::wire::Reply::Status(s) => {
                     serde_json::to_value(s).map_err(crate::plan::internal)
@@ -504,6 +508,10 @@ impl Applier for ProductionApplier {
                 ndimon_tessera::wire::Reply::Metrics(m) => {
                     serde_json::to_value(m).map_err(crate::plan::internal)
                 }
+                ndimon_tessera::wire::Reply::RoutingDevices(v)
+                | ndimon_tessera::wire::Reply::RoutingChannels(v)
+                | ndimon_tessera::wire::Reply::RoutingReceiver(v)
+                | ndimon_tessera::wire::Reply::ReceiverRecovery(v) => Ok(v),
                 _ => Err(crate::plan::internal("unexpected Tessera query response")),
             }
         })

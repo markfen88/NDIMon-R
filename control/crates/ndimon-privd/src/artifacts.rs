@@ -206,6 +206,7 @@ pub fn render(host: &Host, revision: u64) -> Result<Value, Error> {
         without_tessera(&mut artifacts);
     }
     let mut manifest = Vec::new();
+    let mut native_role_changed = false;
     for rendered in artifacts {
         let a = rendered.artifact;
         if let Some(bytes) = rendered.bytes {
@@ -219,8 +220,24 @@ pub fn render(host: &Host, revision: u64) -> Result<Value, Error> {
             }
             // Only what changed is replaced: the manifest below still lists every
             // artifact, with the digest of what is on disk.
-            host.root
+            let native_role = ndimon_render::tessera::NATIVE_ROLE_PATHS.contains(&target.as_str());
+            // A comment-only drop-in changes no unit: first writing it on a
+            // runtime without the role must not restart the daemon.
+            let effective = |b: &[u8]| {
+                b.split(|c| *c == b'\n')
+                    .any(|l| !l.is_empty() && !l.starts_with(b"#"))
+            };
+            let before = if native_role {
+                host.root.read(&target, MAX_CONFIG_BYTES)?
+            } else {
+                None
+            };
+            let changed = host
+                .root
                 .atomic_if_changed(&target, &bytes, a.group(host), a.mode())?;
+            native_role_changed |= native_role
+                && changed
+                && (effective(&bytes) || before.as_deref().is_some_and(effective));
             use sha2::{Digest, Sha256};
             let group = match &a {
                 Artifact::State(spec) => spec.group,
@@ -229,6 +246,15 @@ pub fn render(host: &Host, revision: u64) -> Result<Value, Error> {
             manifest.push(serde_json::json!({"path":target,"revision":revision,"sha256":format!("{:x}",Sha256::digest(&bytes)),"owner":"root","group":group,"mode":a.mode()}));
         } else {
             host.root.remove(&a.target())?;
+        }
+    }
+    if native_role_changed {
+        // The device role is chosen when tesserad starts. `try-restart` leaves a
+        // stopped (disabled) daemon alone; a notify unit returns once it runs, so
+        // the Tessera reload that follows the render reaches the new process.
+        crate::system::systemctl(host, &["daemon-reload"])?;
+        if let Err(e) = crate::system::systemctl(host, &["try-restart", "tesserad.service"]) {
+            tracing::warn!("tesserad restart for the device role change failed: {e}");
         }
     }
     Ok(serde_json::json!(manifest))

@@ -871,9 +871,20 @@ pub struct Tessera {
     // Reference to the adopted audio network; None follows the audio role.
     #[cfg_attr(feature = "serde", serde(default))]
     pub network_binding: Option<String>,
-    // Enforce the 0.2.2 protocol lock; false is the explicit old-daemon fallback.
+    // The daemon supports configuration locks (Tessera 0.2.2 or later); false
+    // is the explicit old-daemon fallback. Flows are no longer locked: the
+    // controller compatibility runtime and controller routing need them.
     #[cfg_attr(feature = "serde", serde(default = "default_true"))]
     pub protocol_flow_lock: bool,
+    // The daemon serves receiver routing (Tessera 0.5.0 or later): discovery
+    // browsing and `routing_sources` are rendered only then. Set by
+    // reconciliation from the daemon's version, like `protocol_flow_lock`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub routing: bool,
+    // 16-hex-digit device IDs of other hosts whose transmitters this device may
+    // route from (Tessera `[control] routing_sources`).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub routing_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -961,14 +972,19 @@ impl Tessera {
                 tx_labels: BTreeMap::new(),
                 advertise_devices: true,
             },
+            // Since 1.5.0 NDIMon-R leads the PTP clock unless told
+            // otherwise. Only a new Tessera section starts here; an import keeps
+            // the role the daemon runs (observed_clock) and saved roles stay.
             clock: TesseraClock {
-                role: ClockRole::Auto,
+                role: ClockRole::Leader,
                 priority: 128,
             },
             flows: Vec::new(),
             locks: Self::owned_locks(),
             network_binding: None,
             protocol_flow_lock: true,
+            routing: false,
+            routing_sources: Vec::new(),
         }
     }
     pub fn owned_locks() -> BTreeMap<String, String> {
@@ -983,7 +999,6 @@ impl Tessera {
             "device.tx_channel_labels",
             "clock.role",
             "clock.priority",
-            "flows",
         ]
         .into_iter()
         .map(|key| (key.into(), "ndimon-control".into()))

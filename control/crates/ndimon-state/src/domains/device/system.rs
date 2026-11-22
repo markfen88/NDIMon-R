@@ -91,7 +91,7 @@ pub async fn version(root: &Path) -> Value {
     };
     let configured = release_keys_configured(root).unwrap_or(false);
     let (commit, build_date) = build_info(root);
-    json!({"firmware":fallback("/etc/ndimon-firmware-version","1.4.0"),"commit":commit,"build_date":build_date,"ndi_version":fallback("/etc/ndimon-ndi-version","6.x"),"update_supported":configured,"update_running":false,"update_message":if configured {"updates need a signed release version"} else {NO_RELEASE_KEY}})
+    json!({"firmware":fallback("/etc/ndimon-firmware-version",env!("CARGO_PKG_VERSION")),"commit":commit,"build_date":build_date,"ndi_version":fallback("/etc/ndimon-ndi-version","6.x"),"update_supported":configured,"update_running":false,"update_message":if configured {"updates need a signed release version"} else {NO_RELEASE_KEY}})
 }
 /// Add what the update agent's release lookup found to the version reply (only
 /// asked when a release key is configured). The web page installs
@@ -223,7 +223,7 @@ pub async fn observe(query: Query) -> Result<Value, String> {
                 "arm" => "arm",
                 other => other,
             };
-            json!({"DeviceName":"NDI Decoder","HostName":hostname(),"IPAddress":ip,"FirmwareVersion":fallback("/etc/ndimon-firmware-version","1.4.0"),"Model":fallback("/proc/device-tree/model",&format!("aarch64 ({arch})")),"NDIVersion":fallback("/etc/ndimon-ndi-version","6.x"),"BuildDate":build_info(root).1,"chInfo":[{"ChNum":1,"Mode":"decode","Status":"active","Stream":""}]})
+            json!({"DeviceName":"NDI Decoder","HostName":hostname(),"IPAddress":ip,"FirmwareVersion":fallback("/etc/ndimon-firmware-version",env!("CARGO_PKG_VERSION")),"Model":fallback("/proc/device-tree/model",&format!("aarch64 ({arch})")),"NDIVersion":fallback("/etc/ndimon-ndi-version","6.x"),"BuildDate":build_info(root).1,"chInfo":[{"ChNum":1,"Mode":"decode","Status":"active","Stream":""}]})
         }
         _ => return Err("unsupported System observation".into()),
     })
